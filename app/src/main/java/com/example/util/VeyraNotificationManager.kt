@@ -1,6 +1,7 @@
 package com.example.util
 
 import android.Manifest
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -38,11 +39,21 @@ class VeyraNotificationManager(private val context: Context) {
         "Proximidad de misiones",
         NotificationManager.IMPORTANCE_HIGH,
       ).apply {
-        description = "Avisos cuando te acercas al punto de una misión disponible en el mapa."
+        description = "Avisos cuando te acercas al punto de una misión activa en el mapa."
+      }
+
+      val guidanceChannel = NotificationChannel(
+        CHANNEL_GUIDANCE,
+        "Guía sutil hacia misión activa",
+        NotificationManager.IMPORTANCE_LOW,
+      ).apply {
+        description = "Indicador discreto de distancia y dirección hacia tu misión aceptada."
+        setShowBadge(false)
       }
 
       manager.createNotificationChannel(socialChannel)
       manager.createNotificationChannel(proximityChannel)
+      manager.createNotificationChannel(guidanceChannel)
     }
   }
 
@@ -93,8 +104,61 @@ class VeyraNotificationManager(private val context: Context) {
     }
   }
 
+  fun buildSubtleGuidanceNotification(
+    missionTitle: String,
+    distanceMeters: Float?,
+    bearingDegrees: Float?,
+    stopPendingIntent: PendingIntent?,
+  ): Notification {
+    val mainIntent = Intent(context, MainActivity::class.java).apply {
+      flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+    }
+    val openAppIntent = PendingIntent.getActivity(
+      context,
+      GUIDANCE_NOTIFICATION_ID,
+      mainIntent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    val title: String
+    val text: String
+    if (distanceMeters != null && bearingDegrees != null) {
+      val arrow = GeoUtils.compassArrowForBearing(bearingDegrees)
+      val dir = GeoUtils.cardinalDirectionEs(bearingDegrees)
+      val distLabel = GeoUtils.formatDistance(distanceMeters)
+      if (distanceMeters <= GeoUtils.CLOSE_GUIDANCE_RADIUS_METERS) {
+        title = "¡Punto final muy cerca! $arrow $distLabel"
+        text = "'$missionTitle': camina $distLabel hacia el $dir para completar la misión."
+      } else {
+        title = "Guiando a '$missionTitle' • $distLabel"
+        text = "Sigue $arrow rumbo al $dir para acercarte al punto."
+      }
+    } else {
+      title = "Guía de misión activa"
+      text = "Buscando señal GPS precisa hacia '$missionTitle'..."
+    }
+
+    val builder = NotificationCompat.Builder(context, CHANNEL_GUIDANCE)
+      .setSmallIcon(R.drawable.ic_launcher_foreground)
+      .setContentTitle(title)
+      .setContentText(text)
+      .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+      .setPriority(NotificationCompat.PRIORITY_LOW)
+      .setOngoing(true)
+      .setOnlyAlertOnce(true)
+      .setSilent(true)
+      .setContentIntent(openAppIntent)
+
+    if (stopPendingIntent != null) {
+      builder.addAction(0, "Pausar guía", stopPendingIntent)
+    }
+    return builder.build()
+  }
+
   companion object {
-    private const val CHANNEL_SOCIAL = "veyra_social"
-    private const val CHANNEL_PROXIMITY = "veyra_proximity"
+    const val CHANNEL_SOCIAL = "veyra_social"
+    const val CHANNEL_PROXIMITY = "veyra_proximity"
+    const val CHANNEL_GUIDANCE = "veyra_guidance"
+    const val GUIDANCE_NOTIFICATION_ID = 4401
   }
 }

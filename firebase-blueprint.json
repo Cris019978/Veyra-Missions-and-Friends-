@@ -61,6 +61,8 @@
         "title": { "type": "string" },
         "description": { "type": "string" },
         "category": { "type": "string", "enum": ["explore", "eco", "social", "challenge", "fitness", "creative"] },
+        "missionType": { "type": "string", "enum": ["photo", "wires", "puzzle"] },
+        "iconKey": { "type": "string" },
         "xpReward": { "type": "integer" },
         "latitude": { "type": "number" },
         "longitude": { "type": "number" },

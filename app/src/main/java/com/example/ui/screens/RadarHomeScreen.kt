@@ -31,20 +31,29 @@ import androidx.compose.material.icons.automirrored.rounded.DirectionsRun
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Brush
+import androidx.compose.material.icons.rounded.Cable
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.Handshake
+import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.LocalFlorist
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Map
+import androidx.compose.material.icons.rounded.NearMe
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.material.icons.rounded.SensorsOff
+import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.VolunteerActivism
 import androidx.compose.material3.AlertDialog
@@ -60,6 +69,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -76,6 +86,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -88,9 +99,12 @@ import com.example.data.model.MissionWithDistance
 import com.example.data.model.NearbyPlayerItem
 import com.example.ui.components.ExpandedRadarMapDialog
 import com.example.ui.components.MissionDetailSheet
+import com.example.ui.components.MissionIcons
 import com.example.ui.components.PhotoConfirmSheet
 import com.example.ui.components.PlayerActionSheet
 import com.example.ui.components.RoundRadarMap
+import com.example.ui.components.TilePuzzleGameDialog
+import com.example.ui.components.WireConnectGameDialog
 import com.example.ui.viewmodel.RadarQuestUiState
 import com.example.util.GeoUtils
 
@@ -108,15 +122,22 @@ fun RadarHomeScreen(
   onSendPulse: (NearbyPlayerItem) -> Unit,
   onCompeteDuel: (NearbyPlayerItem, Mission) -> Unit,
   onPlayCoop: (NearbyPlayerItem, Mission) -> Unit,
-  onCreateMission: (title: String, description: String, category: String, xpReward: Long) -> Unit,
+  onCreateMission: (title: String, description: String, category: String, xpReward: Long, missionType: String, iconKey: String) -> Unit,
   onConfirmMissionPhoto: (mission: Mission, caption: String, base64Thumb: String, isPublic: Boolean) -> Unit,
+  onCompleteMiniGame: (mission: Mission, caption: String, isPublic: Boolean) -> Unit = { _, _, _ -> },
+  onAcceptMission: (String) -> Unit = {},
+  onWaitMission: (String) -> Unit = {},
+  onRejectMission: (String) -> Unit = {},
+  onCancelActiveMission: () -> Unit = {},
+  onRespawnRandomMissions: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
+  val context = LocalContext.current
   var selectedCategory by remember { mutableStateOf("all") }
   var selectedPlayer by remember { mutableStateOf<NearbyPlayerItem?>(null) }
   var selectedMissionId by remember { mutableStateOf<String?>(null) }
   var showExpandedMap by remember { mutableStateOf(false) }
-  var missionToConfirm by remember { mutableStateOf<Mission?>(null) }
+  var activeMissionPlayTarget by remember { mutableStateOf<Mission?>(null) }
   var showCreateMissionDialog by remember { mutableStateOf(false) }
 
   val disableDecorAnimations = uiState.settings.animationTier == "low"
@@ -138,7 +159,18 @@ fun RadarHomeScreen(
       "all" -> uiState.missions
       "for_you" -> uiState.missions.filter { it.mission.category in favoriteCategories }
         .ifEmpty { uiState.missions }
+      "wires" -> uiState.missions.filter { it.mission.missionType == "wires" }
+      "puzzle" -> uiState.missions.filter { it.mission.missionType == "puzzle" }
       else -> uiState.missions.filter { it.mission.category == selectedCategory }
+    }
+  }
+
+  val launchMissionFlow: (MissionWithDistance) -> Unit = { item ->
+    if (item.isWithinProximity && uiState.hasLocationPermission) {
+      onAcceptMission(item.mission.id)
+      activeMissionPlayTarget = item.mission
+    } else {
+      selectedMissionId = item.mission.id
     }
   }
 
@@ -162,212 +194,128 @@ fun RadarHomeScreen(
         ),
         verticalArrangement = Arrangement.spacedBy(14.dp),
       ) {
-      // 1. Player HUD Header
-      item {
-        val level = uiState.myProfile?.level ?: 1L
-        val xp = uiState.myProfile?.xp ?: 0L
-        val xpInLevel = (xp % 250L) / 250f
-        val seekingHelp = uiState.myProfile?.seekingHelp == true
-
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-          Column(modifier = Modifier.weight(1f)) {
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              Surface(
-                color = MaterialTheme.colorScheme.primaryContainer,
-                shape = CircleShape,
-              ) {
-                Text(
-                  text = "NV $level",
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.onPrimaryContainer,
-                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                )
-              }
-              Text(
-                text = uiState.myProfile?.callsign ?: "Explorador",
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              LinearProgressIndicator(
-                progress = { xpInLevel },
-                modifier = Modifier
-                  .width(120.dp)
-                  .height(7.dp)
-                  .clip(CircleShape),
-              )
-              Text(
-                text = "$xp XP",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-              )
-            }
-          }
+        // 1. Player HUD Header
+        item {
+          val level = uiState.myProfile?.level ?: 1L
+          val xp = uiState.myProfile?.xp ?: 0L
+          val xpInLevel = (xp % 250L) / 250f
+          val seekingHelp = uiState.myProfile?.seekingHelp == true
 
           Row(
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
           ) {
-            FilledTonalButton(
-              onClick = onToggleSeekingHelp,
-              shape = CircleShape,
-              contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-              modifier = Modifier.testTag("toggle_seek_help_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Rounded.VolunteerActivism,
-                contentDescription = "Pedir ayuda",
-                tint = if (seekingHelp) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.size(16.dp),
-              )
-              Spacer(modifier = Modifier.width(4.dp))
-              Text(
-                text = if (seekingHelp) "Ayuda ON" else "Ayuda",
-                style = MaterialTheme.typography.labelSmall,
-              )
+            Column(modifier = Modifier.weight(1f)) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Surface(
+                  color = MaterialTheme.colorScheme.primaryContainer,
+                  shape = CircleShape,
+                ) {
+                  Text(
+                    text = "NV $level",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                  )
+                }
+                Text(
+                  text = uiState.myProfile?.callsign ?: "Explorador",
+                  style = MaterialTheme.typography.titleMedium,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
+              Spacer(modifier = Modifier.height(6.dp))
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                LinearProgressIndicator(
+                  progress = { xpInLevel },
+                  modifier = Modifier
+                    .width(120.dp)
+                    .height(7.dp)
+                    .clip(CircleShape),
+                )
+                Text(
+                  text = "$xp XP",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.primary,
+                )
+              }
             }
 
-            IconButton(
-              onClick = onOpenNotifications,
-              modifier = Modifier.testTag("open_notifications_button"),
+            Row(
+              horizontalArrangement = Arrangement.spacedBy(2.dp),
+              verticalAlignment = Alignment.CenterVertically,
             ) {
-              BadgedBox(
-                badge = {
-                  if (uiState.unreadNotificationsCount > 0) {
-                    Badge {
-                      Text(uiState.unreadNotificationsCount.coerceAtMost(99).toString())
-                    }
-                  }
-                },
+              FilledTonalButton(
+                onClick = onToggleSeekingHelp,
+                shape = CircleShape,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                modifier = Modifier.testTag("toggle_seek_help_button"),
               ) {
                 Icon(
-                  imageVector = Icons.Rounded.Notifications,
-                  contentDescription = "Notificaciones",
-                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                  imageVector = Icons.Rounded.VolunteerActivism,
+                  contentDescription = "Pedir ayuda",
+                  tint = if (seekingHelp) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSecondaryContainer,
+                  modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                  text = if (seekingHelp) "Ayuda ON" else "Ayuda",
+                  style = MaterialTheme.typography.labelSmall,
                 )
               }
-            }
 
-            IconButton(
-              onClick = { onToggleBroadcast(!uiState.isBroadcastingRadar) },
-              modifier = Modifier.testTag("toggle_radar_broadcast_button"),
-            ) {
-              Icon(
-                imageVector = if (uiState.isBroadcastingRadar) Icons.Rounded.Sensors else Icons.Rounded.SensorsOff,
-                contentDescription = "Alternar señal de radar",
-                tint = if (uiState.isBroadcastingRadar) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-              )
-            }
-          }
-        }
-      }
-
-      // 2. Location Permission Prompt if not yet granted
-      if (!uiState.hasLocationPermission) {
-        item {
-          Card(
-            colors = CardDefaults.cardColors(
-              containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-            ),
-            shape = MaterialTheme.shapes.large,
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 16.dp),
-          ) {
-            Row(
-              modifier = Modifier.padding(14.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-              Icon(
-                imageVector = Icons.Rounded.LocationOn,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                modifier = Modifier.size(28.dp),
-              )
-              Column(modifier = Modifier.weight(1f)) {
-                Text(
-                  text = stringResource(id = R.string.grant_location_title),
-                  style = MaterialTheme.typography.titleSmall,
-                  color = MaterialTheme.colorScheme.onTertiaryContainer,
-                )
-                Text(
-                  text = stringResource(id = R.string.grant_location_desc),
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f),
-                )
-              }
-              Button(
-                onClick = onRequestLocationPermission,
-                modifier = Modifier.testTag("grant_location_button"),
+              IconButton(
+                onClick = onOpenNotifications,
+                modifier = Modifier.testTag("open_notifications_button"),
               ) {
-                Text("Activar")
+                BadgedBox(
+                  badge = {
+                    if (uiState.unreadNotificationsCount > 0) {
+                      Badge {
+                        Text(uiState.unreadNotificationsCount.coerceAtMost(99).toString())
+                      }
+                    }
+                  },
+                ) {
+                  Icon(
+                    imageVector = Icons.Rounded.Notifications,
+                    contentDescription = "Notificaciones",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+              }
+
+              IconButton(
+                onClick = { onToggleBroadcast(!uiState.isBroadcastingRadar) },
+                modifier = Modifier.testTag("toggle_radar_broadcast_button"),
+              ) {
+                Icon(
+                  imageVector = if (uiState.isBroadcastingRadar) Icons.Rounded.Sensors else Icons.Rounded.SensorsOff,
+                  contentDescription = "Alternar señal de radar",
+                  tint = if (uiState.isBroadcastingRadar) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                )
               }
             }
           }
         }
-      }
 
-      // 3. Top-Center Animated Round Radar Map
-      item {
-        RoundRadarMap(
-          myProfile = uiState.myProfile,
-          nearbyPlayers = uiState.nearbyPlayers,
-          missions = uiState.missions,
-          searchRadiusMeters = uiState.settings.searchRadiusMeters,
-          radarStyle = uiState.settings.radarStyle,
-          animationTier = uiState.settings.animationTier,
-          isBroadcasting = uiState.isBroadcastingRadar,
-          hasLocationPermission = uiState.hasLocationPermission,
-          onPlayerClick = { selectedPlayer = it },
-          onMissionClick = { selectedMissionId = it.mission.id },
-          onCycleRadius = onCycleRadius,
-          onExpandMap = { showExpandedMap = true },
-          modifier = Modifier.padding(top = 2.dp),
-        )
-      }
-
-      // 4. Nearby Players Strip
-      item {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Text(
-              text = stringResource(id = R.string.nearby_players_title),
-              style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-              text = "${uiState.nearbyPlayers.size} activos",
-              style = MaterialTheme.typography.labelMedium,
-              color = MaterialTheme.colorScheme.primary,
-            )
-          }
-
-          if (uiState.nearbyPlayers.isEmpty()) {
+        // 2. Location Permission Prompt if not yet granted
+        if (!uiState.hasLocationPermission) {
+          item {
             Card(
               colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                containerColor = MaterialTheme.colorScheme.tertiaryContainer,
               ),
               shape = MaterialTheme.shapes.large,
               modifier = Modifier
@@ -380,179 +328,449 @@ fun RadarHomeScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
               ) {
                 Icon(
-                  imageVector = Icons.Rounded.Radar,
+                  imageVector = Icons.Rounded.LocationOn,
                   contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
+                  tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                  modifier = Modifier.size(28.dp),
                 )
-                Text(
-                  text = "Tu señal está en vivo. Cuando otros amigos abran Veyra dentro de ${
-                    GeoUtils.formatDistance(uiState.settings.searchRadiusMeters.toFloat())
-                  }, aparecerán aquí para ayudar, competir o jugar.",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                  Text(
+                    text = stringResource(id = R.string.grant_location_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                  )
+                  Text(
+                    text = stringResource(id = R.string.grant_location_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f),
+                  )
+                }
+                Button(
+                  onClick = onRequestLocationPermission,
+                  modifier = Modifier.testTag("grant_location_button"),
+                ) {
+                  Text("Activar")
+                }
               }
             }
-          } else {
-            LazyRow(
-              contentPadding = PaddingValues(horizontal = 16.dp),
-              horizontalArrangement = Arrangement.spacedBy(10.dp),
+          }
+        }
+
+        // 2b. Subtle Active Mission Close-Proximity Guidance Banner
+        uiState.activeAcceptedMission?.let { activeItem ->
+          item(key = "active_guidance_card") {
+            val isVeryClose = activeItem.distanceMeters <= GeoUtils.CLOSE_GUIDANCE_RADIUS_METERS
+            val arrow = GeoUtils.compassArrowForBearing(activeItem.bearingDegrees)
+            val dir = GeoUtils.cardinalDirectionEs(activeItem.bearingDegrees)
+            Card(
+              colors = CardDefaults.cardColors(
+                containerColor = if (isVeryClose) {
+                  MaterialTheme.colorScheme.primaryContainer
+                } else {
+                  MaterialTheme.colorScheme.secondaryContainer
+                },
+              ),
+              shape = MaterialTheme.shapes.large,
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .testTag("active_mission_guidance_card"),
             ) {
-              items(uiState.nearbyPlayers, key = { it.profile.userId }) { item ->
-                NearbyPlayerCard(
-                  item = item,
-                  onClick = { selectedPlayer = item },
-                  onQuickHelp = { onHelpPlayer(item) },
-                )
+              Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Rounded.NearMe,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Column {
+                      Text(
+                        text = if (isVeryClose) {
+                          "¡MUY CERCA! ($arrow $dir • ${GeoUtils.formatDistance(activeItem.distanceMeters)})"
+                        } else {
+                          "Misión activa • $arrow $dir (${GeoUtils.formatDistance(activeItem.distanceMeters)})"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                      )
+                      Text(
+                        text = activeItem.mission.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                      )
+                    }
+                  }
+                  IconButton(
+                    onClick = onCancelActiveMission,
+                    modifier = Modifier.testTag("stop_active_guidance_button"),
+                  ) {
+                    Icon(Icons.Rounded.Close, contentDescription = "Pausar guía")
+                  }
+                }
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                  OutlinedButton(
+                    onClick = {
+                      GeoUtils.openInGoogleMaps(
+                        context = context,
+                        latitude = activeItem.mission.latitude,
+                        longitude = activeItem.mission.longitude,
+                        title = activeItem.mission.title,
+                      )
+                    },
+                    shape = CircleShape,
+                    modifier = Modifier.weight(1f),
+                  ) {
+                    Icon(Icons.Rounded.Map, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Google Maps")
+                  }
+                  Button(
+                    onClick = { launchMissionFlow(activeItem) },
+                    enabled = activeItem.isWithinProximity && uiState.hasLocationPermission,
+                    shape = CircleShape,
+                    modifier = Modifier.weight(1f),
+                  ) {
+                    Icon(
+                      imageVector = MissionIcons.typeActionIcon(activeItem.mission.missionType),
+                      contentDescription = null,
+                      modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                      text = if (activeItem.isWithinProximity) {
+                        when (activeItem.mission.missionType) {
+                          "wires" -> "Conectar"
+                          "puzzle" -> "Puzzle"
+                          else -> "Foto"
+                        }
+                      } else {
+                        "Camina cerca"
+                      },
+                    )
+                  }
+                }
               }
             }
           }
         }
-      }
 
-      // 5. Bottom Section: Categorized Real-Life Missions to Confirm via In-App Photo
-      item {
-        Column(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-          verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Column {
-              Text(
-                text = stringResource(id = R.string.missions_section_title),
-                style = MaterialTheme.typography.titleLarge,
-              )
-              Text(
-                text = "Acércate a ${GeoUtils.PROXIMITY_RADIUS_METERS.toInt()} m del punto para confirmar con foto",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-            FilledTonalButton(
-              onClick = { showCreateMissionDialog = true },
-              shape = CircleShape,
-              contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-              modifier = Modifier.testTag("open_create_mission_button"),
-            ) {
-              Icon(imageVector = Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-              Spacer(modifier = Modifier.width(4.dp))
-              Text(stringResource(id = R.string.create_mission), style = MaterialTheme.typography.labelLarge)
-            }
-          }
-        }
-      }
-
-      // Interactive Category Pills Bar
-      item {
-        LazyRow(
-          contentPadding = PaddingValues(horizontal = 16.dp),
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-          item(key = "all") {
-            MissionCategoryCard(
-              key = "all",
-              label = "Todas",
-              count = uiState.missions.size,
-              icon = Icons.Rounded.AutoAwesome,
-              accentColor = MaterialTheme.colorScheme.primary,
-              isSelected = selectedCategory == "all",
-              isPrivateFavorite = false,
-              disableAnimations = disableDecorAnimations,
-              onClick = { selectedCategory = "all" },
-            )
-          }
-
-          if (favoriteCategories.isNotEmpty()) {
-            item(key = "for_you") {
-              val favCount = uiState.missions.count { it.mission.category in favoriteCategories }
-              MissionCategoryCard(
-                key = "for_you",
-                label = "Para ti",
-                count = favCount,
-                icon = Icons.Rounded.Star,
-                accentColor = MaterialTheme.colorScheme.tertiary,
-                isSelected = selectedCategory == "for_you",
-                isPrivateFavorite = true,
-                disableAnimations = disableDecorAnimations,
-                onClick = { selectedCategory = "for_you" },
-              )
-            }
-          }
-
-          items(MissionCategory.entries, key = { it.key }) { cat ->
-            MissionCategoryCard(
-              key = cat.key,
-              label = cat.label,
-              count = categoryCounts[cat.key] ?: 0,
-              icon = categoryIcon(cat.key),
-              accentColor = categoryColor(cat.key, MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.tertiary),
-              isSelected = selectedCategory == cat.key,
-              isPrivateFavorite = cat.key in favoriteCategories,
-              disableAnimations = disableDecorAnimations,
-              onClick = { selectedCategory = cat.key },
-            )
-          }
-        }
-      }
-
-      if (filteredMissions.isEmpty()) {
+        // 3. Top-Center Animated Round Radar Map
         item {
-          Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-            shape = MaterialTheme.shapes.large,
+          RoundRadarMap(
+            myProfile = uiState.myProfile,
+            nearbyPlayers = uiState.nearbyPlayers,
+            missions = uiState.missions,
+            searchRadiusMeters = uiState.settings.searchRadiusMeters,
+            radarStyle = uiState.settings.radarStyle,
+            animationTier = uiState.settings.animationTier,
+            isBroadcasting = uiState.isBroadcastingRadar,
+            hasLocationPermission = uiState.hasLocationPermission,
+            activeAcceptedMissionId = uiState.activeAcceptedMissionId,
+            onPlayerClick = { selectedPlayer = it },
+            onMissionClick = { selectedMissionId = it.mission.id },
+            onCycleRadius = onCycleRadius,
+            onExpandMap = { showExpandedMap = true },
+            modifier = Modifier.padding(top = 2.dp),
+          )
+        }
+
+        // 4. Nearby Players Strip
+        item {
+          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Text(
+                text = stringResource(id = R.string.nearby_players_title),
+                style = MaterialTheme.typography.titleMedium,
+              )
+              Text(
+                text = "${uiState.nearbyPlayers.size} activos",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+              )
+            }
+
+            if (uiState.nearbyPlayers.isEmpty()) {
+              Card(
+                colors = CardDefaults.cardColors(
+                  containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                ),
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(horizontal = 16.dp),
+              ) {
+                Row(
+                  modifier = Modifier.padding(14.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Rounded.Radar,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                  Text(
+                    text = "Tu señal está en vivo. Cuando otros amigos abran Veyra dentro de ${
+                      GeoUtils.formatDistance(uiState.settings.searchRadiusMeters.toFloat())
+                    }, aparecerán aquí para ayudar, competir o jugar.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+              }
+            } else {
+              LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+              ) {
+                items(uiState.nearbyPlayers, key = { it.profile.userId }) { item ->
+                  NearbyPlayerCard(
+                    item = item,
+                    onClick = { selectedPlayer = item },
+                    onQuickHelp = { onHelpPlayer(item) },
+                  )
+                }
+              }
+            }
+          }
+        }
+
+        // 5. Bottom Section: Randomized 28+ Real-Life & Mini-Game Missions
+        item {
+          Column(
             modifier = Modifier
               .fillMaxWidth()
               .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
           ) {
-            Column(
-              modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
-              horizontalAlignment = Alignment.CenterHorizontally,
-              verticalArrangement = Arrangement.spacedBy(8.dp),
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically,
             ) {
-              Icon(
-                imageVector = Icons.Rounded.Explore,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(32.dp),
-              )
-              Text(
-                text = "Sin misiones en esta categoría aún",
-                style = MaterialTheme.typography.titleSmall,
-              )
-              FilledTonalButton(onClick = { showCreateMissionDialog = true }) {
-                Text("Crear la primera aquí")
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = "${uiState.missions.size} misiones aleatorias",
+                  style = MaterialTheme.typography.titleLarge,
+                )
+                Text(
+                  text = "Foto, cables y rompecabezas • Acércate a ${GeoUtils.PROXIMITY_RADIUS_METERS.toInt()} m",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+              Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilledTonalButton(
+                  onClick = onRespawnRandomMissions,
+                  shape = CircleShape,
+                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                  modifier = Modifier.testTag("respawn_random_missions_button"),
+                ) {
+                  Icon(Icons.Rounded.Shuffle, contentDescription = "Reubicar aleatorias", modifier = Modifier.size(16.dp))
+                }
+                FilledTonalButton(
+                  onClick = { showCreateMissionDialog = true },
+                  shape = CircleShape,
+                  contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                  modifier = Modifier.testTag("open_create_mission_button"),
+                ) {
+                  Icon(imageVector = Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text(stringResource(id = R.string.create_mission), style = MaterialTheme.typography.labelMedium)
+                }
+              }
+            }
+
+            if (uiState.waitingMissionQueue.isNotEmpty()) {
+              Surface(
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                shape = CircleShape,
+                modifier = Modifier.testTag("waiting_queue_summary_pill"),
+              ) {
+                Row(
+                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Rounded.HourglassTop,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                    modifier = Modifier.size(15.dp),
+                  )
+                  Text(
+                    text = "${uiState.waitingMissionQueue.size} misión(es) en cola de espera — aparecerán al terminar otra",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                  )
+                }
               }
             }
           }
         }
-      } else {
-        items(filteredMissions, key = { it.mission.id }) { item ->
-          MissionCard(
-            item = item,
-            isPrivateMatch = item.mission.category in favoriteCategories,
-            hasLocationPermission = uiState.hasLocationPermission,
-            disableAnimations = disableDecorAnimations,
-            onOpenDetails = { selectedMissionId = item.mission.id },
-            onConfirmWithPhoto = {
-              if (item.isWithinProximity && uiState.hasLocationPermission) {
-                missionToConfirm = item.mission
-              } else {
-                selectedMissionId = item.mission.id
+
+        // Interactive Category & Gameplay Type Pills Bar
+        item {
+          LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            item(key = "all") {
+              MissionCategoryCard(
+                key = "all",
+                label = "Todas",
+                count = uiState.missions.size,
+                icon = Icons.Rounded.AutoAwesome,
+                accentColor = MaterialTheme.colorScheme.primary,
+                isSelected = selectedCategory == "all",
+                isPrivateFavorite = false,
+                disableAnimations = disableDecorAnimations,
+                onClick = { selectedCategory = "all" },
+              )
+            }
+
+            if (favoriteCategories.isNotEmpty()) {
+              item(key = "for_you") {
+                val favCount = uiState.missions.count { it.mission.category in favoriteCategories }
+                MissionCategoryCard(
+                  key = "for_you",
+                  label = "Para ti",
+                  count = favCount,
+                  icon = Icons.Rounded.Star,
+                  accentColor = MaterialTheme.colorScheme.tertiary,
+                  isSelected = selectedCategory == "for_you",
+                  isPrivateFavorite = true,
+                  disableAnimations = disableDecorAnimations,
+                  onClick = { selectedCategory = "for_you" },
+                )
               }
-            },
-            modifier = Modifier.padding(horizontal = 16.dp),
-          )
+            }
+
+            item(key = "wires") {
+              MissionCategoryCard(
+                key = "wires",
+                label = "Cables",
+                count = uiState.missions.count { it.mission.missionType == "wires" },
+                icon = Icons.Rounded.Cable,
+                accentColor = Color(0xFF00897B),
+                isSelected = selectedCategory == "wires",
+                isPrivateFavorite = false,
+                disableAnimations = disableDecorAnimations,
+                onClick = { selectedCategory = "wires" },
+              )
+            }
+
+            item(key = "puzzle") {
+              MissionCategoryCard(
+                key = "puzzle",
+                label = "Puzzles",
+                count = uiState.missions.count { it.mission.missionType == "puzzle" },
+                icon = Icons.Rounded.Extension,
+                accentColor = Color(0xFF5E35B1),
+                isSelected = selectedCategory == "puzzle",
+                isPrivateFavorite = false,
+                disableAnimations = disableDecorAnimations,
+                onClick = { selectedCategory = "puzzle" },
+              )
+            }
+
+            items(MissionCategory.entries, key = { it.key }) { cat ->
+              MissionCategoryCard(
+                key = cat.key,
+                label = cat.label,
+                count = categoryCounts[cat.key] ?: 0,
+                icon = categoryIcon(cat.key),
+                accentColor = categoryColor(cat.key, MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.tertiary),
+                isSelected = selectedCategory == cat.key,
+                isPrivateFavorite = cat.key in favoriteCategories,
+                disableAnimations = disableDecorAnimations,
+                onClick = { selectedCategory = cat.key },
+              )
+            }
+          }
+        }
+
+        if (filteredMissions.isEmpty()) {
+          item {
+            Card(
+              colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+              shape = MaterialTheme.shapes.large,
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            ) {
+              Column(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Rounded.Explore,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(32.dp),
+                )
+                Text(
+                  text = "Sin misiones disponibles aquí",
+                  style = MaterialTheme.typography.titleSmall,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                  FilledTonalButton(onClick = onRespawnRandomMissions) {
+                    Text("Generar aleatorias")
+                  }
+                  FilledTonalButton(onClick = { showCreateMissionDialog = true }) {
+                    Text("Crear misión")
+                  }
+                }
+              }
+            }
+          }
+        } else {
+          items(filteredMissions, key = { it.mission.id }) { item ->
+            val queuePos = uiState.waitingMissionQueue.indexOf(item.mission.id).takeIf { it >= 0 }?.plus(1)
+            MissionCard(
+              item = item,
+              isPrivateMatch = item.mission.category in favoriteCategories,
+              isAccepted = item.mission.id == uiState.activeAcceptedMissionId,
+              waitQueuePosition = queuePos,
+              hasLocationPermission = uiState.hasLocationPermission,
+              disableAnimations = disableDecorAnimations,
+              onOpenDetails = { selectedMissionId = item.mission.id },
+              onLaunchMission = { launchMissionFlow(item) },
+              onAccept = { onAcceptMission(item.mission.id) },
+              onWait = { onWaitMission(item.mission.id) },
+              onReject = { onRejectMission(item.mission.id) },
+              modifier = Modifier.padding(horizontal = 16.dp),
+            )
+          }
         }
       }
-    }
     }
   }
 
@@ -563,23 +781,38 @@ fun RadarHomeScreen(
       missions = uiState.missions,
       searchRadiusMeters = uiState.settings.searchRadiusMeters,
       hasLocationPermission = uiState.hasLocationPermission,
+      activeAcceptedMissionId = uiState.activeAcceptedMissionId,
       onDismiss = { showExpandedMap = false },
       onMissionClick = { selectedMissionId = it.mission.id },
       onPlayerClick = { selectedPlayer = it },
+      onRespawnRandomMissions = onRespawnRandomMissions,
     )
   }
 
   activeSelectedMission?.let { item ->
+    val queuePos = uiState.waitingMissionQueue.indexOf(item.mission.id).takeIf { it >= 0 }?.plus(1)
     MissionDetailSheet(
       item = item,
       hasLocationPermission = uiState.hasLocationPermission,
       showExpandMapButton = !showExpandedMap,
+      isAccepted = item.mission.id == uiState.activeAcceptedMissionId,
+      waitQueuePosition = queuePos,
       onDismiss = { selectedMissionId = null },
-      onStartPhotoConfirm = {
+      onStartMissionAction = {
         selectedMissionId = null
-        if (item.isWithinProximity && uiState.hasLocationPermission) {
-          missionToConfirm = item.mission
-        }
+        launchMissionFlow(item)
+      },
+      onAcceptMission = {
+        onAcceptMission(item.mission.id)
+        selectedMissionId = null
+      },
+      onWaitMission = {
+        onWaitMission(item.mission.id)
+        selectedMissionId = null
+      },
+      onRejectMission = {
+        onRejectMission(item.mission.id)
+        selectedMissionId = null
       },
       onOpenExpandedMap = {
         selectedMissionId = null
@@ -604,23 +837,45 @@ fun RadarHomeScreen(
     )
   }
 
-  missionToConfirm?.let { mission ->
-    PhotoConfirmSheet(
-      mission = mission,
-      isSubmitting = uiState.isSubmitting,
-      onDismiss = { missionToConfirm = null },
-      onConfirmPhoto = { caption, base64, isPublic ->
-        onConfirmMissionPhoto(mission, caption, base64, isPublic)
-        missionToConfirm = null
-      },
-    )
+  activeMissionPlayTarget?.let { mission ->
+    when (mission.missionType) {
+      "wires" -> WireConnectGameDialog(
+        mission = mission,
+        isSubmitting = uiState.isSubmitting,
+        onDismiss = { activeMissionPlayTarget = null },
+        onComplete = { caption, isPublic ->
+          onCompleteMiniGame(mission, caption, isPublic)
+          activeMissionPlayTarget = null
+        },
+      )
+
+      "puzzle" -> TilePuzzleGameDialog(
+        mission = mission,
+        isSubmitting = uiState.isSubmitting,
+        onDismiss = { activeMissionPlayTarget = null },
+        onComplete = { caption, isPublic ->
+          onCompleteMiniGame(mission, caption, isPublic)
+          activeMissionPlayTarget = null
+        },
+      )
+
+      else -> PhotoConfirmSheet(
+        mission = mission,
+        isSubmitting = uiState.isSubmitting,
+        onDismiss = { activeMissionPlayTarget = null },
+        onConfirmPhoto = { caption, base64, isPublic ->
+          onConfirmMissionPhoto(mission, caption, base64, isPublic)
+          activeMissionPlayTarget = null
+        },
+      )
+    }
   }
 
   if (showCreateMissionDialog) {
     CreateMissionDialog(
       onDismiss = { showCreateMissionDialog = false },
-      onCreate = { title, desc, cat, xp ->
-        onCreateMission(title, desc, cat, xp)
+      onCreate = { title, desc, cat, xp, type, icon ->
+        onCreateMission(title, desc, cat, xp, type, icon)
         showCreateMissionDialog = false
       },
     )
@@ -827,29 +1082,45 @@ private fun NearbyPlayerCard(
 private fun MissionCard(
   item: MissionWithDistance,
   isPrivateMatch: Boolean,
+  isAccepted: Boolean,
+  waitQueuePosition: Int?,
   hasLocationPermission: Boolean,
   disableAnimations: Boolean,
   onOpenDetails: () -> Unit,
-  onConfirmWithPhoto: () -> Unit,
+  onLaunchMission: () -> Unit,
+  onAccept: () -> Unit,
+  onWait: () -> Unit,
+  onReject: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val mission = item.mission
   val cat = MissionCategory.fromKey(mission.category)
-  val catIcon = categoryIcon(cat.key)
-  val catColor = categoryColor(cat.key, MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.tertiary)
+  val missionIcon = MissionIcons.iconForMission(mission)
+  val accentColor = MissionIcons.accentColorForMission(
+    mission,
+    MaterialTheme.colorScheme.primary,
+    MaterialTheme.colorScheme.tertiary,
+  )
   val unlocked = hasLocationPermission && item.isWithinProximity
 
   Card(
     colors = CardDefaults.cardColors(
-      containerColor = if (item.isCompletedByMe) {
-        MaterialTheme.colorScheme.surfaceContainerLow
-      } else {
-        MaterialTheme.colorScheme.surfaceContainerHigh
+      containerColor = when {
+        isAccepted -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+        item.isCompletedByMe -> MaterialTheme.colorScheme.surfaceContainerLow
+        else -> MaterialTheme.colorScheme.surfaceContainerHigh
       },
     ),
     shape = MaterialTheme.shapes.large,
     modifier = modifier
       .fillMaxWidth()
+      .let {
+        if (isAccepted) {
+          it.border(1.5.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.large)
+        } else {
+          it
+        }
+      }
       .clip(MaterialTheme.shapes.large)
       .clickable(onClick = onOpenDetails)
       .testTag("mission_card_${mission.id}"),
@@ -870,28 +1141,37 @@ private fun MissionCard(
         ) {
           Box(
             modifier = Modifier
-              .size(36.dp)
+              .size(40.dp)
               .clip(CircleShape)
-              .background(catColor.copy(alpha = 0.16f)),
+              .background(accentColor.copy(alpha = 0.16f)),
             contentAlignment = Alignment.Center,
           ) {
             Icon(
-              imageVector = catIcon,
-              contentDescription = cat.label,
-              tint = catColor,
-              modifier = Modifier.size(19.dp),
+              imageVector = missionIcon,
+              contentDescription = mission.title,
+              tint = accentColor,
+              modifier = Modifier.size(21.dp),
             )
           }
           Column {
             Row(
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
+              horizontalArrangement = Arrangement.spacedBy(5.dp),
             ) {
+              Surface(color = accentColor, shape = CircleShape) {
+                Text(
+                  text = MissionIcons.typeLabel(mission.missionType).uppercase(),
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.Bold,
+                  color = Color.White,
+                  modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                )
+              }
               Text(
                 text = cat.label.uppercase(),
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
-                color = catColor,
+                color = accentColor,
               )
               if (isPrivateMatch && !item.isCompletedByMe) {
                 if (disableAnimations) {
@@ -906,6 +1186,7 @@ private fun MissionCard(
             Text(
               text = mission.title,
               style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.SemiBold,
             )
           }
         }
@@ -958,7 +1239,7 @@ private fun MissionCard(
             text = if (unlocked) {
               "¡En punto (${GeoUtils.formatDistance(item.distanceMeters)})!"
             } else {
-              "A ${GeoUtils.formatDistance(item.distanceMeters)} • por ${mission.creatorName}"
+              "A ${GeoUtils.formatDistance(item.distanceMeters)} (${GeoUtils.cardinalDirectionEs(item.bearingDegrees)})"
             },
             style = MaterialTheme.typography.labelSmall,
             color = if (unlocked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -967,46 +1248,89 @@ private fun MissionCard(
           )
         }
 
-        Spacer(modifier = Modifier.width(8.dp))
-
         if (unlocked) {
           Button(
-            onClick = onConfirmWithPhoto,
+            onClick = onLaunchMission,
             shape = CircleShape,
             modifier = Modifier
-              .height(44.dp)
+              .height(40.dp)
               .testTag("confirm_mission_photo_button_${mission.id}"),
           ) {
             Icon(
-              imageVector = if (item.isCompletedByMe) Icons.Rounded.CheckCircle else Icons.Rounded.CameraAlt,
+              imageVector = if (item.isCompletedByMe) Icons.Rounded.CheckCircle else MissionIcons.typeActionIcon(mission.missionType),
               contentDescription = null,
-              modifier = Modifier.size(17.dp),
+              modifier = Modifier.size(16.dp),
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
-              text = if (item.isCompletedByMe) "Repetir foto" else stringResource(id = R.string.confirm_with_photo),
-              style = MaterialTheme.typography.labelLarge,
+              text = when {
+                mission.missionType == "wires" -> "Cables"
+                mission.missionType == "puzzle" -> "Puzzle"
+                item.isCompletedByMe -> "Repetir"
+                else -> "Foto"
+              },
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.Bold,
             )
           }
-        } else {
-          FilledTonalButton(
-            onClick = onOpenDetails,
-            shape = CircleShape,
-            modifier = Modifier
-              .height(44.dp)
-              .testTag("inspect_mission_button_${mission.id}"),
-          ) {
-            Icon(
-              imageVector = Icons.Rounded.Lock,
-              contentDescription = null,
-              modifier = Modifier.size(15.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-              text = "Ver punto",
-              style = MaterialTheme.typography.labelLarge,
-            )
-          }
+        }
+      }
+
+      // Accept / Wait / Reject action row
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        FilledTonalButton(
+          onClick = onAccept,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+          modifier = Modifier
+            .weight(1f)
+            .height(38.dp)
+            .testTag("accept_mission_button_${mission.id}"),
+        ) {
+          Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(15.dp))
+          Spacer(modifier = Modifier.width(3.dp))
+          Text(
+            text = if (isAccepted) "Activa" else "Aceptar",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+          )
+        }
+
+        OutlinedButton(
+          onClick = onWait,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+          modifier = Modifier
+            .weight(1f)
+            .height(38.dp)
+            .testTag("wait_mission_button_${mission.id}"),
+        ) {
+          Icon(Icons.Rounded.HourglassTop, contentDescription = null, modifier = Modifier.size(14.dp))
+          Spacer(modifier = Modifier.width(3.dp))
+          Text(
+            text = if (waitQueuePosition != null) "Cola #$waitQueuePosition" else "Esperar",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+
+        OutlinedButton(
+          onClick = onReject,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+          modifier = Modifier
+            .weight(1f)
+            .height(38.dp)
+            .testTag("reject_mission_button_${mission.id}"),
+        ) {
+          Icon(Icons.Rounded.DeleteOutline, contentDescription = null, modifier = Modifier.size(14.dp))
+          Spacer(modifier = Modifier.width(3.dp))
+          Text(
+            text = "Rechazar",
+            style = MaterialTheme.typography.labelSmall,
+          )
         }
       }
     }
@@ -1043,35 +1367,54 @@ private fun ParaTiBadge() {
 @Composable
 private fun CreateMissionDialog(
   onDismiss: () -> Unit,
-  onCreate: (title: String, description: String, category: String, xpReward: Long) -> Unit,
+  onCreate: (title: String, description: String, category: String, xpReward: Long, missionType: String, iconKey: String) -> Unit,
 ) {
   var title by remember { mutableStateOf("") }
   var description by remember { mutableStateOf("") }
   var category by remember { mutableStateOf("explore") }
+  var missionType by remember { mutableStateOf("photo") }
   var xpReward by remember { mutableLongStateOf(140L) }
 
   AlertDialog(
     onDismissRequest = onDismiss,
-    title = { Text("Nueva misión real") },
+    title = { Text("Nueva misión en punto aleatorio") },
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         OutlinedTextField(
           value = title,
           onValueChange = { if (it.length <= 80) title = it },
           label = { Text("Título de la misión") },
-          placeholder = { Text("Ej. Encuentra un mural colorido") },
+          placeholder = { Text("Ej. Circuito secreto del parque") },
           singleLine = true,
           modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
           value = description,
           onValueChange = { if (it.length <= 280) description = it },
-          label = { Text("Instrucciones para la foto") },
-          placeholder = { Text("Describe qué debe verse en la foto...") },
+          label = { Text("Instrucciones") },
+          placeholder = { Text("Describe qué hacer al llegar...") },
           minLines = 2,
           maxLines = 3,
           modifier = Modifier.fillMaxWidth(),
         )
+        Text("Tipo de reto", style = MaterialTheme.typography.labelLarge)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+          listOf(
+            "photo" to "Foto",
+            "wires" to "Cables",
+            "puzzle" to "Puzzle",
+          ).forEach { (typeKey, label) ->
+            FilterChip(
+              selected = missionType == typeKey,
+              onClick = { missionType = typeKey },
+              shape = CircleShape,
+              label = { Text(label) },
+              leadingIcon = {
+                Icon(MissionIcons.typeActionIcon(typeKey), contentDescription = null, modifier = Modifier.size(15.dp))
+              },
+            )
+          }
+        }
         Text("Categoría", style = MaterialTheme.typography.labelLarge)
         FlowRow(
           horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -1106,7 +1449,19 @@ private fun CreateMissionDialog(
       Button(
         onClick = {
           if (title.trim().length >= 3 && description.trim().length >= 5) {
-            onCreate(title.trim(), description.trim(), category, xpReward)
+            val chosenIcon = when (missionType) {
+              "wires" -> "cable"
+              "puzzle" -> "extension"
+              else -> when (category) {
+                "eco" -> "park"
+                "social" -> "volunteer"
+                "challenge" -> "camera"
+                "fitness" -> "directions_run"
+                "creative" -> "brush"
+                else -> "explore"
+              }
+            }
+            onCreate(title.trim(), description.trim(), category, xpReward, missionType, chosenIcon)
           }
         },
         enabled = title.trim().length >= 3 && description.trim().length >= 5,

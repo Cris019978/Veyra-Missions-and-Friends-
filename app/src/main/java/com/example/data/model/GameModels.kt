@@ -78,6 +78,8 @@ data class Mission(
   val title: String = "",
   val description: String = "",
   val category: String = "explore", // explore, eco, social, challenge, fitness, creative
+  val missionType: String = "photo", // photo, wires, puzzle
+  val iconKey: String = "explore",
   val xpReward: Long = 100L,
   val latitude: Double = 0.0,
   val longitude: Double = 0.0,

@@ -92,4 +92,66 @@ object PhotoUtils {
       BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
     }.getOrNull()
   }
+
+  fun createMiniGameBadgeBase64(missionTitle: String, missionType: String): String {
+    val bmp = Bitmap.createBitmap(320, 200, Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bmp)
+    val isWires = missionType == "wires"
+
+    val bgPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+      shader = android.graphics.LinearGradient(
+        0f,
+        0f,
+        320f,
+        200f,
+        if (isWires) 0xFF0F2027.toInt() else 0xFF2B1055.toInt(),
+        if (isWires) 0xFF00897B.toInt() else 0xFF753A88.toInt(),
+        android.graphics.Shader.TileMode.CLAMP,
+      )
+    }
+    canvas.drawRect(0f, 0f, 320f, 200f, bgPaint)
+
+    val linePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+      strokeWidth = 6f
+      style = android.graphics.Paint.Style.STROKE
+      strokeCap = android.graphics.Paint.Cap.ROUND
+    }
+    if (isWires) {
+      val colors = intArrayOf(0xFFEF4444.toInt(), 0xFF3B82F6.toInt(), 0xFF10B981.toInt(), 0xFFF59E0B.toInt())
+      colors.forEachIndexed { idx, c ->
+        linePaint.color = c
+        val y = 42f + idx * 34f
+        canvas.drawLine(46f, y, 274f, 42f + ((3 - idx) * 34f), linePaint)
+      }
+    } else {
+      linePaint.color = 0x88FFFFFF.toInt()
+      linePaint.strokeWidth = 3f
+      for (r in 0..2) {
+        for (c in 0..2) {
+          val left = 104f + c * 38f
+          val top = 34f + r * 38f
+          canvas.drawRoundRect(left, top, left + 34f, top + 34f, 8f, 8f, linePaint)
+        }
+      }
+    }
+
+    val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+      color = android.graphics.Color.WHITE
+      textSize = 18f
+      isFakeBoldText = true
+      textAlign = android.graphics.Paint.Align.CENTER
+    }
+    val label = if (isWires) "CABLES CONECTADOS" else "ROMPECABEZAS RESUELTO"
+    canvas.drawText(label, 160f, 174f, textPaint)
+    val subPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+      color = 0xDDFFFFFF.toInt()
+      textSize = 13f
+      textAlign = android.graphics.Paint.Align.CENTER
+    }
+    canvas.drawText(missionTitle.take(28), 160f, 192f, subPaint)
+
+    val baos = ByteArrayOutputStream()
+    bmp.compress(Bitmap.CompressFormat.PNG, 90, baos)
+    return Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+  }
 }

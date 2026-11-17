@@ -152,6 +152,26 @@ test("Missions & Completions: create, query active, submit photo proof, enforce 
       title: "Foto en el parque",
       description: "Toma una foto de un árbol cercano",
       category: "creative",
+      missionType: "wires",
+      iconKey: "cable",
+      xpReward: 120,
+      latitude: 37.422,
+      longitude: -122.084,
+      isActive: true,
+      createdAt: ts,
+      updatedAt: ts,
+    })
+  );
+
+  await assertFails(
+    aliceDb.collection("missions").doc("mission_bad_type").set({
+      creatorId: ALICE_UID,
+      creatorName: "Alice",
+      title: "Misión inválida",
+      description: "Tipo no permitido",
+      category: "creative",
+      missionType: "hack_type",
+      iconKey: "cable",
       xpReward: 120,
       latitude: 37.422,
       longitude: -122.084,

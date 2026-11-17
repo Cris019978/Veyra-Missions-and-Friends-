@@ -320,18 +320,24 @@ class RadarQuestRepository(
     xpReward: Long,
     latitude: Double,
     longitude: Double,
+    missionType: String = "photo",
+    iconKey: String = "explore",
   ): Result<String> {
     return runCatching {
       val uid = requireUserId()
       val id = "m_" + UUID.randomUUID().toString().replace("-", "").take(16)
       val docRef = db.collection("missions").document(id)
       val safeCategory = if (category in VALID_CATEGORIES) category else "explore"
+      val safeType = if (missionType in listOf("photo", "wires", "puzzle")) missionType else "photo"
+      val safeIcon = iconKey.trim().ifBlank { "explore" }.take(32)
       val payload = mapOf(
         "creatorId" to uid,
         "creatorName" to creatorName.trim().ifBlank { "Explorador" }.take(40),
         "title" to title.trim().take(80),
         "description" to description.trim().take(280),
         "category" to safeCategory,
+        "missionType" to safeType,
+        "iconKey" to safeIcon,
         "xpReward" to xpReward.coerceIn(25L, 1000L),
         "latitude" to latitude.coerceIn(-90.0, 90.0),
         "longitude" to longitude.coerceIn(-180.0, 180.0),

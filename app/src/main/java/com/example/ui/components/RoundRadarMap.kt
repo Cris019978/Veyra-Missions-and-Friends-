@@ -93,6 +93,7 @@ fun RoundRadarMap(
   animationTier: String = "high",
   isBroadcasting: Boolean,
   hasLocationPermission: Boolean,
+  activeAcceptedMissionId: String? = null,
   onPlayerClick: (NearbyPlayerItem) -> Unit,
   onMissionClick: (MissionWithDistance) -> Unit,
   onCycleRadius: () -> Unit,
@@ -421,42 +422,37 @@ fun RoundRadarMap(
           )
 
           // Mission pins plotted on the radar (tapping opens mission info + proximity check)
-          missions.take(8).forEach { item ->
-            val normalizedDist = (item.distanceMeters / searchRadiusMeters.toFloat()).coerceIn(0.22f, 0.82f)
+          missions.take(10).forEach { item ->
+            val normalizedDist = (item.distanceMeters / searchRadiusMeters.toFloat()).coerceIn(0.18f, 0.84f)
             val angleRad = Math.toRadians((item.bearingDegrees - 90f).toDouble())
             val rPx = (radarRadiusPx * 0.80f) * normalizedDist
             val dx = (rPx * cos(angleRad)).roundToInt()
             val dy = (rPx * sin(angleRad)).roundToInt()
 
+            val isAccepted = item.mission.id == activeAcceptedMissionId
             val isSwept = isHighTier && isBroadcasting && isAngleNearSweep(item.bearingDegrees, sweepAngle)
             val pinScaleValue = if (isHighTier) {
               val animScale by animateFloatAsState(
-                targetValue = if (isSwept && !item.isCompletedByMe) 1.24f else if (!item.isCompletedByMe) 1.0f else 0.88f,
+                targetValue = when {
+                  isAccepted -> 1.22f
+                  isSwept && !item.isCompletedByMe -> 1.22f
+                  !item.isCompletedByMe -> 1.0f
+                  else -> 0.88f
+                },
                 animationSpec = spring(dampingRatio = 0.58f, stiffness = 420f),
                 label = "missionPinScale",
               )
               animScale
             } else {
-              if (item.isCompletedByMe) 0.90f else 1.0f
+              if (isAccepted) 1.12f else if (item.isCompletedByMe) 0.90f else 1.0f
             }
 
-            val pinColor = when {
-              item.isCompletedByMe -> secondaryColor.copy(alpha = 0.60f)
-              item.mission.category == "eco" -> Color(0xFF1B8E6E)
-              item.mission.category == "social" -> tertiaryColor
-              item.mission.category == "fitness" -> Color(0xFFE67E22)
-              item.mission.category == "creative" -> Color(0xFF8E44AD)
-              item.mission.category == "challenge" -> Color(0xFFD84315)
-              else -> primaryColor
+            val pinColor = if (item.isCompletedByMe) {
+              secondaryColor.copy(alpha = 0.60f)
+            } else {
+              MissionIcons.accentColorForMission(item.mission, primaryColor, tertiaryColor)
             }
-            val pinIcon = when (item.mission.category) {
-              "eco" -> Icons.Rounded.LocalFlorist
-              "social" -> Icons.Rounded.VolunteerActivism
-              "challenge" -> Icons.Rounded.CameraAlt
-              "fitness" -> Icons.AutoMirrored.Rounded.DirectionsRun
-              "creative" -> Icons.Rounded.Brush
-              else -> Icons.Rounded.Explore
-            }
+            val pinIcon = MissionIcons.iconForMission(item.mission)
 
             Box(
               modifier = Modifier

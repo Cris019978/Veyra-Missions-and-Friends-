@@ -12,12 +12,18 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.model.Mission
 import com.example.data.model.MissionCompletion
+import com.example.data.model.MissionWithDistance
 import com.example.data.model.NearbyMissionPopup
 import com.example.data.model.UserSettings
 import com.example.ui.components.FloatingBottomNavBar
 import com.example.ui.components.NearbyMissionPopupOverlay
+import com.example.ui.components.QueuedMissionPromptDialog
+import com.example.ui.components.TilePuzzleGameDialog
+import com.example.ui.components.WireConnectGameDialog
 import com.example.ui.screens.CustomizeStyleScreen
+import com.example.ui.screens.RadarHomeScreen
 import com.example.ui.screens.SocialFeedScreen
 import com.example.ui.theme.RadarQuestTheme
 import com.example.ui.viewmodel.RadarQuestUiState
@@ -172,5 +178,159 @@ class ExampleRobolectricTest {
       .performScrollTo()
       .performClick()
     assertEquals(true, toggledValue)
+  }
+
+  @Test
+  fun `wire connect mini game completes when all 5 color wires are paired`() {
+    var completedCaption: String? = null
+    val mission = Mission(
+      id = "quest_wires_solar",
+      title = "Circuito Solar Urbano",
+      missionType = "wires",
+      iconKey = "bolt",
+      xpReward = 155L,
+    )
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        WireConnectGameDialog(
+          mission = mission,
+          isSubmitting = false,
+          onDismiss = {},
+          onComplete = { caption, _ -> completedCaption = caption },
+        )
+      }
+    }
+
+    listOf("red", "blue", "green", "amber", "violet").forEach { colorId ->
+      composeTestRule.onNodeWithTag("wire_left_$colorId").performClick()
+      composeTestRule.onNodeWithTag("wire_right_$colorId").performClick()
+    }
+    composeTestRule.onNodeWithTag("wire_complete_mission_button").performClick()
+    assertTrue(completedCaption != null)
+  }
+
+  @Test
+  fun `tile puzzle mini game renders board and dialog`() {
+    val mission = Mission(
+      id = "quest_puzzle_compass",
+      title = "Brújula Fragmentada",
+      missionType = "puzzle",
+      iconKey = "compass",
+      xpReward = 160L,
+    )
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        TilePuzzleGameDialog(
+          mission = mission,
+          isSubmitting = false,
+          onDismiss = {},
+          onComplete = { _, _ -> },
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("tile_puzzle_game_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Rompecabezas 3×3").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("puzzle_tile_1").assertIsDisplayed()
+  }
+
+  @Test
+  fun `queued mission prompt dialog triggers accept or reject callbacks`() {
+    var accepted = false
+    var rejected = false
+    val mission = MissionWithDistance(
+      mission = Mission(
+        id = "q_wait_1",
+        title = "Enlace de Baliza",
+        category = "explore",
+        missionType = "wires",
+        iconKey = "hub",
+        xpReward = 150L,
+      ),
+      distanceMeters = 90f,
+      bearingDegrees = 40f,
+      isCompletedByMe = false,
+      isWithinProximity = true,
+    )
+
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        QueuedMissionPromptDialog(
+          queuedMission = mission,
+          remainingQueueCount = 1,
+          onAcceptNow = { accepted = true },
+          onReject = { rejected = true },
+          onKeepWaiting = {},
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("queued_mission_prompt_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("queued_prompt_accept_button").performClick()
+    assertTrue(accepted)
+
+    composeTestRule.onNodeWithTag("queued_prompt_reject_button").performClick()
+    assertTrue(rejected)
+  }
+
+  @Test
+  fun `radar home screen mission cards expose accept wait and reject actions`() {
+    var lastAction = ""
+    val sampleMission = MissionWithDistance(
+      mission = Mission(
+        id = "m_card_1",
+        title = "Circuito Solar Urbano",
+        description = "Reconecta los cables",
+        category = "eco",
+        missionType = "wires",
+        iconKey = "bolt",
+        xpReward = 155L,
+      ),
+      distanceMeters = 80f,
+      bearingDegrees = 30f,
+      isCompletedByMe = false,
+      isWithinProximity = true,
+    )
+
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        RadarHomeScreen(
+          uiState = RadarQuestUiState(
+            missions = listOf(sampleMission),
+            hasLocationPermission = true,
+          ),
+          onRequestLocationPermission = {},
+          onOpenNotifications = {},
+          onRefresh = {},
+          onToggleBroadcast = {},
+          onToggleSeekingHelp = {},
+          onCycleRadius = {},
+          onHelpPlayer = {},
+          onSendPulse = {},
+          onCompeteDuel = { _, _ -> },
+          onPlayCoop = { _, _ -> },
+          onCreateMission = { _, _, _, _, _, _ -> },
+          onConfirmMissionPhoto = { _, _, _, _ -> },
+          onAcceptMission = { lastAction = "accept_$it" },
+          onWaitMission = { lastAction = "wait_$it" },
+          onRejectMission = { lastAction = "reject_$it" },
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("accept_mission_button_m_card_1")
+      .performScrollTo()
+      .performClick()
+    assertEquals("accept_m_card_1", lastAction)
+
+    composeTestRule.onNodeWithTag("wait_mission_button_m_card_1")
+      .performScrollTo()
+      .performClick()
+    assertEquals("wait_m_card_1", lastAction)
+
+    composeTestRule.onNodeWithTag("reject_mission_button_m_card_1")
+      .performScrollTo()
+      .performClick()
+    assertEquals("reject_m_card_1", lastAction)
   }
 }

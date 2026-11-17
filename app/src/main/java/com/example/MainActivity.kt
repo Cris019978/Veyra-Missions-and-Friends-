@@ -66,11 +66,13 @@ import com.example.data.local.LocalThemePreferences
 import com.example.data.local.ThemePrefsSnapshot
 import com.example.data.location.LocationTracker
 import com.example.data.repository.RadarQuestRepository
+import com.example.service.ProximityGuidanceService
 import com.example.ui.auth.AuthScreen
 import com.example.ui.components.FloatingBottomNavBar
 import com.example.ui.components.NearbyMissionPopupOverlay
 import com.example.ui.components.NotificationsSheet
 import com.example.ui.components.OnboardingQuestOverlay
+import com.example.ui.components.QueuedMissionPromptDialog
 import com.example.ui.screens.CustomizeStyleScreen
 import com.example.ui.screens.ProfileScreen
 import com.example.ui.screens.RadarHomeScreen
@@ -247,6 +249,25 @@ private fun MainAppShell(
     }
   }
 
+  LaunchedEffect(
+    uiState.activeAcceptedMission,
+    uiState.hasLocationPermission,
+    uiState.settings.notificationsEnabled,
+  ) {
+    val active = uiState.activeAcceptedMission
+    if (active != null && uiState.hasLocationPermission && uiState.settings.notificationsEnabled) {
+      ProximityGuidanceService.startForMission(
+        context = context,
+        missionId = active.mission.id,
+        missionTitle = active.mission.title,
+        latitude = active.mission.latitude,
+        longitude = active.mission.longitude,
+      )
+    } else {
+      ProximityGuidanceService.stop(context)
+    }
+  }
+
   val isExpandedWidth = LocalConfiguration.current.screenWidthDp >= 720
   val radiusPresets = listOf(500L, 2000L, 5000L, 15000L)
 
@@ -345,12 +366,20 @@ private fun MainAppShell(
                     xpStake = mission.xpReward + 40L,
                   )
                 },
-                onCreateMission = { title, desc, cat, xp ->
-                  viewModel.createCustomMission(title, desc, cat, xp)
+                onCreateMission = { title, desc, cat, xp, type, icon ->
+                  viewModel.createCustomMission(title, desc, cat, xp, type, icon)
                 },
                 onConfirmMissionPhoto = { mission, caption, base64, isPublic ->
                   viewModel.confirmMissionWithPhoto(mission, caption, base64, isPublic)
                 },
+                onCompleteMiniGame = { mission, caption, isPublic ->
+                  viewModel.completeMiniGameMission(mission, caption, isPublic)
+                },
+                onAcceptMission = { viewModel.acceptMission(it) },
+                onWaitMission = { viewModel.waitMission(it) },
+                onRejectMission = { viewModel.rejectMission(it) },
+                onCancelActiveMission = { viewModel.cancelActiveMission() },
+                onRespawnRandomMissions = { viewModel.respawnRandomMissions() },
               )
 
               1 -> if (showStyleInProfile) {
@@ -508,6 +537,19 @@ private fun MainAppShell(
         onPreviewPalette = { palette ->
           viewModel.saveThemeCustomization(paletteKey = palette)
         },
+      )
+    }
+
+    uiState.queuedPromptMission?.let { queued ->
+      QueuedMissionPromptDialog(
+        queuedMission = queued,
+        remainingQueueCount = uiState.waitingMissionQueue.size,
+        onAcceptNow = {
+          viewModel.acceptMission(queued.mission.id)
+          selectTab(0)
+        },
+        onReject = { viewModel.rejectMission(queued.mission.id) },
+        onKeepWaiting = { viewModel.dismissQueuedPromptKeepWaiting() },
       )
     }
   }

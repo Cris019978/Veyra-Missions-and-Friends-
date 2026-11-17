@@ -21,19 +21,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.DirectionsRun
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Brush
-import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Explore
-import androidx.compose.material.icons.rounded.LocalFlorist
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Remove
+import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.VolunteerActivism
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,11 +48,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -79,10 +82,13 @@ fun ExpandedRadarMapDialog(
   missions: List<MissionWithDistance>,
   searchRadiusMeters: Long,
   hasLocationPermission: Boolean,
+  activeAcceptedMissionId: String? = null,
   onDismiss: () -> Unit,
   onMissionClick: (MissionWithDistance) -> Unit,
   onPlayerClick: (NearbyPlayerItem) -> Unit,
+  onRespawnRandomMissions: () -> Unit = {},
 ) {
+  val context = LocalContext.current
   var panOffset by remember { mutableStateOf(Offset.Zero) }
   var zoomScale by remember { mutableFloatStateOf(1.15f) }
 
@@ -91,6 +97,8 @@ fun ExpandedRadarMapDialog(
   val tertiaryColor = MaterialTheme.colorScheme.tertiary
   val surfaceBg = MaterialTheme.colorScheme.surfaceContainerLowest
   val gridColor = MaterialTheme.colorScheme.outlineVariant
+
+  val activeMission = missions.firstOrNull { it.mission.id == activeAcceptedMissionId }
 
   Dialog(
     onDismissRequest = onDismiss,
@@ -114,10 +122,10 @@ fun ExpandedRadarMapDialog(
             .clipToBounds()
             .pointerInput(Unit) {
               detectTransformGestures { _, pan, zoom, _ ->
-                zoomScale = (zoomScale * zoom).coerceIn(0.65f, 3.2f)
+                zoomScale = (zoomScale * zoom).coerceIn(0.60f, 3.4f)
                 panOffset = Offset(
-                  x = (panOffset.x + pan.x).coerceIn(-900f, 900f),
-                  y = (panOffset.y + pan.y).coerceIn(-1200f, 1200f),
+                  x = (panOffset.x + pan.x).coerceIn(-1100f, 1100f),
+                  y = (panOffset.y + pan.y).coerceIn(-1400f, 1400f),
                 )
               }
             },
@@ -132,27 +140,58 @@ fun ExpandedRadarMapDialog(
           Canvas(modifier = Modifier.fillMaxSize()) {
             val mapCenter = Offset(size.width / 2f + panOffset.x, size.height / 2f + panOffset.y)
 
-            // Topographic pannable street-style grid
-            val stepPx = 72f * zoomScale.coerceIn(0.8f, 2.2f)
+            // Google-Maps-inspired street blocks & avenues backdrop
+            val stepPx = 88f * zoomScale.coerceIn(0.75f, 2.3f)
             val startX = (mapCenter.x % stepPx) - stepPx
+            val startY = (mapCenter.y % stepPx) - stepPx
+            var bx = startX
+            var colIdx = 0
+            while (bx < size.width + stepPx) {
+              var by = startY
+              var rowIdx = 0
+              while (by < size.height + stepPx) {
+                val blockHash = ((colIdx * 31 + rowIdx * 17) and 7)
+                if (blockHash == 1 || blockHash == 5) {
+                  // Subtle green park patch
+                  drawRoundRect(
+                    color = Color(0xFF1B8E6E).copy(alpha = 0.08f),
+                    topLeft = Offset(bx + 6f, by + 6f),
+                    size = Size(stepPx - 12f, stepPx - 12f),
+                    cornerRadius = CornerRadius(14f, 14f),
+                  )
+                } else {
+                  drawRoundRect(
+                    color = gridColor.copy(alpha = 0.09f),
+                    topLeft = Offset(bx + 5f, by + 5f),
+                    size = Size(stepPx - 10f, stepPx - 10f),
+                    cornerRadius = CornerRadius(10f, 10f),
+                  )
+                }
+                by += stepPx
+                rowIdx++
+              }
+              bx += stepPx
+              colIdx++
+            }
+
+            // Road gridlines
             var x = startX
             while (x < size.width + stepPx) {
               drawLine(
-                color = gridColor.copy(alpha = 0.28f),
+                color = gridColor.copy(alpha = 0.34f),
                 start = Offset(x, 0f),
                 end = Offset(x, size.height),
-                strokeWidth = 1f,
+                strokeWidth = 2.2f,
               )
               x += stepPx
             }
-            val startY = (mapCenter.y % stepPx) - stepPx
             var y = startY
             while (y < size.height + stepPx) {
               drawLine(
-                color = gridColor.copy(alpha = 0.28f),
+                color = gridColor.copy(alpha = 0.34f),
                 start = Offset(0f, y),
                 end = Offset(size.width, y),
-                strokeWidth = 1f,
+                strokeWidth = 2.2f,
               )
               y += stepPx
             }
@@ -161,31 +200,43 @@ fun ExpandedRadarMapDialog(
             val dash = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f)
             listOf(0.35f, 0.7f, 1.0f).forEach { frac ->
               drawCircle(
-                color = primaryColor.copy(alpha = 0.26f),
+                color = primaryColor.copy(alpha = 0.28f),
                 radius = baseRadiusPx * frac,
                 center = mapCenter,
                 style = Stroke(width = 1.6f, pathEffect = if (frac < 1f) dash else null),
               )
             }
 
-            // Proximity unlock zone ring around player & each mission point
+            // Proximity unlock zone circles & active route guide line
             missions.forEach { item ->
               val angleRad = Math.toRadians((item.bearingDegrees - 90f).toDouble())
               val distPx = (item.distanceMeters * pxPerMeter).coerceAtLeast(24f)
               val mx = mapCenter.x + (distPx * cos(angleRad)).toFloat()
               val my = mapCenter.y + (distPx * sin(angleRad)).toFloat()
-              val zoneColor = if (item.isWithinProximity) primaryColor else tertiaryColor
+              val isAccepted = item.mission.id == activeAcceptedMissionId
+              val zoneColor = if (isAccepted || item.isWithinProximity) primaryColor else tertiaryColor
+
+              if (isAccepted) {
+                drawLine(
+                  color = primaryColor.copy(alpha = 0.85f),
+                  start = mapCenter,
+                  end = Offset(mx, my),
+                  strokeWidth = 5f,
+                  cap = StrokeCap.Round,
+                  pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 10f), 0f),
+                )
+              }
 
               drawCircle(
-                color = zoneColor.copy(alpha = 0.14f),
+                color = zoneColor.copy(alpha = if (isAccepted) 0.22f else 0.12f),
                 radius = proximityCirclePx,
                 center = Offset(mx, my),
               )
               drawCircle(
-                color = zoneColor.copy(alpha = 0.50f),
+                color = zoneColor.copy(alpha = if (isAccepted) 0.85f else 0.45f),
                 radius = proximityCirclePx,
                 center = Offset(mx, my),
-                style = Stroke(width = 1.6f, pathEffect = dash),
+                style = Stroke(width = if (isAccepted) 2.4f else 1.5f, pathEffect = dash),
               )
             }
           }
@@ -232,30 +283,20 @@ fun ExpandedRadarMapDialog(
             }
           }
 
-          // Plotted Missions on the pannable map (info-only tap unless within proximity)
+          // Plotted Missions on the pannable map with distinct custom icons
           missions.forEach { item ->
             val angleRad = Math.toRadians((item.bearingDegrees - 90f).toDouble())
             val distPx = (item.distanceMeters * pxPerMeter).coerceAtLeast(24f)
             val dx = (panOffset.x + distPx * cos(angleRad)).roundToInt()
             val dy = (panOffset.y + distPx * sin(angleRad)).roundToInt()
+            val isAccepted = item.mission.id == activeAcceptedMissionId
 
-            val pinColor = when {
-              item.isCompletedByMe -> secondaryColor.copy(alpha = 0.72f)
-              item.mission.category == "eco" -> Color(0xFF1B8E6E)
-              item.mission.category == "social" -> tertiaryColor
-              item.mission.category == "fitness" -> Color(0xFFE67E22)
-              item.mission.category == "creative" -> Color(0xFF8E44AD)
-              item.mission.category == "challenge" -> Color(0xFFD84315)
-              else -> primaryColor
+            val pinColor = if (item.isCompletedByMe) {
+              secondaryColor.copy(alpha = 0.72f)
+            } else {
+              MissionIcons.accentColorForMission(item.mission, primaryColor, tertiaryColor)
             }
-            val pinIcon = when (item.mission.category) {
-              "eco" -> Icons.Rounded.LocalFlorist
-              "social" -> Icons.Rounded.VolunteerActivism
-              "challenge" -> Icons.Rounded.CameraAlt
-              "fitness" -> Icons.AutoMirrored.Rounded.DirectionsRun
-              "creative" -> Icons.Rounded.Brush
-              else -> Icons.Rounded.Explore
-            }
+            val pinIcon = MissionIcons.iconForMission(item.mission)
 
             Column(
               horizontalAlignment = Alignment.CenterHorizontally,
@@ -269,17 +310,17 @@ fun ExpandedRadarMapDialog(
                 Surface(
                   shape = CircleShape,
                   color = pinColor,
-                  shadowElevation = 5.dp,
+                  shadowElevation = if (isAccepted) 8.dp else 5.dp,
                   modifier = Modifier
-                    .size(34.dp)
-                    .border(2.dp, Color.White, CircleShape),
+                    .size(if (isAccepted) 40.dp else 34.dp)
+                    .border(if (isAccepted) 3.dp else 2.dp, Color.White, CircleShape),
                 ) {
                   Box(contentAlignment = Alignment.Center) {
                     Icon(
                       imageVector = pinIcon,
                       contentDescription = null,
                       tint = Color.White,
-                      modifier = Modifier.size(18.dp),
+                      modifier = Modifier.size(if (isAccepted) 21.dp else 18.dp),
                     )
                   }
                 }
@@ -299,12 +340,17 @@ fun ExpandedRadarMapDialog(
                 }
               }
               Surface(
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.90f),
+                color = if (isAccepted) {
+                  MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.96f)
+                } else {
+                  MaterialTheme.colorScheme.surface.copy(alpha = 0.90f)
+                },
                 shape = RoundedCornerShape(8.dp),
               ) {
                 Text(
                   text = "${item.mission.title.take(14)} • ${GeoUtils.formatDistance(item.distanceMeters)}",
                   style = MaterialTheme.typography.labelSmall,
+                  fontWeight = if (isAccepted) FontWeight.Bold else FontWeight.Normal,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis,
                   modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
@@ -389,12 +435,12 @@ fun ExpandedRadarMapDialog(
           ) {
             Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "Mapa interactivo de Veyra",
+                text = "Mapa interactivo (${missions.size} misiones)",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
               )
               Text(
-                text = "Desliza para moverte • Toca una misión para ver su info (acércate a ${GeoUtils.PROXIMITY_RADIUS_METERS.toInt()} m para completarla)",
+                text = "Puntos aleatorios • Toca una misión para aceptar, esperar, rechazar o abrir en Google Maps",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
@@ -408,7 +454,7 @@ fun ExpandedRadarMapDialog(
           }
         }
 
-        // Bottom Controls: Zoom +/- and Re-center
+        // Bottom Controls: Google Maps / Shuffle + Zoom +/- and Re-center
         Row(
           modifier = Modifier
             .align(Alignment.BottomEnd)
@@ -417,12 +463,12 @@ fun ExpandedRadarMapDialog(
           verticalAlignment = Alignment.CenterVertically,
         ) {
           FilledIconButton(
-            onClick = { zoomScale = (zoomScale - 0.25f).coerceAtLeast(0.65f) },
+            onClick = { zoomScale = (zoomScale - 0.25f).coerceAtLeast(0.60f) },
           ) {
             Icon(Icons.Rounded.Remove, contentDescription = "Alejar")
           }
           FilledIconButton(
-            onClick = { zoomScale = (zoomScale + 0.25f).coerceAtMost(3.2f) },
+            onClick = { zoomScale = (zoomScale + 0.25f).coerceAtMost(3.4f) },
           ) {
             Icon(Icons.Rounded.Add, contentDescription = "Acercar")
           }
@@ -436,31 +482,38 @@ fun ExpandedRadarMapDialog(
           }
         }
 
-        // Bottom Left Legend Pill
-        Surface(
-          color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.94f),
-          shape = CircleShape,
+        // Bottom Left Actions: Shuffle Random Points + Google Maps Launch for Active Mission
+        Column(
           modifier = Modifier
             .align(Alignment.BottomStart)
             .padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          if (activeMission != null) {
+            FilledTonalButton(
+              onClick = {
+                GeoUtils.openInGoogleMaps(
+                  context = context,
+                  latitude = activeMission.mission.latitude,
+                  longitude = activeMission.mission.longitude,
+                  title = activeMission.mission.title,
+                )
+              },
+              shape = CircleShape,
+            ) {
+              Icon(Icons.Rounded.Map, contentDescription = null, modifier = Modifier.size(16.dp))
+              Spacer(modifier = Modifier.width(6.dp))
+              Text("Google Maps", style = MaterialTheme.typography.labelMedium)
+            }
+          }
+          FilledTonalButton(
+            onClick = onRespawnRandomMissions,
+            shape = CircleShape,
+            modifier = Modifier.testTag("expanded_map_shuffle_button"),
           ) {
-            Icon(
-              imageVector = Icons.Rounded.Lock,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.onSecondaryContainer,
-              modifier = Modifier.size(14.dp),
-            )
-            Text(
-              text = "Zona ${GeoUtils.PROXIMITY_RADIUS_METERS.toInt()} m",
-              style = MaterialTheme.typography.labelSmall,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSecondaryContainer,
-            )
+            Icon(Icons.Rounded.Shuffle, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Nuevos puntos", style = MaterialTheme.typography.labelMedium)
           }
         }
       }

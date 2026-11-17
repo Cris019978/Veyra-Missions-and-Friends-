@@ -18,10 +18,12 @@ import com.example.data.model.PlayerProfile
 import com.example.data.model.UserSettings
 import com.example.data.repository.RadarQuestRepository
 import com.example.util.GeoUtils
+import com.example.util.PhotoUtils
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -44,6 +46,11 @@ data class RadarQuestUiState(
   val nearbyPlayers: List<NearbyPlayerItem> = emptyList(),
   val leaderboardPlayers: List<PlayerProfile> = emptyList(),
   val missions: List<MissionWithDistance> = emptyList(),
+  val activeAcceptedMissionId: String? = null,
+  val activeAcceptedMission: MissionWithDistance? = null,
+  val waitingMissionQueue: List<String> = emptyList(),
+  val rejectedMissionIds: Set<String> = emptySet(),
+  val queuedPromptMission: MissionWithDistance? = null,
   val myCompletions: List<MissionCompletion> = emptyList(),
   val publicCompletions: List<MissionCompletion> = emptyList(),
   val openChallenges: List<Challenge> = emptyList(),
@@ -83,12 +90,21 @@ class RadarQuestViewModel(
   private val _refreshTrigger = MutableStateFlow(0)
   private val _refreshedMissions = MutableStateFlow<List<Mission>>(emptyList())
 
+  private val _missionSeed = MutableStateFlow(System.currentTimeMillis())
+  private val _missionAnchorCoords = MutableStateFlow<Pair<Double, Double>?>(null)
+  private val _activeAcceptedMissionId = MutableStateFlow<String?>(null)
+  private val _waitingMissionQueue = MutableStateFlow<List<String>>(emptyList())
+  private val _rejectedMissionIds = MutableStateFlow<Set<String>>(emptySet())
+  private val _queuedPromptMissionId = MutableStateFlow<String?>(null)
+
+  private var respawnJob: Job? = null
   private var hasInitializedProfile = false
   private var seededInitialInteractions = false
   private val seenInteractionIds = mutableSetOf<String>()
   private var seededInitialChallenges = false
   private val seenChallengeStates = mutableMapOf<String, String>()
   private val notifiedProximityMissionIds = mutableSetOf<String>()
+  private val notifiedCloseSpotIds = mutableSetOf<String>()
 
   private fun unwrapError(error: Throwable, contextLabel: String): String {
     val firestoreError = generateSequence(error) { it.cause }
@@ -272,6 +288,25 @@ class RadarQuestViewModel(
     )
   }
 
+  private val missionFlowState = combine(
+    _missionSeed,
+    _missionAnchorCoords,
+    _activeAcceptedMissionId,
+    _waitingMissionQueue,
+    _rejectedMissionIds,
+    _queuedPromptMissionId,
+  ) { values ->
+    @Suppress("UNCHECKED_CAST")
+    MissionWorkflowBundle(
+      missionSeed = values[0] as Long,
+      anchorCoords = values[1] as Pair<Double, Double>?,
+      activeAcceptedId = values[2] as String?,
+      waitingQueue = values[3] as List<String>,
+      rejectedIds = values[4] as Set<String>,
+      queuedPromptId = values[5] as String?,
+    )
+  }
+
   private val onboardingStateFlow = combine(
     _hasResolvedRemoteSettings,
     localOnboardingDoneFlow,
@@ -287,7 +322,8 @@ class RadarQuestViewModel(
     socialDataFlow,
     localControlFlow,
     onboardingStateFlow,
-  ) { core, social, local, gate ->
+    missionFlowState,
+  ) { core, social, local, gate, workflow ->
     val remote = core.remoteSettings
     val effectiveSettings = remote ?: UserSettings(
       userId = currentUserId,
@@ -314,6 +350,13 @@ class RadarQuestViewModel(
     val hasValidRef = (refLat != 0.0 || refLon != 0.0)
     val radiusMeters = effectiveSettings.searchRadiusMeters.toFloat()
 
+    // Lock anchor to first valid GPS fix so random mission coordinates remain stable as player walks
+    val anchor = workflow.anchorCoords ?: if (hasValidRef) {
+      (refLat to refLon).also { _missionAnchorCoords.value = it }
+    } else {
+      19.4326 to -99.1332
+    }
+
     val nearby = core.onlinePlayers
       .filter { it.userId != currentUserId }
       .map { player ->
@@ -333,12 +376,17 @@ class RadarQuestViewModel(
       .sortedBy { it.distanceMeters }
 
     val completedMissionIds = core.myCompletions.map { it.missionId }.toSet()
-    val starterMissions = if (hasValidRef) {
-      GeoUtils.builtInLocalMissions(refLat, refLon)
-    } else {
-      GeoUtils.builtInLocalMissions(19.4326, -99.1332)
-    }
-    val allMissions = (core.missions + local.refreshedMissions + starterMissions).distinctBy { it.id }
+    val randomGeneratedMissions = GeoUtils.generateRandomMissions(
+      baseLat = anchor.first,
+      baseLon = anchor.second,
+      seed = workflow.missionSeed,
+      maxRadiusMeters = radiusMeters,
+    )
+
+    val allMissions = (core.missions + local.refreshedMissions + randomGeneratedMissions)
+      .distinctBy { it.id }
+      .filterNot { it.id in workflow.rejectedIds }
+
     val favCats = effectiveSettings.favoriteCategories.toSet()
 
     val missionsWithDist = allMissions.map { mission ->
@@ -361,20 +409,41 @@ class RadarQuestViewModel(
         isWithinProximity = withinProx,
       )
     }.sortedWith(
-      compareBy<MissionWithDistance> { it.isCompletedByMe }
+      compareByDescending<MissionWithDistance> { it.mission.id == workflow.activeAcceptedId }
+        .thenBy { it.isCompletedByMe }
         .thenByDescending { it.isWithinProximity }
         .thenByDescending { it.mission.category in favCats }
         .thenBy { it.distanceMeters }
     )
 
-    // Notify once when player enters proximity of an uncompleted mission
+    val activeAccepted = workflow.activeAcceptedId?.let { id ->
+      missionsWithDist.firstOrNull { it.mission.id == id }
+    }
+    val queuedPromptMission = workflow.queuedPromptId?.let { id ->
+      missionsWithDist.firstOrNull { it.mission.id == id }
+    }
+
+    // Trigger proximity (120m) and close-spot directional guidance (<= 35m) alerts
     if (hasValidRef && local.hasPermission) {
       missionsWithDist.forEach { item ->
-        if (item.isWithinProximity && !item.isCompletedByMe && notifiedProximityMissionIds.add(item.mission.id)) {
+        if (!item.isCompletedByMe && item.distanceMeters <= GeoUtils.CLOSE_GUIDANCE_RADIUS_METERS) {
+          val isActive = item.mission.id == workflow.activeAcceptedId
+          if ((isActive || item.isWithinProximity) && notifiedCloseSpotIds.add(item.mission.id)) {
+            val arrow = GeoUtils.compassArrowForBearing(item.bearingDegrees)
+            val dir = GeoUtils.cardinalDirectionEs(item.bearingDegrees)
+            pushNotification(
+              id = "close_${item.mission.id}",
+              title = "¡Punto final a ${GeoUtils.formatDistance(item.distanceMeters)}!",
+              message = "Sigue $arrow rumbo al $dir para completar '${item.mission.title}'.",
+              type = "proximity",
+              isProximity = true,
+            )
+          }
+        } else if (item.isWithinProximity && !item.isCompletedByMe && notifiedProximityMissionIds.add(item.mission.id)) {
           pushNotification(
             id = "prox_${item.mission.id}",
-            title = "¡Misión cerca de ti!",
-            message = "Estás a ${GeoUtils.formatDistance(item.distanceMeters)} de '${item.mission.title}'. Ya puedes confirmarla con foto.",
+            title = "¡Misión desbloqueada cerca de ti!",
+            message = "Estás a ${GeoUtils.formatDistance(item.distanceMeters)} de '${item.mission.title}'. Ya puedes completarla.",
             type = "proximity",
             isProximity = true,
           )
@@ -412,6 +481,11 @@ class RadarQuestViewModel(
       nearbyPlayers = nearby,
       leaderboardPlayers = core.onlinePlayers.sortedByDescending { it.xp },
       missions = missionsWithDist,
+      activeAcceptedMissionId = workflow.activeAcceptedId,
+      activeAcceptedMission = activeAccepted,
+      waitingMissionQueue = workflow.waitingQueue,
+      rejectedMissionIds = workflow.rejectedIds,
+      queuedPromptMission = queuedPromptMission,
       myCompletions = core.myCompletions.sortedByDescending { it.createdAt ?: Timestamp(0, 0) },
       publicCompletions = social.publicCompletions.sortedByDescending { it.createdAt ?: Timestamp(0, 0) },
       openChallenges = social.openChallenges
@@ -464,6 +538,117 @@ class RadarQuestViewModel(
         }
         return@collect
       }
+    }
+  }
+
+  fun acceptMission(missionId: String) {
+    val target = uiState.value.missions.firstOrNull { it.mission.id == missionId }
+    _activeAcceptedMissionId.value = missionId
+    _waitingMissionQueue.value = _waitingMissionQueue.value - missionId
+    if (_queuedPromptMissionId.value == missionId) {
+      _queuedPromptMissionId.value = null
+    }
+    _snackbarMessage.value = if (target != null) {
+      "Misión iniciada: ${target.mission.title} (${GeoUtils.formatDistance(target.distanceMeters)})"
+    } else {
+      "Misión iniciada"
+    }
+  }
+
+  fun waitMission(missionId: String) {
+    if (_activeAcceptedMissionId.value == missionId) {
+      _activeAcceptedMissionId.value = null
+    }
+    val curQueue = _waitingMissionQueue.value
+    if (missionId !in curQueue) {
+      _waitingMissionQueue.value = curQueue + missionId
+    }
+    if (_queuedPromptMissionId.value == missionId) {
+      _queuedPromptMissionId.value = null
+    }
+    val pos = _waitingMissionQueue.value.indexOf(missionId) + 1
+    _snackbarMessage.value = "Misión en espera (cola #$pos)"
+  }
+
+  fun rejectMission(missionId: String) {
+    _rejectedMissionIds.value = _rejectedMissionIds.value + missionId
+    if (_activeAcceptedMissionId.value == missionId) {
+      _activeAcceptedMissionId.value = null
+    }
+    _waitingMissionQueue.value = _waitingMissionQueue.value - missionId
+    if (_queuedPromptMissionId.value == missionId) {
+      _queuedPromptMissionId.value = null
+    }
+    _snackbarMessage.value = "Misión rechazada. Reaparecerá en otro punto aleatorio."
+    scheduleRejectedRespawn()
+  }
+
+  fun cancelActiveMission() {
+    _activeAcceptedMissionId.value = null
+    _snackbarMessage.value = "Guía de misión pausada"
+  }
+
+  fun dismissQueuedPromptKeepWaiting() {
+    val id = _queuedPromptMissionId.value
+    if (id != null && id !in _waitingMissionQueue.value) {
+      _waitingMissionQueue.value = listOf(id) + _waitingMissionQueue.value
+    }
+    _queuedPromptMissionId.value = null
+  }
+
+  fun respawnRandomMissions() {
+    respawnJob?.cancel()
+    val loc = _currentLocation.value
+    val prof = uiState.value.myProfile
+    val lat = loc?.latitude ?: prof?.latitude ?: 0.0
+    val lon = loc?.longitude ?: prof?.longitude ?: 0.0
+    if (lat != 0.0 || lon != 0.0) {
+      _missionAnchorCoords.value = lat to lon
+    }
+    _rejectedMissionIds.value = emptySet()
+    notifiedProximityMissionIds.clear()
+    notifiedCloseSpotIds.clear()
+    _missionSeed.value = System.currentTimeMillis()
+    _snackbarMessage.value = "Misiones reubicadas de forma aleatoria en el mapa"
+  }
+
+  private fun scheduleRejectedRespawn() {
+    respawnJob?.cancel()
+    respawnJob = viewModelScope.launch {
+      delay(25_000L)
+      if (_rejectedMissionIds.value.isNotEmpty()) {
+        val loc = _currentLocation.value
+        val prof = uiState.value.myProfile
+        val lat = loc?.latitude ?: prof?.latitude ?: 0.0
+        val lon = loc?.longitude ?: prof?.longitude ?: 0.0
+        if (lat != 0.0 || lon != 0.0) {
+          _missionAnchorCoords.value = lat to lon
+        }
+        _rejectedMissionIds.value = emptySet()
+        _missionSeed.value = System.currentTimeMillis()
+        pushNotification(
+          id = "respawn_${_missionSeed.value}",
+          title = "Nuevas misiones aleatorias",
+          message = "Aparecieron nuevas ubicaciones aleatorias de misiones cerca de tu radar.",
+          type = "proximity",
+          isProximity = false,
+        )
+      }
+    }
+  }
+
+  private fun handlePostCompletionQueue(completedMissionId: String) {
+    if (_activeAcceptedMissionId.value == completedMissionId) {
+      _activeAcceptedMissionId.value = null
+    }
+    val remainingQueue = _waitingMissionQueue.value.filter { it != completedMissionId }
+    val validIds = uiState.value.missions.map { it.mission.id }.toSet()
+    val nextId = remainingQueue.firstOrNull { it in validIds && it !in _rejectedMissionIds.value }
+    if (nextId != null) {
+      _waitingMissionQueue.value = remainingQueue.filterNot { it == nextId }
+      _queuedPromptMissionId.value = nextId
+    } else {
+      _waitingMissionQueue.value = remainingQueue
     }
   }
 
@@ -549,6 +734,15 @@ class RadarQuestViewModel(
       _isRefreshing.value = true
       _errorMessage.value = null
       _dismissedPopupMissionIds.value = emptySet()
+      val loc = _currentLocation.value
+      val prof = uiState.value.myProfile
+      val lat = loc?.latitude ?: prof?.latitude ?: 0.0
+      val lon = loc?.longitude ?: prof?.longitude ?: 0.0
+      if (lat != 0.0 || lon != 0.0) {
+        _missionAnchorCoords.value = lat to lon
+      }
+      _rejectedMissionIds.value = emptySet()
+      _missionSeed.value = System.currentTimeMillis()
       _refreshTrigger.value += 1
       val fetchResult = repository.fetchActiveMissionsOnce()
       fetchResult.onSuccess { fetched ->
@@ -562,7 +756,7 @@ class RadarQuestViewModel(
       }
       delay(450L)
       _isRefreshing.value = false
-      _snackbarMessage.value = "Radar y misiones actualizados"
+      _snackbarMessage.value = "Radar y misiones aleatorias actualizados"
     }
   }
 
@@ -726,7 +920,7 @@ class RadarQuestViewModel(
         toUserId = completion.userId,
         toUserName = completion.userName,
         type = "cheer",
-        message = "¡Genial foto en '${completion.missionTitle}'!",
+        message = "¡Genial logro en '${completion.missionTitle}'!",
         xpBonus = 15L,
       )
       if (res.isSuccess) {
@@ -791,12 +985,20 @@ class RadarQuestViewModel(
     description: String,
     category: String,
     xpReward: Long,
+    missionType: String = "photo",
+    iconKey: String = "explore",
   ) {
     val myName = uiState.value.myProfile?.callsign ?: defaultDisplayName
     val loc = _currentLocation.value
     val prof = uiState.value.myProfile
-    val lat = loc?.latitude ?: prof?.latitude ?: 19.4326
-    val lon = loc?.longitude ?: prof?.longitude ?: -99.1332
+    val baseLat = loc?.latitude ?: prof?.latitude ?: 19.4326
+    val baseLon = loc?.longitude ?: prof?.longitude ?: -99.1332
+    val (lat, lon) = GeoUtils.destinationPoint(
+      baseLat = baseLat,
+      baseLon = baseLon,
+      distanceMeters = (45..260).random().toDouble(),
+      bearingDegrees = (0..359).random().toDouble(),
+    )
     viewModelScope.launch {
       _isSubmitting.value = true
       val res = repository.createMission(
@@ -807,9 +1009,11 @@ class RadarQuestViewModel(
         xpReward = xpReward,
         latitude = lat,
         longitude = lon,
+        missionType = missionType,
+        iconKey = iconKey,
       )
       _isSubmitting.value = false
-      _snackbarMessage.value = if (res.isSuccess) "Misión creada en el radar" else "Error al crear misión"
+      _snackbarMessage.value = if (res.isSuccess) "Misión creada en punto aleatorio del radar" else "Error al crear misión"
     }
   }
 
@@ -831,7 +1035,7 @@ class RadarQuestViewModel(
         missionTitle = mission.title,
         category = mission.category,
         xpEarned = mission.xpReward,
-        caption = caption.ifBlank { "Misión verificada con foto" },
+        caption = caption.ifBlank { "Misión verificada" },
         photoThumbnailBase64 = photoThumbnailBase64,
         latitude = lat,
         longitude = lon,
@@ -844,12 +1048,27 @@ class RadarQuestViewModel(
           .forEach { challenge ->
             repository.updateChallengeProgress(challenge, 100L)
           }
-        _snackbarMessage.value = "¡Misión confirmada! +${mission.xpReward} XP"
+        handlePostCompletionQueue(mission.id)
+        _snackbarMessage.value = "¡Misión completada! +${mission.xpReward} XP"
       } else {
         _snackbarMessage.value = "Error al guardar la confirmación"
       }
       _isSubmitting.value = false
     }
+  }
+
+  fun completeMiniGameMission(
+    mission: Mission,
+    caption: String,
+    isPublic: Boolean,
+  ) {
+    val badgeThumb = PhotoUtils.createMiniGameBadgeBase64(mission.title, mission.missionType)
+    confirmMissionWithPhoto(
+      mission = mission,
+      caption = caption,
+      photoThumbnailBase64 = badgeThumb,
+      isPublic = isPublic,
+    )
   }
 
   fun clearSnackbar() {
@@ -882,6 +1101,15 @@ class RadarQuestViewModel(
     val dismissedPopupIds: Set<String>,
     val isRefreshing: Boolean,
     val refreshedMissions: List<Mission>,
+  )
+
+  private data class MissionWorkflowBundle(
+    val missionSeed: Long,
+    val anchorCoords: Pair<Double, Double>?,
+    val activeAcceptedId: String?,
+    val waitingQueue: List<String>,
+    val rejectedIds: Set<String>,
+    val queuedPromptId: String?,
   )
 
   private data class OnboardingGateBundle(
