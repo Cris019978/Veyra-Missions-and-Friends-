@@ -27,20 +27,14 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
-      - name: Prepare Gradle wrapper and debug keystore
+      - name: Decode debug keystore
         run: |
-          if [ ! -f ./gradlew ]; then
-            gradle wrapper --gradle-version 9.3.1
-          fi
           if [ -f debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
             base64 --decode debug.keystore.base64 > debug.keystore
           fi
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x ./gradlew
-
       - name: Build Debug APK
-        run: ./gradlew assembleDebug
+        run: gradle assembleDebug
 
       - name: Upload Veyra Beta APK
         uses: actions/upload-artifact@v4
