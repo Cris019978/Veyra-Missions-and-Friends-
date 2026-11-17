@@ -34,7 +34,7 @@ jobs:
           fi
 
       - name: Build Debug APK
-        run: gradle assembleDebug
+        run: gradle assembleDebug --stacktrace --info
 
       - name: Upload Veyra Beta APK
         uses: actions/upload-artifact@v4
