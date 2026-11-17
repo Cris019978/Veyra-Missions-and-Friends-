@@ -1,0 +1,283 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net: deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    function isValidUserSettings(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.themeMode in ['system', 'light', 'dark'] &&
+             data.paletteKey in ['dynamic', 'emerald', 'coral', 'indigo', 'amber'] &&
+             data.radarStyle in ['classic', 'neon', 'compass'] &&
+             data.cornerStyle in ['soft', 'pill', 'crisp'] &&
+             data.searchRadiusMeters is int && data.searchRadiusMeters >= 250 && data.searchRadiusMeters <= 50000 &&
+             (!('animationTier' in data) || data.animationTier in ['low', 'medium', 'high']) &&
+             (!('notificationsEnabled' in data) || data.notificationsEnabled is bool) &&
+             (!('onboardingCompleted' in data) || data.onboardingCompleted is bool) &&
+             (!('playStyle' in data) || data.playStyle in ['helper', 'competitor', 'explorer', 'balanced']) &&
+             (!('favoriteCategories' in data) || (data.favoriteCategories is list && data.favoriteCategories.size() <= 6)) &&
+             (!('privacyComfort' in data) || data.privacyComfort in ['radius', 'close_only', 'ghost']) &&
+             (!('missionPace' in data) || data.missionPace in ['casual', 'daily', 'intense']) &&
+             (!('gestureNavEnabled' in data) || data.gestureNavEnabled is bool);
+    }
+
+    function isValidPlayerProfile(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             (!('username' in data) || (data.username is string && data.username.size() <= 24 && data.username.matches('^[a-zA-Z0-9_]*$'))) &&
+             data.callsign is string && data.callsign.size() >= 2 && data.callsign.size() <= 32 &&
+             data.avatarIcon is string && data.avatarIcon.size() >= 1 && data.avatarIcon.size() <= 32 &&
+             data.avatarColorHex is string && data.avatarColorHex.size() >= 4 && data.avatarColorHex.size() <= 12 &&
+             (!('avatarPhotoBase64' in data) || (data.avatarPhotoBase64 is string && data.avatarPhotoBase64.size() <= 80000)) &&
+             (!('bannerPhotoBase64' in data) || (data.bannerPhotoBase64 is string && data.bannerPhotoBase64.size() <= 80000)) &&
+             (!('bannerPreset' in data) || data.bannerPreset in ['topo', 'sunset', 'cosmos', 'emerald', 'custom']) &&
+             data.statusMessage is string && data.statusMessage.size() <= 140 &&
+             data.seekingHelp is bool &&
+             data.isOnline is bool &&
+             data.latitude is number && data.latitude >= -90.0 && data.latitude <= 90.0 &&
+             data.longitude is number && data.longitude >= -180.0 && data.longitude <= 180.0 &&
+             data.xp is int && data.xp >= 0 && data.xp <= 10000000 &&
+             data.level is int && data.level >= 1 && data.level <= 999 &&
+             data.missionsCompleted is int && data.missionsCompleted >= 0 && data.missionsCompleted <= 100000 &&
+             data.helpsGiven is int && data.helpsGiven >= 0 && data.helpsGiven <= 100000 &&
+             data.duelsWon is int && data.duelsWon >= 0 && data.duelsWon <= 100000;
+    }
+
+    function isValidMission(data) {
+      return data.creatorId is string && data.creatorId.size() <= 128 &&
+             data.creatorName is string && data.creatorName.size() >= 1 && data.creatorName.size() <= 40 &&
+             data.title is string && data.title.size() >= 3 && data.title.size() <= 80 &&
+             data.description is string && data.description.size() >= 5 && data.description.size() <= 280 &&
+             data.category in ['explore', 'eco', 'social', 'challenge', 'fitness', 'creative'] &&
+             data.xpReward is int && data.xpReward >= 25 && data.xpReward <= 1000 &&
+             data.latitude is number && data.latitude >= -90.0 && data.latitude <= 90.0 &&
+             data.longitude is number && data.longitude >= -180.0 && data.longitude <= 180.0 &&
+             data.isActive is bool;
+    }
+
+    function isValidMissionCompletion(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 40 &&
+             data.missionId is string && data.missionId.size() >= 1 && data.missionId.size() <= 128 &&
+             data.missionTitle is string && data.missionTitle.size() >= 3 && data.missionTitle.size() <= 80 &&
+             data.category in ['explore', 'eco', 'social', 'challenge', 'fitness', 'creative'] &&
+             data.xpEarned is int && data.xpEarned >= 10 && data.xpEarned <= 2000 &&
+             data.caption is string && data.caption.size() <= 200 &&
+             data.photoThumbnail is string && data.photoThumbnail.size() >= 10 && data.photoThumbnail.size() <= 80000 &&
+             data.latitude is number && data.latitude >= -90.0 && data.latitude <= 90.0 &&
+             data.longitude is number && data.longitude >= -180.0 && data.longitude <= 180.0 &&
+             data.isPublic is bool;
+    }
+
+    function isValidChallenge(data) {
+      return data.creatorId is string && data.creatorId.size() <= 128 &&
+             data.creatorName is string && data.creatorName.size() >= 1 && data.creatorName.size() <= 40 &&
+             (!('opponentId' in data) || (data.opponentId is string && data.opponentId.size() <= 128)) &&
+             (!('opponentName' in data) || (data.opponentName is string && data.opponentName.size() <= 40)) &&
+             data.mode in ['duel', 'coop'] &&
+             data.title is string && data.title.size() >= 3 && data.title.size() <= 80 &&
+             data.missionId is string && data.missionId.size() >= 1 && data.missionId.size() <= 128 &&
+             data.xpStake is int && data.xpStake >= 25 && data.xpStake <= 1000 &&
+             data.status in ['open', 'active', 'completed', 'cancelled'] &&
+             data.participantIds is list && data.participantIds.size() >= 1 && data.participantIds.size() <= 2 &&
+             data.participantIds[0] is string &&
+             data.creatorProgress is int && data.creatorProgress >= 0 && data.creatorProgress <= 100 &&
+             data.opponentProgress is int && data.opponentProgress >= 0 && data.opponentProgress <= 100 &&
+             (!('winnerId' in data) || (data.winnerId is string && data.winnerId.size() <= 128));
+    }
+
+    function isValidInteraction(data) {
+      return data.fromUserId is string && data.fromUserId.size() <= 128 &&
+             data.fromUserName is string && data.fromUserName.size() >= 1 && data.fromUserName.size() <= 40 &&
+             data.toUserId is string && data.toUserId.size() >= 1 && data.toUserId.size() <= 128 &&
+             data.toUserName is string && data.toUserName.size() >= 1 && data.toUserName.size() <= 40 &&
+             data.fromUserId != data.toUserId &&
+             data.type in ['help', 'pulse', 'cheer'] &&
+             data.message is string && data.message.size() <= 160 &&
+             data.xpBonus is int && data.xpBonus >= 0 && data.xpBonus <= 200 &&
+             data.participantIds is list && data.participantIds.size() == 2 &&
+             data.fromUserId in data.participantIds &&
+             data.toUserId in data.participantIds;
+    }
+
+    // 1. Private User Settings (including private onboarding quest tastes)
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if isSignedIn() && request.auth.uid == userId;
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'themeMode', 'paletteKey', 'radarStyle', 'cornerStyle', 'searchRadiusMeters', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'themeMode', 'paletteKey', 'radarStyle', 'cornerStyle', 'searchRadiusMeters', 'animationTier', 'notificationsEnabled', 'onboardingCompleted', 'playStyle', 'favoriteCategories', 'privacyComfort', 'missionPace', 'gestureNavEnabled', 'createdAt', 'updatedAt']) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidUserSettings(incoming());
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidUserSettings(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['themeMode', 'paletteKey', 'radarStyle', 'cornerStyle', 'searchRadiusMeters', 'animationTier', 'notificationsEnabled', 'onboardingCompleted', 'playStyle', 'favoriteCategories', 'privacyComfort', 'missionPace', 'gestureNavEnabled', 'updatedAt']);
+      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+    }
+
+    // 2. Live Radar Player Profiles
+    match /players/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || existing().isOnline == true);
+      allow list: if isSignedIn() && existing().isOnline == true;
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'callsign', 'avatarIcon', 'avatarColorHex', 'statusMessage', 'seekingHelp', 'isOnline', 'latitude', 'longitude', 'xp', 'level', 'missionsCompleted', 'helpsGiven', 'duelsWon', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'username', 'callsign', 'avatarIcon', 'avatarColorHex', 'avatarPhotoBase64', 'bannerPhotoBase64', 'bannerPreset', 'statusMessage', 'seekingHelp', 'isOnline', 'latitude', 'longitude', 'xp', 'level', 'missionsCompleted', 'helpsGiven', 'duelsWon', 'createdAt', 'updatedAt']) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidPlayerProfile(incoming());
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidPlayerProfile(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['username', 'callsign', 'avatarIcon', 'avatarColorHex', 'avatarPhotoBase64', 'bannerPhotoBase64', 'bannerPreset', 'statusMessage', 'seekingHelp', 'isOnline', 'latitude', 'longitude', 'xp', 'level', 'missionsCompleted', 'helpsGiven', 'duelsWon', 'updatedAt']);
+      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+    }
+
+    // 3. Real-Life Missions
+    match /missions/{missionId} {
+      allow get: if isSignedIn() && isValidId(missionId) && (existing().isActive == true || existing().creatorId == request.auth.uid);
+      allow list: if isSignedIn() && existing().isActive == true;
+      allow create: if isSignedIn() &&
+                       isValidId(missionId) &&
+                       incoming().creatorId == request.auth.uid &&
+                       incoming().keys().hasAll(['creatorId', 'creatorName', 'title', 'description', 'category', 'xpReward', 'latitude', 'longitude', 'isActive', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['creatorId', 'creatorName', 'title', 'description', 'category', 'xpReward', 'latitude', 'longitude', 'isActive', 'createdAt', 'updatedAt']) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidMission(incoming());
+      allow update: if isSignedIn() &&
+                       isValidId(missionId) &&
+                       existing().creatorId == request.auth.uid &&
+                       incoming().creatorId == existing().creatorId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidMission(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'category', 'xpReward', 'latitude', 'longitude', 'isActive', 'updatedAt']);
+      allow delete: if isSignedIn() && isValidId(missionId) && existing().creatorId == request.auth.uid;
+    }
+
+    // 4. Photo-Verified Mission Completions
+    match /mission_completions/{completionId} {
+      allow get: if isSignedIn() && isValidId(completionId) && (existing().userId == request.auth.uid || existing().isPublic == true);
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || existing().isPublic == true);
+      allow create: if isSignedIn() &&
+                       isValidId(completionId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'userName', 'missionId', 'missionTitle', 'category', 'xpEarned', 'caption', 'photoThumbnail', 'latitude', 'longitude', 'isPublic', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'userName', 'missionId', 'missionTitle', 'category', 'xpEarned', 'caption', 'photoThumbnail', 'latitude', 'longitude', 'isPublic', 'createdAt', 'updatedAt']) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidMissionCompletion(incoming());
+      allow update: if isSignedIn() &&
+                       isValidId(completionId) &&
+                       existing().userId == request.auth.uid &&
+                       incoming().userId == existing().userId &&
+                       incoming().missionId == existing().missionId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidMissionCompletion(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['caption', 'isPublic', 'updatedAt']);
+      allow delete: if isSignedIn() && isValidId(completionId) && existing().userId == request.auth.uid;
+    }
+
+    // 5. Competitive Duels & Co-op Play Challenges
+    match /challenges/{challengeId} {
+      allow get: if isSignedIn() && isValidId(challengeId) && (request.auth.uid in existing().participantIds || existing().status == 'open');
+      allow list: if isSignedIn() && (request.auth.uid in existing().participantIds || existing().status == 'open');
+      allow create: if isSignedIn() &&
+                       isValidId(challengeId) &&
+                       incoming().creatorId == request.auth.uid &&
+                       incoming().status == 'open' &&
+                       incoming().participantIds.size() == 1 &&
+                       incoming().participantIds[0] == request.auth.uid &&
+                       incoming().creatorProgress == 0 &&
+                       incoming().opponentProgress == 0 &&
+                       incoming().keys().hasAll(['creatorId', 'creatorName', 'mode', 'title', 'missionId', 'xpStake', 'status', 'participantIds', 'creatorProgress', 'opponentProgress', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['creatorId', 'creatorName', 'opponentId', 'opponentName', 'mode', 'title', 'missionId', 'xpStake', 'status', 'participantIds', 'creatorProgress', 'opponentProgress', 'winnerId', 'createdAt', 'updatedAt']) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidChallenge(incoming());
+      allow update: if isSignedIn() &&
+                       isValidId(challengeId) &&
+                       existing().status != 'completed' &&
+                       existing().status != 'cancelled' &&
+                       incoming().creatorId == existing().creatorId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidChallenge(incoming()) && (
+                         // Action 1: Join an open challenge
+                         (existing().status == 'open' &&
+                          !(request.auth.uid in existing().participantIds) &&
+                          existing().participantIds.size() == 1 &&
+                          incoming().status == 'active' &&
+                          incoming().participantIds.size() == 2 &&
+                          request.auth.uid in incoming().participantIds &&
+                          incoming().participantIds[0] == existing().creatorId &&
+                          incoming().opponentId == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['participantIds', 'opponentId', 'opponentName', 'status', 'updatedAt'])) ||
+                         // Action 2: Update progress or complete active challenge
+                         (existing().status == 'active' &&
+                          request.auth.uid in existing().participantIds &&
+                          incoming().participantIds == existing().participantIds &&
+                          incoming().status in ['active', 'completed'] &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['creatorProgress', 'opponentProgress', 'status', 'winnerId', 'updatedAt'])) ||
+                         // Action 3: Creator cancels open challenge
+                         (existing().status == 'open' &&
+                          existing().creatorId == request.auth.uid &&
+                          incoming().status == 'cancelled' &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+                       );
+      allow delete: if isSignedIn() && isValidId(challengeId) && existing().creatorId == request.auth.uid && existing().status == 'open';
+    }
+
+    // 6. Player Interactions (Help Boosts, Pulses, Cheers)
+    match /interactions/{interactionId} {
+      allow get: if isSignedIn() && isValidId(interactionId) && request.auth.uid in existing().participantIds;
+      allow list: if isSignedIn() && request.auth.uid in existing().participantIds;
+      allow create: if isSignedIn() &&
+                       isValidId(interactionId) &&
+                       incoming().fromUserId == request.auth.uid &&
+                       incoming().keys().hasAll(['fromUserId', 'fromUserName', 'toUserId', 'toUserName', 'type', 'message', 'xpBonus', 'participantIds', 'createdAt']) &&
+                       incoming().keys().hasOnly(['fromUserId', 'fromUserName', 'toUserId', 'toUserName', 'type', 'message', 'xpBonus', 'participantIds', 'createdAt']) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidInteraction(incoming());
+      allow update, delete: if false;
+    }
+  }
+}

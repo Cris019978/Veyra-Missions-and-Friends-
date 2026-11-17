@@ -1,0 +1,32 @@
+<resources>
+    <string name="app_name">Veyra</string>
+    <string name="publication_name">Veyra: Missions and Friends</string>
+    <string name="auth_title">Veyra</string>
+    <string name="auth_subtitle">Explora tu mundo real, conecta con amigos cercanos y confirma misiones con tu cámara.</string>
+    <string name="auth_sign_in_google">Iniciar sesión con Google</string>
+    <string name="auth_feature_radar">Mapa radar redondo en vivo con jugadores cercanos</string>
+    <string name="auth_feature_missions">Misiones en la vida real confirmadas con foto</string>
+    <string name="auth_feature_social">Ayuda, compite en duelos y juega en equipo</string>
+    <string name="auth_feature_material_you">Material You personalizable a tu estilo</string>
+    <string name="nav_radar">Radar</string>
+    <string name="nav_profile">Perfil</string>
+    <string name="nav_social_feed">Red Social</string>
+    <string name="nav_social">Arena</string>
+    <string name="nav_style">Estilo</string>
+    <string name="profile_title">Tu Perfil</string>
+    <string name="profile_create_subtitle">Crea tu nombre de usuario, banner y foto con tu estilo Material You</string>
+    <string name="profile_change_banner">Cambiar banner</string>
+    <string name="profile_change_photo">Cambiar foto</string>
+    <string name="profile_save_btn">Guardar perfil</string>
+    <string name="nearby_players_title">Jugadores cercanos</string>
+    <string name="missions_section_title">Misiones en la vida real</string>
+    <string name="confirm_with_photo">Confirmar con foto</string>
+    <string name="create_mission">Crear misión</string>
+    <string name="action_help">Ayudar</string>
+    <string name="action_compete">Competir</string>
+    <string name="action_play">Jugar</string>
+    <string name="grant_location_title">Activa tu ubicación en tiempo real</string>
+    <string name="grant_location_desc">Para mostrar tu mapa radar redondo y ver jugadores y misiones cercanas, concede el permiso de ubicación.</string>
+    <string name="grant_location_btn">Activar ubicación</string>
+    <string name="sign_out">Cerrar sesión</string>
+</resources>

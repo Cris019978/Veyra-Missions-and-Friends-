@@ -1,0 +1,161 @@
+{
+  "entities": {
+    "UserSettings": {
+      "title": "UserSettings",
+      "description": "Strictly private Material You customization and onboarding quest tastes visible ONLY to the owner.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "themeMode": { "type": "string", "enum": ["system", "light", "dark"] },
+        "paletteKey": { "type": "string", "enum": ["dynamic", "emerald", "coral", "indigo", "amber"] },
+        "radarStyle": { "type": "string", "enum": ["classic", "neon", "compass"] },
+        "cornerStyle": { "type": "string", "enum": ["soft", "pill", "crisp"] },
+        "searchRadiusMeters": { "type": "integer", "description": "Radar scan radius in meters." },
+        "animationTier": { "type": "string", "enum": ["low", "medium", "high"] },
+        "notificationsEnabled": { "type": "boolean" },
+        "onboardingCompleted": { "type": "boolean", "description": "Private flag indicating initial quest completion." },
+        "playStyle": { "type": "string", "enum": ["helper", "competitor", "explorer", "balanced"] },
+        "favoriteCategories": { "type": "array", "description": "Private list of preferred mission category keys." },
+        "privacyComfort": { "type": "string", "enum": ["radius", "close_only", "ghost"] },
+        "missionPace": { "type": "string", "enum": ["casual", "daily", "intense"] },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update." }
+      },
+      "required": ["userId", "themeMode", "paletteKey", "radarStyle", "cornerStyle", "searchRadiusMeters", "createdAt", "updatedAt"]
+    },
+    "PlayerProfile": {
+      "title": "PlayerProfile",
+      "description": "Public radar presence, game stats, and real-time location for a player.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "username": { "type": "string", "description": "Unique-style player handle without @." },
+        "callsign": { "type": "string", "description": "Player display nickname." },
+        "avatarIcon": { "type": "string", "description": "Selected icon identifier." },
+        "avatarColorHex": { "type": "string", "description": "Selected Material You aura accent hex." },
+        "avatarPhotoBase64": { "type": "string", "description": "Compact Base64 profile photo." },
+        "bannerPhotoBase64": { "type": "string", "description": "Compact Base64 profile banner photo." },
+        "bannerPreset": { "type": "string", "enum": ["topo", "sunset", "cosmos", "emerald", "custom"] },
+        "statusMessage": { "type": "string", "description": "Short player status or help prompt." },
+        "seekingHelp": { "type": "boolean", "description": "Whether player is requesting help from nearby players." },
+        "isOnline": { "type": "boolean", "description": "Whether player is visible on the live radar." },
+        "latitude": { "type": "number", "description": "Current latitude in degrees." },
+        "longitude": { "type": "number", "description": "Current longitude in degrees." },
+        "xp": { "type": "integer", "description": "Total experience points." },
+        "level": { "type": "integer", "description": "Current player level." },
+        "missionsCompleted": { "type": "integer", "description": "Total photo-confirmed missions." },
+        "helpsGiven": { "type": "integer", "description": "Total times player helped others." },
+        "duelsWon": { "type": "integer", "description": "Total competitive duels won." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "callsign", "avatarIcon", "avatarColorHex", "statusMessage", "seekingHelp", "isOnline", "latitude", "longitude", "xp", "level", "missionsCompleted", "helpsGiven", "duelsWon", "createdAt", "updatedAt"]
+    },
+    "Mission": {
+      "title": "Mission",
+      "description": "Real-life quest to complete and confirm with an in-app photo.",
+      "type": "object",
+      "properties": {
+        "creatorId": { "type": "string" },
+        "creatorName": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string", "enum": ["explore", "eco", "social", "challenge", "fitness", "creative"] },
+        "xpReward": { "type": "integer" },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["creatorId", "creatorName", "title", "description", "category", "xpReward", "latitude", "longitude", "isActive", "createdAt", "updatedAt"]
+    },
+    "MissionCompletion": {
+      "title": "MissionCompletion",
+      "description": "Photo-confirmed proof of a completed real-life mission.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "missionId": { "type": "string" },
+        "missionTitle": { "type": "string" },
+        "category": { "type": "string" },
+        "xpEarned": { "type": "integer" },
+        "caption": { "type": "string" },
+        "photoThumbnail": { "type": "string", "description": "Compact Base64 JPEG proof thumbnail." },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "isPublic": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userName", "missionId", "missionTitle", "category", "xpEarned", "caption", "photoThumbnail", "latitude", "longitude", "isPublic", "createdAt", "updatedAt"]
+    },
+    "Challenge": {
+      "title": "Challenge",
+      "description": "Competitive duel or co-op mini-game between players.",
+      "type": "object",
+      "properties": {
+        "creatorId": { "type": "string" },
+        "creatorName": { "type": "string" },
+        "opponentId": { "type": "string" },
+        "opponentName": { "type": "string" },
+        "mode": { "type": "string", "enum": ["duel", "coop"] },
+        "title": { "type": "string" },
+        "missionId": { "type": "string" },
+        "xpStake": { "type": "integer" },
+        "status": { "type": "string", "enum": ["open", "active", "completed", "cancelled"] },
+        "participantIds": { "type": "array" },
+        "creatorProgress": { "type": "integer" },
+        "opponentProgress": { "type": "integer" },
+        "winnerId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["creatorId", "creatorName", "mode", "title", "missionId", "xpStake", "status", "participantIds", "creatorProgress", "opponentProgress", "createdAt", "updatedAt"]
+    },
+    "PlayerInteraction": {
+      "title": "PlayerInteraction",
+      "description": "Immutable help boost, radar pulse, or play invite between two players.",
+      "type": "object",
+      "properties": {
+        "fromUserId": { "type": "string" },
+        "fromUserName": { "type": "string" },
+        "toUserId": { "type": "string" },
+        "toUserName": { "type": "string" },
+        "type": { "type": "string", "enum": ["help", "pulse", "cheer"] },
+        "message": { "type": "string" },
+        "xpBonus": { "type": "integer" },
+        "participantIds": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["fromUserId", "fromUserName", "toUserId", "toUserName", "type", "message", "xpBonus", "participantIds", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserSettings" },
+      "description": "Private user Material You theme and radar settings."
+    },
+    "/players/{userId}": {
+      "schema": { "$ref": "#/entities/PlayerProfile" },
+      "description": "Public radar presence, live coordinates, and game stats."
+    },
+    "/missions/{missionId}": {
+      "schema": { "$ref": "#/entities/Mission" },
+      "description": "Community and active real-life missions."
+    },
+    "/mission_completions/{completionId}": {
+      "schema": { "$ref": "#/entities/MissionCompletion" },
+      "description": "Photo-verified real-life mission completions."
+    },
+    "/challenges/{challengeId}": {
+      "schema": { "$ref": "#/entities/Challenge" },
+      "description": "Competitive duels and cooperative play challenges."
+    },
+    "/interactions/{interactionId}": {
+      "schema": { "$ref": "#/entities/PlayerInteraction" },
+      "description": "Help boosts and radar pulses between players."
+    }
+  }
+}
