@@ -105,7 +105,7 @@ object GeoUtils {
     }
   }
 
-  fun openInGoogleMaps(
+  fun openInExternalMap(
     context: Context,
     latitude: Double,
     longitude: Double,
@@ -124,7 +124,7 @@ object GeoUtils {
     }.getOrElse {
       val webIntent = Intent(
         Intent.ACTION_VIEW,
-        Uri.parse("https://www.google.com/maps/search/?api=1&query=$latitude,$longitude"),
+        Uri.parse("https://www.openstreetmap.org/?mlat=$latitude&mlon=$longitude#map=17/$latitude/$longitude"),
       ).apply {
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
       }
@@ -143,288 +143,429 @@ object GeoUtils {
     val missionType: String,
     val iconKey: String,
     val xpReward: Long,
+    val variantKey: String,
+    val timeLimitSeconds: Int = 0,
+    val defaultSafeZoneName: String = "Parque o plaza pública cercana",
   )
 
   private val MISSION_TEMPLATES = listOf(
+    // --- Puzzle Category Missions (solved inline inside the mission menu; several have a 60s countdown!) ---
     MissionTemplate(
-      id = "quest_eco_tree",
-      title = "Guardián Verde",
-      description = "Encuentra un árbol o jardín llamativo en este sector y confírmalo con una foto.",
-      category = "eco",
-      missionType = "photo",
-      iconKey = "park",
-      xpReward = 120L,
-    ),
-    MissionTemplate(
-      id = "quest_wires_solar",
-      title = "Circuito Solar Urbano",
-      description = "Llega al punto y reconecta los 5 cables de colores para reactivar el nodo de energía limpia.",
-      category = "eco",
+      id = "quest_puzzle_clock_wires",
+      title = "Desactivación Relámpago",
+      description = "Llega al punto demostrado y conecta los cables de colores dentro de este menú antes de 1 minuto.",
+      category = "puzzle",
       missionType = "wires",
       iconKey = "bolt",
-      xpReward = 155L,
+      xpReward = 190L,
+      variantKey = "timed_wires_circuit",
+      timeLimitSeconds = 60,
+      defaultSafeZoneName = "Plaza cívica abierta",
+    ),
+    MissionTemplate(
+      id = "quest_puzzle_clock_matrix",
+      title = "Matriz Cronometrada 3×3",
+      description = "En el punto geográfico exacto, arma el rompecabezas 3×3 dentro del menú en menos de 60 segundos.",
+      category = "puzzle",
+      missionType = "puzzle",
+      iconKey = "grid_puzzle",
+      xpReward = 200L,
+      variantKey = "timed_sliding_matrix",
+      timeLimitSeconds = 60,
+      defaultSafeZoneName = "Andador peatonal público",
+    ),
+    MissionTemplate(
+      id = "quest_puzzle_clock_sequence",
+      title = "Código de Pulso (1 min)",
+      description = "Memoriza y repite la secuencia luminosa de 4 nodos dentro del menú antes que el reloj llegue a cero.",
+      category = "puzzle",
+      missionType = "memory",
+      iconKey = "memory",
+      xpReward = 195L,
+      variantKey = "timed_memory_cipher",
+      timeLimitSeconds = 60,
+      defaultSafeZoneName = "Jardín o glorieta pública",
+    ),
+    MissionTemplate(
+      id = "quest_puzzle_clock_beacon",
+      title = "Sintonía Express 60s",
+      description = "Calibra la antena del sector emparejando la secuencia de pulso en un minuto exacto.",
+      category = "puzzle",
+      missionType = "memory",
+      iconKey = "hub",
+      xpReward = 185L,
+      variantKey = "timed_signal_calibration",
+      timeLimitSeconds = 60,
+      defaultSafeZoneName = "Mirador o parque público",
     ),
     MissionTemplate(
       id = "quest_puzzle_botanico",
       title = "Mosaico del Jardín",
-      description = "Acércate al marcador y arma el rompecabezas deslizable del mapa botánico.",
-      category = "eco",
+      description = "Acércate al punto demostrado y resuelve aquí mismo el rompecabezas deslizable botánico.",
+      category = "puzzle",
       missionType = "puzzle",
       iconKey = "eco",
-      xpReward = 145L,
-    ),
-    MissionTemplate(
-      id = "quest_explore_sky",
-      title = "Horizonte Urbano",
-      description = "Acércate a este punto aleatorio y captura la fachada, plaza o vista más interesante.",
-      category = "explore",
-      missionType = "photo",
-      iconKey = "landscape",
-      xpReward = 115L,
-    ),
-    MissionTemplate(
-      id = "quest_wires_beacon",
-      title = "Enlace de Baliza",
-      description = "Sincroniza los cables de señal en este sector para calibrar el radar de Veyra.",
-      category = "explore",
-      missionType = "wires",
-      iconKey = "hub",
-      xpReward = 150L,
+      xpReward = 155L,
+      variantKey = "zen_botanical_mosaic",
+      timeLimitSeconds = 0,
+      defaultSafeZoneName = "Zona verde o jardín abierto",
     ),
     MissionTemplate(
       id = "quest_puzzle_compass",
       title = "Brújula Fragmentada",
-      description = "Ordena las piezas del rompecabezas de orientación al llegar al punto asignado.",
-      category = "explore",
+      description = "Ordena las piezas de orientación dentro del menú al entrar al radio seguro del marcador.",
+      category = "puzzle",
       missionType = "puzzle",
       iconKey = "compass",
       xpReward = 160L,
+      variantKey = "orientation_puzzle",
+      timeLimitSeconds = 0,
+      defaultSafeZoneName = "Paseo peatonal seguro",
     ),
     MissionTemplate(
-      id = "quest_social_help",
-      title = "Buena Acción del Día",
-      description = "Ordena un espacio común o realiza un gesto amable en la zona y regístralo con foto.",
-      category = "social",
-      missionType = "photo",
-      iconKey = "volunteer",
-      xpReward = 165L,
-    ),
-    MissionTemplate(
-      id = "quest_wires_community",
-      title = "Puente Vecinal",
-      description = "Conecta todas las líneas de colores del panel comunitario para enviar energía solidaria.",
-      category = "social",
+      id = "quest_puzzle_cipher",
+      title = "Cortafuegos de Campo",
+      description = "Empareja las terminales de colores dentro del menú de la misión en esta coordenada.",
+      category = "puzzle",
       missionType = "wires",
       iconKey = "cable",
-      xpReward = 140L,
+      xpReward = 175L,
+      variantKey = "field_wire_patch",
+      timeLimitSeconds = 0,
+      defaultSafeZoneName = "Explanada cultural",
     ),
     MissionTemplate(
-      id = "quest_puzzle_cafe",
-      title = "Encuentro en la Esquina",
-      description = "Completa el rompecabezas de encuentro social en el punto aleatorio marcado.",
-      category = "social",
-      missionType = "puzzle",
-      iconKey = "coffee",
-      xpReward = 135L,
-    ),
-    MissionTemplate(
-      id = "quest_challenge_art",
-      title = "Cazador de Detalles",
-      description = "Camina hasta el marcador para fotografiar un letrero curioso o patrón geométrico.",
-      category = "challenge",
-      missionType = "photo",
-      iconKey = "camera",
-      xpReward = 150L,
-    ),
-    MissionTemplate(
-      id = "quest_wires_cipher",
-      title = "Cortafuegos de Campo",
-      description = "Empareja correctamente los cables codificados sin equivocarte en el punto exacto.",
-      category = "challenge",
-      missionType = "wires",
-      iconKey = "memory",
-      xpReward = 180L,
-    ),
-    MissionTemplate(
-      id = "quest_puzzle_vault",
-      title = "Cerradura Táctica",
-      description = "Resuelve el rompecabezas 3×3 en menos movimientos posibles cuando entres al radio.",
-      category = "challenge",
-      missionType = "puzzle",
-      iconKey = "grid_puzzle",
-      xpReward = 185L,
-    ),
-    MissionTemplate(
-      id = "quest_fitness_walk",
-      title = "Ruta Activa 10 Min",
-      description = "Camina hasta este punto de control al aire libre y demuestra tu llegada con foto.",
-      category = "fitness",
-      missionType = "photo",
-      iconKey = "directions_run",
-      xpReward = 140L,
-    ),
-    MissionTemplate(
-      id = "quest_wires_pulse",
-      title = "Circuito de Ritmo",
-      description = "Al llegar al punto de caminata, conecta los cables de impulso para registrar tu marca.",
-      category = "fitness",
-      missionType = "wires",
-      iconKey = "rocket",
-      xpReward = 160L,
-    ),
-    MissionTemplate(
-      id = "quest_puzzle_trail",
-      title = "Sendero Relámpago",
-      description = "Completa el rompecabezas de ruta al alcanzar esta coordenada aleatoria.",
-      category = "fitness",
-      missionType = "puzzle",
-      iconKey = "hiking",
-      xpReward = 155L,
-    ),
-    MissionTemplate(
-      id = "quest_creative_mural",
-      title = "Galería Callejera",
-      description = "Acércate al marcador y captura un mural, escultura o detalle arquitectónico cercano.",
-      category = "creative",
-      missionType = "photo",
-      iconKey = "brush",
-      xpReward = 155L,
-    ),
-    MissionTemplate(
-      id = "quest_wires_neon",
-      title = "Panel de Neón",
-      description = "Conecta los cables luminosos de colores para encender la instalación artística del punto.",
-      category = "creative",
-      missionType = "wires",
-      iconKey = "lightbulb",
+      id = "quest_puzzle_sequence_vault",
+      title = "Bóveda de Patrones",
+      description = "Descifra la combinación secuencial de colores y símbolos al llegar al punto público.",
+      category = "puzzle",
+      missionType = "memory",
+      iconKey = "extension",
       xpReward = 170L,
+      variantKey = "pattern_vault_memory",
+      timeLimitSeconds = 0,
+      defaultSafeZoneName = "Biblioteca o centro comunitario",
     ),
+
+    // --- Eco, Explore, Social, Challenge, Fitness & Creative Variants ---
     MissionTemplate(
-      id = "quest_puzzle_studio",
-      title = "Lienzo Deslizable",
-      description = "Reconstruye la composición deslizando las piezas del rompecabezas en el lugar.",
-      category = "creative",
-      missionType = "puzzle",
-      iconKey = "palette",
-      xpReward = 165L,
+      id = "quest_eco_tree",
+      title = "Guardián Verde",
+      description = "Encuentra un árbol o área verde pública en este sector y confírmalo con una foto.",
+      category = "eco",
+      missionType = "photo",
+      iconKey = "park",
+      xpReward = 120L,
+      variantKey = "flora_capture",
+      defaultSafeZoneName = "Parque arbolado público",
     ),
     MissionTemplate(
       id = "quest_eco_water",
-      title = "Guardia del Agua",
-      description = "Encuentra una fuente, canal o lluvia reflejada y toma una fotografía creativa.",
+      title = "Reflejo del Agua",
+      description = "Captura una fuente, charco o reflejo natural desde un espacio peatonal abierto.",
       category = "eco",
       missionType = "photo",
       iconKey = "water_drop",
       xpReward = 130L,
+      variantKey = "water_reflection_hunt",
+      defaultSafeZoneName = "Fuente o corredor verde",
     ),
     MissionTemplate(
       id = "quest_eco_sun",
-      title = "Luz del Mediodía",
-      description = "Captura la luz solar entre hojas o edificios desde este punto aleatorio.",
+      title = "Luz entre Copas",
+      description = "Fotografía sombras o rayos de luz atravesando árboles o pérgolas públicas.",
       category = "eco",
       missionType = "photo",
       iconKey = "wb_sunny",
       xpReward = 125L,
+      variantKey = "canopy_light_study",
+      defaultSafeZoneName = "Alameda peatonal",
     ),
     MissionTemplate(
-      id = "quest_social_pets",
-      title = "Huellas Amigas",
-      description = "Explora la zona amigable con mascotas o parques cercanos y comparte una captura.",
-      category = "social",
+      id = "quest_explore_sky",
+      title = "Horizonte Urbano",
+      description = "Acércate a este punto público de OpenStreetMap y fotografía la fachada o plaza más vistosa.",
+      category = "explore",
       missionType = "photo",
-      iconKey = "pets",
-      xpReward = 135L,
-    ),
-    MissionTemplate(
-      id = "quest_creative_music",
-      title = "Acorde Urbano",
-      description = "Arma el rompecabezas rítmico tras llegar al punto sonoro de tu zona.",
-      category = "creative",
-      missionType = "puzzle",
-      iconKey = "music_note",
-      xpReward = 150L,
+      iconKey = "landscape",
+      xpReward = 125L,
+      variantKey = "skyline_framing",
+      defaultSafeZoneName = "Plaza pública central",
     ),
     MissionTemplate(
       id = "quest_explore_arch",
       title = "Geometría Viva",
-      description = "Fotografía arcos, escaleras o líneas arquitectónicas interesantes cerca del pin.",
+      description = "Busca arcos, escalinatas o líneas simétricas en la vía pública y tómales foto.",
       category = "explore",
       missionType = "photo",
       iconKey = "architecture",
       xpReward = 145L,
+      variantKey = "symmetry_architecture",
+      defaultSafeZoneName = "Corredor arquitectónico público",
     ),
     MissionTemplate(
       id = "quest_explore_map",
       title = "Cartógrafo Express",
-      description = "Llega al marcador aleatorio de Google Maps y ordena el rompecabezas cartográfico.",
+      description = "Alcanza el punto aleatorio verificado y resuelve el circuito cartográfico cronometrado.",
       category = "explore",
       missionType = "puzzle",
       iconKey = "map",
-      xpReward = 170L,
+      xpReward = 180L,
+      variantKey = "timed_cartography",
+      timeLimitSeconds = 60,
+      defaultSafeZoneName = "Intersección peatonal segura",
     ),
     MissionTemplate(
-      id = "quest_challenge_library",
-      title = "Código de Archivo",
-      description = "Conecta los 5 cables del archivo secreto cuando entres al perímetro de 120 m.",
-      category = "challenge",
-      missionType = "wires",
-      iconKey = "local_library",
-      xpReward = 175L,
-    ),
-    MissionTemplate(
-      id = "quest_creative_museum",
-      title = "Reliquia Oculta",
-      description = "Completa el rompecabezas histórico al acercarte al punto cultural aleatorio.",
-      category = "creative",
-      missionType = "puzzle",
-      iconKey = "museum",
-      xpReward = 160L,
-    ),
-    MissionTemplate(
-      id = "quest_fitness_sprint",
-      title = "Circuito de Energía",
-      description = "Conecta las terminales de color al completar tu tramo de caminata hacia el punto.",
-      category = "fitness",
-      missionType = "wires",
-      iconKey = "extension",
+      id = "quest_social_help",
+      title = "Buena Acción del Día",
+      description = "Realiza un gesto amable u ordena un banco de parque público y comparte evidencia.",
+      category = "social",
+      missionType = "photo",
+      iconKey = "volunteer",
       xpReward = 165L,
+      variantKey = "kindness_quest",
+      defaultSafeZoneName = "Zona de convivencia vecinal",
+    ),
+    MissionTemplate(
+      id = "quest_social_pets",
+      title = "Huellas Amigas",
+      description = "Visita un parque amigable con mascotas y captura una escena alegre al aire libre.",
+      category = "social",
+      missionType = "photo",
+      iconKey = "pets",
+      xpReward = 135L,
+      variantKey = "pet_park_spotlight",
+      defaultSafeZoneName = "Parque canino o jardín",
     ),
     MissionTemplate(
       id = "quest_social_florist",
-      title = "Ramo Compartido",
-      description = "Reconecta los cables del invernadero comunitario en esta coordenada aleatoria.",
+      title = "Ramo Comunitario",
+      description = "Conecta la red de riego de este punto público dentro del menú sin errores.",
       category = "social",
       missionType = "wires",
       iconKey = "florist",
       xpReward = 150L,
+      variantKey = "community_garden_wires",
+      defaultSafeZoneName = "Huerto o camellón público",
+    ),
+    MissionTemplate(
+      id = "quest_social_cafe",
+      title = "Encuentro en la Esquina",
+      description = "Llega a una cafetería o plaza segura y desbloquea el patrón de encuentro.",
+      category = "social",
+      missionType = "memory",
+      iconKey = "coffee",
+      xpReward = 145L,
+      variantKey = "cafe_corner_sequence",
+      defaultSafeZoneName = "Café o terraza pública",
+    ),
+    MissionTemplate(
+      id = "quest_challenge_art",
+      title = "Cazador de Detalles",
+      description = "Encuentra una textura curiosa, mosaico o tipografía urbana y tómale una foto nítida.",
+      category = "challenge",
+      missionType = "photo",
+      iconKey = "camera",
+      xpReward = 150L,
+      variantKey = "micro_texture_hunt",
+      defaultSafeZoneName = "Pasaje cultural público",
+    ),
+    MissionTemplate(
+      id = "quest_challenge_library",
+      title = "Archivo Clasificado",
+      description = "Conecta los 5 cables del archivo secreto cuando entres al perímetro seguro de 120 m.",
+      category = "challenge",
+      missionType = "wires",
+      iconKey = "local_library",
+      xpReward = 175L,
+      variantKey = "archive_terminal_link",
+      timeLimitSeconds = 60,
+      defaultSafeZoneName = "Biblioteca pública cercana",
+    ),
+    MissionTemplate(
+      id = "quest_fitness_walk",
+      title = "Ruta Activa 10 Min",
+      description = "Camina hasta este punto de control peatonal y confirma tu llegada con una selfie o vista.",
+      category = "fitness",
+      missionType = "photo",
+      iconKey = "directions_run",
+      xpReward = 140L,
+      variantKey = "cardio_checkpoint",
+      defaultSafeZoneName = "Sendero o pista pública",
+    ),
+    MissionTemplate(
+      id = "quest_fitness_trail",
+      title = "Sendero Relámpago",
+      description = "Alcanza el hito de caminata y resuelve el rompecabezas de ruta antes de descansar.",
+      category = "fitness",
+      missionType = "puzzle",
+      iconKey = "hiking",
+      xpReward = 160L,
+      variantKey = "trail_sprint_puzzle",
+      defaultSafeZoneName = "Circuito de caminata",
+    ),
+    MissionTemplate(
+      id = "quest_fitness_pulse",
+      title = "Circuito de Ritmo",
+      description = "Al llegar al punto de ejercicio, conecta las terminales de impulso energético.",
+      category = "fitness",
+      missionType = "wires",
+      iconKey = "rocket",
+      xpReward = 160L,
+      variantKey = "rhythm_boost_wires",
+      defaultSafeZoneName = "Parque deportivo abierto",
+    ),
+    MissionTemplate(
+      id = "quest_creative_mural",
+      title = "Galería Callejera",
+      description = "Acércate al espacio cultural y captura un mural, monumento o escultura pública.",
+      category = "creative",
+      missionType = "photo",
+      iconKey = "brush",
+      xpReward = 155L,
+      variantKey = "street_mural_capture",
+      defaultSafeZoneName = "Corredor artístico",
+    ),
+    MissionTemplate(
+      id = "quest_creative_neon",
+      title = "Instalación Luminosa",
+      description = "Reconecta los cables de neón dentro del menú de la misión en esta ubicación.",
+      category = "creative",
+      missionType = "wires",
+      iconKey = "lightbulb",
+      xpReward = 170L,
+      variantKey = "neon_art_wires",
+      defaultSafeZoneName = "Plaza iluminada",
+    ),
+    MissionTemplate(
+      id = "quest_creative_studio",
+      title = "Lienzo Cromático",
+      description = "Reconstruye el mosaico artístico deslizando las piezas en este punto seguro.",
+      category = "creative",
+      missionType = "puzzle",
+      iconKey = "palette",
+      xpReward = 165L,
+      variantKey = "studio_color_mosaic",
+      defaultSafeZoneName = "Centro artístico abierto",
+    ),
+    MissionTemplate(
+      id = "quest_creative_music",
+      title = "Acorde Urbano",
+      description = "Repite el ritmo melódico de 4 tonos en la memoria interactiva al llegar al punto.",
+      category = "creative",
+      missionType = "memory",
+      iconKey = "music_note",
+      xpReward = 165L,
+      variantKey = "melody_memory_lock",
+      timeLimitSeconds = 60,
+      defaultSafeZoneName = "Kiosco o foro al aire libre",
+    ),
+    MissionTemplate(
+      id = "quest_creative_museum",
+      title = "Reliquia Oculta",
+      description = "Descifra el rompecabezas histórico frente al museo o sitio cultural del mapa.",
+      category = "creative",
+      missionType = "puzzle",
+      iconKey = "museum",
+      xpReward = 175L,
+      variantKey = "heritage_relic_board",
+      defaultSafeZoneName = "Museo o plaza histórica",
     ),
   )
 
+  fun distinctMissionVariantsCount(): Int = MISSION_TEMPLATES.map { it.variantKey }.toSet().size
+
+  private val PRIVATE_ZONE_GUARD_RADIANS = setOf("priv", "home", "restricted")
+
   /**
-   * Generates 28 distinct missions placed at random polar coordinates around the user's location
-   * using the given seed so coordinates are genuinely randomized instead of fixed points.
+   * Checks whether a generated offset keeps clear of overly dense overlaps or flagged place labels.
+   */
+  fun isSafeGeneratedSpot(
+    label: String,
+    existingCoords: List<Pair<Double, Double>>,
+    lat: Double,
+    lon: Double,
+    minSeparationMeters: Float = 18f,
+  ): Boolean {
+    val lower = label.lowercase()
+    if (com.example.data.remote.OsmSafePlaceFinder.BLOCKED_KEYWORDS.any { lower.contains(it) }) {
+      return false
+    }
+    if (PRIVATE_ZONE_GUARD_RADIANS.any { lower == it }) return false
+    return existingCoords.none { (eLat, eLon) ->
+      distanceMeters(eLat, eLon, lat, lon) < minSeparationMeters
+    }
+  }
+
+  /**
+   * Generates 28 distinct missions spanning >= 20 gameplay variants across verified OpenStreetMap
+   * safe public places (or pedestrian-safe randomized rings when offline), avoiding
+   * private property, highways, hospitals, police stations, and dangerous areas.
    */
   fun generateRandomMissions(
     baseLat: Double,
     baseLon: Double,
     seed: Long = System.currentTimeMillis(),
     maxRadiusMeters: Float = 1800f,
+    safeAnchors: List<com.example.data.remote.SafePublicSpot> = emptyList(),
   ): List<Mission> {
     val rng = Random(seed)
     val clampedMax = maxRadiusMeters.coerceIn(350f, 15000f)
+    val verifiedAnchors = safeAnchors.filter { spot ->
+      !com.example.data.remote.OsmSafePlaceFinder.BLOCKED_KEYWORDS.any {
+        spot.name.lowercase().contains(it)
+      }
+    }
+    val usedCoords = mutableListOf<Pair<Double, Double>>()
 
     return MISSION_TEMPLATES.mapIndexed { index, tmpl ->
-      // Keep the first ~5 missions closely reachable (24m..110m), next ~11 medium (130m..580m), rest wider
-      val distMeters = when {
-        index < 5 -> rng.nextDouble(24.0, 108.0)
-        index < 16 -> rng.nextDouble(130.0, minOf(620.0, clampedMax * 0.65))
-        else -> rng.nextDouble(
-          minOf(420.0, clampedMax * 0.45),
-          (clampedMax * 0.94).coerceAtLeast(500.0),
-        )
+      val anchor = if (verifiedAnchors.isNotEmpty() && index >= 2) {
+        verifiedAnchors[(index + rng.nextInt(verifiedAnchors.size)) % verifiedAnchors.size]
+      } else {
+        null
       }
-      val bearingDeg = rng.nextDouble(0.0, 360.0)
-      val (lat, lon) = destinationPoint(baseLat, baseLon, distMeters, bearingDeg)
+
+      var candidateLat: Double
+      var candidateLon: Double
+      var attempts = 0
+      do {
+        if (anchor != null) {
+          // Small pedestrian jitter around a verified OpenStreetMap safe public place
+          val jitterMeters = rng.nextDouble(5.0, 26.0)
+          val jitterBearing = rng.nextDouble(0.0, 360.0)
+          val pt = destinationPoint(anchor.latitude, anchor.longitude, jitterMeters, jitterBearing)
+          candidateLat = pt.first
+          candidateLon = pt.second
+        } else {
+          // Safe pedestrian ring around player (first ~5 close enough to test within 120m!)
+          val distMeters = when {
+            index < 5 -> rng.nextDouble(22.0, 105.0)
+            index < 16 -> rng.nextDouble(135.0, minOf(620.0, clampedMax * 0.65))
+            else -> rng.nextDouble(
+              minOf(420.0, clampedMax * 0.45),
+              (clampedMax * 0.92).coerceAtLeast(500.0),
+            )
+          }
+          val bearingDeg = rng.nextDouble(0.0, 360.0)
+          val pt = destinationPoint(baseLat, baseLon, distMeters, bearingDeg)
+          candidateLat = pt.first
+          candidateLon = pt.second
+        }
+        attempts++
+      } while (
+        attempts < 6 &&
+        !isSafeGeneratedSpot(
+          label = anchor?.name ?: tmpl.defaultSafeZoneName,
+          existingCoords = usedCoords,
+          lat = candidateLat,
+          lon = candidateLon,
+          minSeparationMeters = if (anchor != null) 10f else 18f,
+        )
+      )
+
+      usedCoords.add(candidateLat to candidateLon)
+      val safePlaceLabel = anchor?.name ?: tmpl.defaultSafeZoneName
+
       Mission(
         id = tmpl.id,
         creatorId = "system_veyra",
@@ -434,9 +575,12 @@ object GeoUtils {
         category = tmpl.category,
         missionType = tmpl.missionType,
         iconKey = tmpl.iconKey,
+        timeLimitSeconds = tmpl.timeLimitSeconds,
+        placeLabel = safePlaceLabel,
+        isSafePublicVerified = true,
         xpReward = tmpl.xpReward,
-        latitude = lat,
-        longitude = lon,
+        latitude = candidateLat,
+        longitude = candidateLon,
         isActive = true,
       )
     }

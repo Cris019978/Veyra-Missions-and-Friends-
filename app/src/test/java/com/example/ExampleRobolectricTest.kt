@@ -17,6 +17,8 @@ import com.example.data.model.MissionCompletion
 import com.example.data.model.MissionWithDistance
 import com.example.data.model.NearbyMissionPopup
 import com.example.data.model.UserSettings
+import com.example.data.remote.OsmSafePlaceFinder
+import com.example.ui.components.ExpandedRadarMapDialog
 import com.example.ui.components.FloatingBottomNavBar
 import com.example.ui.components.NearbyMissionPopupOverlay
 import com.example.ui.components.QueuedMissionPromptDialog
@@ -332,5 +334,140 @@ class ExampleRobolectricTest {
       .performScrollTo()
       .performClick()
     assertEquals("reject_m_card_1", lastAction)
+  }
+
+  @Test
+  fun `mission detail sheet renders demonstrated geo point, 1-minute countdown clock, and solves wires puzzle inline`() {
+    var inlineCompletedCaption: String? = null
+    val timedPuzzle = MissionWithDistance(
+      mission = Mission(
+        id = "quest_puzzle_clock_wires",
+        title = "Desactivación Relámpago",
+        description = "Conecta los cables dentro del menú en 1 minuto.",
+        category = "puzzle",
+        missionType = "wires",
+        iconKey = "bolt",
+        timeLimitSeconds = 60,
+        placeLabel = "Plaza cívica abierta",
+        isSafePublicVerified = true,
+        xpReward = 190L,
+        latitude = 19.43260,
+        longitude = -99.13320,
+      ),
+      distanceMeters = 45f,
+      bearingDegrees = 20f,
+      isCompletedByMe = false,
+      isWithinProximity = true,
+    )
+
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        com.example.ui.components.MissionDetailSheet(
+          item = timedPuzzle,
+          hasLocationPermission = true,
+          showExpandMapButton = true,
+          isSubmitting = false,
+          onDismiss = {},
+          onStartMissionAction = {},
+          onCompleteMiniGame = { caption, _ -> inlineCompletedCaption = caption },
+          onOpenExpandedMap = {},
+          onRequestLocationPermission = {},
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("mission_sheet_geo_point_card").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Punto geográfico demostrado: Plaza cívica abierta").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("inline_mission_puzzle_panel")
+      .performScrollTo()
+      .assertIsDisplayed()
+    composeTestRule.onNodeWithTag("inline_puzzle_timer_badge")
+      .performScrollTo()
+      .assertIsDisplayed()
+
+    listOf("red", "blue", "green", "amber", "violet").forEach { colorId ->
+      composeTestRule.onNodeWithTag("inline_wire_left_$colorId")
+        .performScrollTo()
+        .performClick()
+      composeTestRule.onNodeWithTag("inline_wire_right_$colorId")
+        .performScrollTo()
+        .performClick()
+    }
+    composeTestRule.onNodeWithTag("inline_puzzle_complete_button")
+      .performScrollTo()
+      .performClick()
+    assertTrue(inlineCompletedCaption != null)
+  }
+
+  @Test
+  fun `osmSafePlaceFinder parses Overpass JSON and filters private access`() {
+    val rawOverpass = """
+      {
+        "elements": [
+          {
+            "type": "node",
+            "lat": 19.4310,
+            "lon": -99.1680,
+            "tags": { "name": "Parque Lincoln", "leisure": "park" }
+          },
+          {
+            "type": "way",
+            "center": { "lat": 19.4220, "lon": -99.1610 },
+            "tags": { "name": "Residencial Privado", "leisure": "garden", "access": "private" }
+          }
+        ]
+      }
+    """.trimIndent()
+    val parsed = OsmSafePlaceFinder.parseOverpassResponse(rawOverpass)
+    assertEquals(1, parsed.size)
+    assertEquals("Parque Lincoln", parsed.first().name)
+    assertTrue(parsed.first().isFromOpenStreetMap)
+  }
+
+  @Test
+  fun `expanded radar map dialog shows OpenStreetMap title, user location marker, and mission controls`() {
+    var closed = false
+    var shuffled = false
+    val mission = MissionWithDistance(
+      mission = Mission(
+        id = "osm_m_1",
+        title = "Parque Central",
+        category = "eco",
+        missionType = "photo",
+        iconKey = "park",
+        xpReward = 130L,
+        latitude = 19.4335,
+        longitude = -99.1340,
+      ),
+      distanceMeters = 105f,
+      bearingDegrees = 35f,
+      isCompletedByMe = false,
+      isWithinProximity = true,
+    )
+
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        ExpandedRadarMapDialog(
+          myProfile = null,
+          nearbyPlayers = emptyList(),
+          missions = listOf(mission),
+          searchRadiusMeters = 1500L,
+          hasLocationPermission = true,
+          safePublicAnchorsCount = 4,
+          onDismiss = { closed = true },
+          onMissionClick = {},
+          onPlayerClick = {},
+          onRespawnRandomMissions = { shuffled = true },
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("expanded_radar_map_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("OpenStreetMap (1 misiones)").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Tú").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("expanded_map_shuffle_button").performClick()
+    assertTrue(shuffled)
+    composeTestRule.onNodeWithTag("close_expanded_map_button").performClick()
+    assertTrue(closed)
   }
 }

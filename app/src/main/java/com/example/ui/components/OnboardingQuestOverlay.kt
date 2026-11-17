@@ -40,6 +40,7 @@ import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Handshake
 import androidx.compose.material.icons.rounded.LocalFlorist
 import androidx.compose.material.icons.rounded.Lock
@@ -612,5 +613,6 @@ private fun categoryIconFor(key: String): ImageVector = when (key) {
   "challenge" -> Icons.Rounded.CameraAlt
   "fitness" -> Icons.AutoMirrored.Rounded.DirectionsRun
   "creative" -> Icons.Rounded.Brush
+  "puzzle" -> Icons.Rounded.Extension
   else -> Icons.Rounded.Explore
 }

@@ -69,9 +69,11 @@ service cloud.firestore {
              data.creatorName is string && data.creatorName.size() >= 1 && data.creatorName.size() <= 40 &&
              data.title is string && data.title.size() >= 3 && data.title.size() <= 80 &&
              data.description is string && data.description.size() >= 5 && data.description.size() <= 280 &&
-             data.category in ['explore', 'eco', 'social', 'challenge', 'fitness', 'creative'] &&
-             (!('missionType' in data) || data.missionType in ['photo', 'wires', 'puzzle']) &&
+             data.category in ['explore', 'eco', 'social', 'challenge', 'fitness', 'creative', 'puzzle'] &&
+             (!('missionType' in data) || data.missionType in ['photo', 'wires', 'puzzle', 'memory']) &&
              (!('iconKey' in data) || (data.iconKey is string && data.iconKey.size() >= 1 && data.iconKey.size() <= 32)) &&
+             (!('timeLimitSeconds' in data) || (data.timeLimitSeconds is int && data.timeLimitSeconds >= 0 && data.timeLimitSeconds <= 600)) &&
+             (!('placeLabel' in data) || (data.placeLabel is string && data.placeLabel.size() <= 100)) &&
              data.xpReward is int && data.xpReward >= 25 && data.xpReward <= 1000 &&
              data.latitude is number && data.latitude >= -90.0 && data.latitude <= 90.0 &&
              data.longitude is number && data.longitude >= -180.0 && data.longitude <= 180.0 &&
@@ -83,7 +85,7 @@ service cloud.firestore {
              data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 40 &&
              data.missionId is string && data.missionId.size() >= 1 && data.missionId.size() <= 128 &&
              data.missionTitle is string && data.missionTitle.size() >= 3 && data.missionTitle.size() <= 80 &&
-             data.category in ['explore', 'eco', 'social', 'challenge', 'fitness', 'creative'] &&
+             data.category in ['explore', 'eco', 'social', 'challenge', 'fitness', 'creative', 'puzzle'] &&
              data.xpEarned is int && data.xpEarned >= 10 && data.xpEarned <= 2000 &&
              data.caption is string && data.caption.size() <= 200 &&
              data.photoThumbnail is string && data.photoThumbnail.size() >= 10 && data.photoThumbnail.size() <= 80000 &&
@@ -179,7 +181,7 @@ service cloud.firestore {
                        isValidId(missionId) &&
                        incoming().creatorId == request.auth.uid &&
                        incoming().keys().hasAll(['creatorId', 'creatorName', 'title', 'description', 'category', 'xpReward', 'latitude', 'longitude', 'isActive', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['creatorId', 'creatorName', 'title', 'description', 'category', 'missionType', 'iconKey', 'xpReward', 'latitude', 'longitude', 'isActive', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['creatorId', 'creatorName', 'title', 'description', 'category', 'missionType', 'iconKey', 'timeLimitSeconds', 'placeLabel', 'xpReward', 'latitude', 'longitude', 'isActive', 'createdAt', 'updatedAt']) &&
                        isValidTimestamp(incoming().createdAt) &&
                        isValidTimestamp(incoming().updatedAt) &&
                        isValidMission(incoming());
@@ -190,7 +192,7 @@ service cloud.firestore {
                        incoming().createdAt == existing().createdAt &&
                        isValidTimestamp(incoming().updatedAt) &&
                        isValidMission(incoming()) &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'category', 'missionType', 'iconKey', 'xpReward', 'latitude', 'longitude', 'isActive', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'category', 'missionType', 'iconKey', 'timeLimitSeconds', 'placeLabel', 'xpReward', 'latitude', 'longitude', 'isActive', 'updatedAt']);
       allow delete: if isSignedIn() && isValidId(missionId) && existing().creatorId == request.auth.uid;
     }
 

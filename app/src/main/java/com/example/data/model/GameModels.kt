@@ -37,7 +37,8 @@ enum class MissionCategory(
   SOCIAL("social", "Comunidad", "Ayudar a otros y buenos gestos"),
   CHALLENGE("challenge", "Reto Foto", "Capturas creativas y detalles"),
   FITNESS("fitness", "Movimiento", "Caminatas, pasos y aire libre"),
-  CREATIVE("creative", "Arte Urbano", "Murales, diseño y arquitectura");
+  CREATIVE("creative", "Arte Urbano", "Murales, diseño y arquitectura"),
+  PUZZLE("puzzle", "Puzzle", "Acertijos, cables y retos cronometrados");
 
   companion object {
     fun fromKey(key: String): MissionCategory =
@@ -77,9 +78,12 @@ data class Mission(
   val creatorName: String = "",
   val title: String = "",
   val description: String = "",
-  val category: String = "explore", // explore, eco, social, challenge, fitness, creative
-  val missionType: String = "photo", // photo, wires, puzzle
+  val category: String = "explore", // explore, eco, social, challenge, fitness, creative, puzzle
+  val missionType: String = "photo", // photo, wires, puzzle, memory
   val iconKey: String = "explore",
+  val timeLimitSeconds: Int = 0, // 0 = sin límite, 60 = temporizador de 1 minuto
+  val placeLabel: String = "Zona pública segura",
+  val isSafePublicVerified: Boolean = true,
   val xpReward: Long = 100L,
   val latitude: Double = 0.0,
   val longitude: Double = 0.0,

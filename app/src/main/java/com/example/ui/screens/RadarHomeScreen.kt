@@ -46,6 +46,7 @@ import androidx.compose.material.icons.rounded.LocalFlorist
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Map
+import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.NearMe
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Person
@@ -55,6 +56,8 @@ import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.material.icons.rounded.SensorsOff
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material.icons.rounded.VolunteerActivism
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -123,6 +126,7 @@ fun RadarHomeScreen(
   onCompeteDuel: (NearbyPlayerItem, Mission) -> Unit,
   onPlayCoop: (NearbyPlayerItem, Mission) -> Unit,
   onCreateMission: (title: String, description: String, category: String, xpReward: Long, missionType: String, iconKey: String) -> Unit,
+  onCreateTimedMission: ((title: String, description: String, category: String, xpReward: Long, missionType: String, iconKey: String, timeLimitSeconds: Int) -> Unit)? = null,
   onConfirmMissionPhoto: (mission: Mission, caption: String, base64Thumb: String, isPublic: Boolean) -> Unit,
   onCompleteMiniGame: (mission: Mission, caption: String, isPublic: Boolean) -> Unit = { _, _, _ -> },
   onAcceptMission: (String) -> Unit = {},
@@ -159,14 +163,22 @@ fun RadarHomeScreen(
       "all" -> uiState.missions
       "for_you" -> uiState.missions.filter { it.mission.category in favoriteCategories }
         .ifEmpty { uiState.missions }
-      "wires" -> uiState.missions.filter { it.mission.missionType == "wires" }
-      "puzzle" -> uiState.missions.filter { it.mission.missionType == "puzzle" }
+      "timed_1min" -> uiState.missions.filter { it.mission.timeLimitSeconds > 0 }
+      "puzzle" -> uiState.missions.filter {
+        it.mission.category == "puzzle" || it.mission.missionType in setOf("wires", "puzzle", "memory")
+      }
       else -> uiState.missions.filter { it.mission.category == selectedCategory }
     }
   }
 
   val launchMissionFlow: (MissionWithDistance) -> Unit = { item ->
-    if (item.isWithinProximity && uiState.hasLocationPermission) {
+    if (item.mission.missionType in setOf("wires", "puzzle", "memory")) {
+      // Puzzle missions solve inline right inside the mission's own menu at the demonstrated point
+      if (item.isWithinProximity && uiState.hasLocationPermission) {
+        onAcceptMission(item.mission.id)
+      }
+      selectedMissionId = item.mission.id
+    } else if (item.isWithinProximity && uiState.hasLocationPermission) {
       onAcceptMission(item.mission.id)
       activeMissionPlayTarget = item.mission
     } else {
@@ -428,7 +440,7 @@ fun RadarHomeScreen(
                 ) {
                   OutlinedButton(
                     onClick = {
-                      GeoUtils.openInGoogleMaps(
+                      GeoUtils.openInExternalMap(
                         context = context,
                         latitude = activeItem.mission.latitude,
                         longitude = activeItem.mission.longitude,
@@ -440,7 +452,7 @@ fun RadarHomeScreen(
                   ) {
                     Icon(Icons.Rounded.Map, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Google Maps")
+                    Text("Ver ruta")
                   }
                   Button(
                     onClick = { launchMissionFlow(activeItem) },
@@ -459,6 +471,7 @@ fun RadarHomeScreen(
                         when (activeItem.mission.missionType) {
                           "wires" -> "Conectar"
                           "puzzle" -> "Puzzle"
+                          "memory" -> "Secuencia"
                           else -> "Foto"
                         }
                       } else {
@@ -670,39 +683,30 @@ fun RadarHomeScreen(
               }
             }
 
-            item(key = "wires") {
+            item(key = "timed_1min") {
               MissionCategoryCard(
-                key = "wires",
-                label = "Cables",
-                count = uiState.missions.count { it.mission.missionType == "wires" },
-                icon = Icons.Rounded.Cable,
-                accentColor = Color(0xFF00897B),
-                isSelected = selectedCategory == "wires",
+                key = "timed_1min",
+                label = "Reloj 1:00",
+                count = uiState.missions.count { it.mission.timeLimitSeconds > 0 },
+                icon = Icons.Rounded.Timer,
+                accentColor = MaterialTheme.colorScheme.error,
+                isSelected = selectedCategory == "timed_1min",
                 isPrivateFavorite = false,
                 disableAnimations = disableDecorAnimations,
-                onClick = { selectedCategory = "wires" },
-              )
-            }
-
-            item(key = "puzzle") {
-              MissionCategoryCard(
-                key = "puzzle",
-                label = "Puzzles",
-                count = uiState.missions.count { it.mission.missionType == "puzzle" },
-                icon = Icons.Rounded.Extension,
-                accentColor = Color(0xFF5E35B1),
-                isSelected = selectedCategory == "puzzle",
-                isPrivateFavorite = false,
-                disableAnimations = disableDecorAnimations,
-                onClick = { selectedCategory = "puzzle" },
+                onClick = { selectedCategory = "timed_1min" },
               )
             }
 
             items(MissionCategory.entries, key = { it.key }) { cat ->
+              val pillCount = if (cat == MissionCategory.PUZZLE) {
+                uiState.missions.count { it.mission.category == "puzzle" || it.mission.missionType in setOf("wires", "puzzle", "memory") }
+              } else {
+                categoryCounts[cat.key] ?: 0
+              }
               MissionCategoryCard(
                 key = cat.key,
                 label = cat.label,
-                count = categoryCounts[cat.key] ?: 0,
+                count = pillCount,
                 icon = categoryIcon(cat.key),
                 accentColor = categoryColor(cat.key, MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.tertiary),
                 isSelected = selectedCategory == cat.key,
@@ -781,6 +785,9 @@ fun RadarHomeScreen(
       missions = uiState.missions,
       searchRadiusMeters = uiState.settings.searchRadiusMeters,
       hasLocationPermission = uiState.hasLocationPermission,
+      userLat = uiState.currentLocation?.latitude ?: uiState.myProfile?.latitude?.takeIf { it != 0.0 } ?: 19.4326,
+      userLon = uiState.currentLocation?.longitude ?: uiState.myProfile?.longitude?.takeIf { it != 0.0 } ?: -99.1332,
+      safePublicAnchorsCount = uiState.safePublicAnchorsCount,
       activeAcceptedMissionId = uiState.activeAcceptedMissionId,
       onDismiss = { showExpandedMap = false },
       onMissionClick = { selectedMissionId = it.mission.id },
@@ -797,10 +804,15 @@ fun RadarHomeScreen(
       showExpandMapButton = !showExpandedMap,
       isAccepted = item.mission.id == uiState.activeAcceptedMissionId,
       waitQueuePosition = queuePos,
+      isSubmitting = uiState.isSubmitting,
       onDismiss = { selectedMissionId = null },
       onStartMissionAction = {
         selectedMissionId = null
         launchMissionFlow(item)
+      },
+      onCompleteMiniGame = { caption, isPublic ->
+        onCompleteMiniGame(item.mission, caption, isPublic)
+        selectedMissionId = null
       },
       onAcceptMission = {
         onAcceptMission(item.mission.id)
@@ -874,8 +886,12 @@ fun RadarHomeScreen(
   if (showCreateMissionDialog) {
     CreateMissionDialog(
       onDismiss = { showCreateMissionDialog = false },
-      onCreate = { title, desc, cat, xp, type, icon ->
-        onCreateMission(title, desc, cat, xp, type, icon)
+      onCreate = { title, desc, cat, xp, type, icon, timeLimit ->
+        if (onCreateTimedMission != null) {
+          onCreateTimedMission(title, desc, cat, xp, type, icon, timeLimit)
+        } else {
+          onCreateMission(title, desc, cat, xp, type, icon)
+        }
         showCreateMissionDialog = false
       },
     )
@@ -1173,6 +1189,31 @@ private fun MissionCard(
                 fontWeight = FontWeight.Bold,
                 color = accentColor,
               )
+              if (mission.timeLimitSeconds > 0) {
+                Surface(
+                  color = MaterialTheme.colorScheme.errorContainer,
+                  shape = CircleShape,
+                ) {
+                  Row(
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Rounded.Timer,
+                      contentDescription = "Temporizador de 1 minuto",
+                      tint = MaterialTheme.colorScheme.onErrorContainer,
+                      modifier = Modifier.size(11.dp),
+                    )
+                    Text(
+                      text = "1:00",
+                      style = MaterialTheme.typography.labelSmall,
+                      fontWeight = FontWeight.Bold,
+                      color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                  }
+                }
+              }
               if (isPrivateMatch && !item.isCompletedByMe) {
                 if (disableAnimations) {
                   ParaTiBadge()
@@ -1218,6 +1259,25 @@ private fun MissionCard(
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
+
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+      ) {
+        Icon(
+          imageVector = Icons.Rounded.VerifiedUser,
+          contentDescription = null,
+          tint = Color(0xFF1B8E6E),
+          modifier = Modifier.size(14.dp),
+        )
+        Text(
+          text = "${mission.placeLabel} • Punto público seguro",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
 
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1266,6 +1326,7 @@ private fun MissionCard(
               text = when {
                 mission.missionType == "wires" -> "Cables"
                 mission.missionType == "puzzle" -> "Puzzle"
+                mission.missionType == "memory" -> "Secuencia"
                 item.isCompletedByMe -> "Repetir"
                 else -> "Foto"
               },
@@ -1367,17 +1428,18 @@ private fun ParaTiBadge() {
 @Composable
 private fun CreateMissionDialog(
   onDismiss: () -> Unit,
-  onCreate: (title: String, description: String, category: String, xpReward: Long, missionType: String, iconKey: String) -> Unit,
+  onCreate: (title: String, description: String, category: String, xpReward: Long, missionType: String, iconKey: String, timeLimitSeconds: Int) -> Unit,
 ) {
   var title by remember { mutableStateOf("") }
   var description by remember { mutableStateOf("") }
   var category by remember { mutableStateOf("explore") }
   var missionType by remember { mutableStateOf("photo") }
   var xpReward by remember { mutableLongStateOf(140L) }
+  var timedOneMinute by remember { mutableStateOf(false) }
 
   AlertDialog(
     onDismissRequest = onDismiss,
-    title = { Text("Nueva misión en punto aleatorio") },
+    title = { Text("Nueva misión en punto público") },
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         OutlinedTextField(
@@ -1398,15 +1460,24 @@ private fun CreateMissionDialog(
           modifier = Modifier.fillMaxWidth(),
         )
         Text("Tipo de reto", style = MaterialTheme.typography.labelLarge)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
           listOf(
             "photo" to "Foto",
             "wires" to "Cables",
-            "puzzle" to "Puzzle",
+            "puzzle" to "Puzzle 3×3",
+            "memory" to "Secuencia",
           ).forEach { (typeKey, label) ->
             FilterChip(
               selected = missionType == typeKey,
-              onClick = { missionType = typeKey },
+              onClick = {
+                missionType = typeKey
+                if (typeKey != "photo" && category != "puzzle") {
+                  category = "puzzle"
+                }
+              },
               shape = CircleShape,
               label = { Text(label) },
               leadingIcon = {
@@ -1414,6 +1485,15 @@ private fun CreateMissionDialog(
               },
             )
           }
+        }
+        if (missionType != "photo") {
+          FilterChip(
+            selected = timedOneMinute,
+            onClick = { timedOneMinute = !timedOneMinute },
+            shape = CircleShape,
+            label = { Text("Reloj de 1 minuto (60s)") },
+            leadingIcon = { Icon(Icons.Rounded.Timer, contentDescription = null, modifier = Modifier.size(15.dp)) },
+          )
         }
         Text("Categoría", style = MaterialTheme.typography.labelLarge)
         FlowRow(
@@ -1452,16 +1532,19 @@ private fun CreateMissionDialog(
             val chosenIcon = when (missionType) {
               "wires" -> "cable"
               "puzzle" -> "extension"
+              "memory" -> "memory"
               else -> when (category) {
                 "eco" -> "park"
                 "social" -> "volunteer"
                 "challenge" -> "camera"
                 "fitness" -> "directions_run"
                 "creative" -> "brush"
+                "puzzle" -> "extension"
                 else -> "explore"
               }
             }
-            onCreate(title.trim(), description.trim(), category, xpReward, missionType, chosenIcon)
+            val limit = if (missionType != "photo" && timedOneMinute) 60 else 0
+            onCreate(title.trim(), description.trim(), category, xpReward, missionType, chosenIcon, limit)
           }
         },
         enabled = title.trim().length >= 3 && description.trim().length >= 5,
@@ -1483,6 +1566,7 @@ private fun categoryIcon(key: String): ImageVector = when (key) {
   "challenge" -> Icons.Rounded.CameraAlt
   "fitness" -> Icons.AutoMirrored.Rounded.DirectionsRun
   "creative" -> Icons.Rounded.Brush
+  "puzzle" -> Icons.Rounded.Extension
   else -> Icons.Rounded.Explore
 }
 
@@ -1492,5 +1576,6 @@ private fun categoryColor(key: String, primary: Color, tertiary: Color): Color =
   "challenge" -> Color(0xFFD84315)
   "fitness" -> Color(0xFFE67E22)
   "creative" -> Color(0xFF8E44AD)
+  "puzzle" -> Color(0xFF5E35B1)
   else -> primary
 }

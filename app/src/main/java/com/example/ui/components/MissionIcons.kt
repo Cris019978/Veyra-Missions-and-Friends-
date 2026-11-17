@@ -77,12 +77,14 @@ object MissionIcons {
     else -> when (missionType) {
       "wires" -> Icons.Rounded.Cable
       "puzzle" -> Icons.Rounded.Extension
+      "memory" -> Icons.Rounded.Memory
       else -> when (category) {
         "eco" -> Icons.Rounded.LocalFlorist
         "social" -> Icons.Rounded.VolunteerActivism
         "challenge" -> Icons.Rounded.CameraAlt
         "fitness" -> Icons.AutoMirrored.Rounded.DirectionsRun
         "creative" -> Icons.Rounded.Brush
+        "puzzle" -> Icons.Rounded.Extension
         else -> Icons.Rounded.Explore
       }
     }
@@ -92,28 +94,32 @@ object MissionIcons {
     mission: Mission,
     primary: Color,
     tertiary: Color,
-  ): Color = when (mission.missionType) {
-    "wires" -> Color(0xFF00897B)
-    "puzzle" -> Color(0xFF5E35B1)
+  ): Color = when {
+    mission.category == "puzzle" || mission.missionType == "puzzle" -> Color(0xFF5E35B1)
+    mission.missionType == "wires" -> Color(0xFF00897B)
+    mission.missionType == "memory" -> Color(0xFF3949AB)
     else -> when (mission.category) {
       "eco" -> Color(0xFF1B8E6E)
       "social" -> tertiary
       "challenge" -> Color(0xFFD84315)
       "fitness" -> Color(0xFFE67E22)
       "creative" -> Color(0xFF8E44AD)
+      "puzzle" -> Color(0xFF5E35B1)
       else -> primary
     }
   }
 
   fun typeLabel(missionType: String): String = when (missionType) {
     "wires" -> "Cables"
-    "puzzle" -> "Puzzle"
+    "puzzle" -> "Puzzle 3×3"
+    "memory" -> "Secuencia"
     else -> "Foto"
   }
 
   fun typeActionIcon(missionType: String): ImageVector = when (missionType) {
     "wires" -> Icons.Rounded.Cable
     "puzzle" -> Icons.Rounded.Extension
+    "memory" -> Icons.Rounded.Memory
     else -> Icons.Rounded.CameraAlt
   }
 }

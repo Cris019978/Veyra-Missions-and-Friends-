@@ -16,6 +16,8 @@ import com.example.data.model.NearbyPlayerItem
 import com.example.data.model.PlayerInteraction
 import com.example.data.model.PlayerProfile
 import com.example.data.model.UserSettings
+import com.example.data.remote.OsmSafePlaceFinder
+import com.example.data.remote.SafePublicSpot
 import com.example.data.repository.RadarQuestRepository
 import com.example.util.GeoUtils
 import com.example.util.PhotoUtils
@@ -51,6 +53,7 @@ data class RadarQuestUiState(
   val waitingMissionQueue: List<String> = emptyList(),
   val rejectedMissionIds: Set<String> = emptySet(),
   val queuedPromptMission: MissionWithDistance? = null,
+  val safePublicAnchorsCount: Int = 0,
   val myCompletions: List<MissionCompletion> = emptyList(),
   val publicCompletions: List<MissionCompletion> = emptyList(),
   val openChallenges: List<Challenge> = emptyList(),
@@ -96,8 +99,11 @@ class RadarQuestViewModel(
   private val _waitingMissionQueue = MutableStateFlow<List<String>>(emptyList())
   private val _rejectedMissionIds = MutableStateFlow<Set<String>>(emptySet())
   private val _queuedPromptMissionId = MutableStateFlow<String?>(null)
+  private val _safePublicAnchors = MutableStateFlow<List<SafePublicSpot>>(emptyList())
 
   private var respawnJob: Job? = null
+  private var placesFetchJob: Job? = null
+  private var lastPlacesFetchCoords: Pair<Double, Double>? = null
   private var hasInitializedProfile = false
   private var seededInitialInteractions = false
   private val seenInteractionIds = mutableSetOf<String>()
@@ -295,6 +301,7 @@ class RadarQuestViewModel(
     _waitingMissionQueue,
     _rejectedMissionIds,
     _queuedPromptMissionId,
+    _safePublicAnchors,
   ) { values ->
     @Suppress("UNCHECKED_CAST")
     MissionWorkflowBundle(
@@ -304,6 +311,7 @@ class RadarQuestViewModel(
       waitingQueue = values[3] as List<String>,
       rejectedIds = values[4] as Set<String>,
       queuedPromptId = values[5] as String?,
+      safeAnchors = values[6] as List<SafePublicSpot>,
     )
   }
 
@@ -381,6 +389,7 @@ class RadarQuestViewModel(
       baseLon = anchor.second,
       seed = workflow.missionSeed,
       maxRadiusMeters = radiusMeters,
+      safeAnchors = workflow.safeAnchors,
     )
 
     val allMissions = (core.missions + local.refreshedMissions + randomGeneratedMissions)
@@ -486,6 +495,7 @@ class RadarQuestViewModel(
       waitingMissionQueue = workflow.waitingQueue,
       rejectedMissionIds = workflow.rejectedIds,
       queuedPromptMission = queuedPromptMission,
+      safePublicAnchorsCount = workflow.safeAnchors.size,
       myCompletions = core.myCompletions.sortedByDescending { it.createdAt ?: Timestamp(0, 0) },
       publicCompletions = social.publicCompletions.sortedByDescending { it.createdAt ?: Timestamp(0, 0) },
       openChallenges = social.openChallenges
@@ -596,6 +606,26 @@ class RadarQuestViewModel(
     _queuedPromptMissionId.value = null
   }
 
+  private fun refreshSafePublicAnchors(lat: Double, lon: Double, radiusMeters: Int, force: Boolean = false) {
+    if (lat == 0.0 && lon == 0.0) return
+    val prev = lastPlacesFetchCoords
+    if (!force && prev != null && GeoUtils.distanceMeters(prev.first, prev.second, lat, lon) < 250f) {
+      return
+    }
+    lastPlacesFetchCoords = lat to lon
+    placesFetchJob?.cancel()
+    placesFetchJob = viewModelScope.launch {
+      val anchors = OsmSafePlaceFinder.fetchSafePublicAnchors(
+        latitude = lat,
+        longitude = lon,
+        radiusMeters = radiusMeters,
+      )
+      if (anchors.isNotEmpty()) {
+        _safePublicAnchors.value = anchors
+      }
+    }
+  }
+
   fun respawnRandomMissions() {
     respawnJob?.cancel()
     val loc = _currentLocation.value
@@ -604,12 +634,13 @@ class RadarQuestViewModel(
     val lon = loc?.longitude ?: prof?.longitude ?: 0.0
     if (lat != 0.0 || lon != 0.0) {
       _missionAnchorCoords.value = lat to lon
+      refreshSafePublicAnchors(lat, lon, uiState.value.settings.searchRadiusMeters.toInt(), force = true)
     }
     _rejectedMissionIds.value = emptySet()
     notifiedProximityMissionIds.clear()
     notifiedCloseSpotIds.clear()
     _missionSeed.value = System.currentTimeMillis()
-    _snackbarMessage.value = "Misiones reubicadas de forma aleatoria en el mapa"
+    _snackbarMessage.value = "Misiones reubicadas en zonas públicas aleatorias"
   }
 
   private fun scheduleRejectedRespawn() {
@@ -740,6 +771,7 @@ class RadarQuestViewModel(
       val lon = loc?.longitude ?: prof?.longitude ?: 0.0
       if (lat != 0.0 || lon != 0.0) {
         _missionAnchorCoords.value = lat to lon
+        refreshSafePublicAnchors(lat, lon, uiState.value.settings.searchRadiusMeters.toInt(), force = true)
       }
       _rejectedMissionIds.value = emptySet()
       _missionSeed.value = System.currentTimeMillis()
@@ -763,6 +795,12 @@ class RadarQuestViewModel(
   fun onLocationUpdated(point: LiveLocationPoint) {
     val previous = _currentLocation.value
     _currentLocation.value = point
+    refreshSafePublicAnchors(
+      lat = point.latitude,
+      lon = point.longitude,
+      radiusMeters = uiState.value.settings.searchRadiusMeters.toInt(),
+      force = false,
+    )
     val movedEnough = previous == null ||
       GeoUtils.distanceMeters(previous.latitude, previous.longitude, point.latitude, point.longitude) > 8f
     if (movedEnough) {
@@ -987,18 +1025,30 @@ class RadarQuestViewModel(
     xpReward: Long,
     missionType: String = "photo",
     iconKey: String = "explore",
+    timeLimitSeconds: Int = 0,
   ) {
     val myName = uiState.value.myProfile?.callsign ?: defaultDisplayName
     val loc = _currentLocation.value
     val prof = uiState.value.myProfile
     val baseLat = loc?.latitude ?: prof?.latitude ?: 19.4326
     val baseLon = loc?.longitude ?: prof?.longitude ?: -99.1332
-    val (lat, lon) = GeoUtils.destinationPoint(
-      baseLat = baseLat,
-      baseLon = baseLon,
-      distanceMeters = (45..260).random().toDouble(),
-      bearingDegrees = (0..359).random().toDouble(),
-    )
+    val safeAnchor = _safePublicAnchors.value.randomOrNull()
+    val (lat, lon) = if (safeAnchor != null) {
+      GeoUtils.destinationPoint(
+        baseLat = safeAnchor.latitude,
+        baseLon = safeAnchor.longitude,
+        distanceMeters = (6..25).random().toDouble(),
+        bearingDegrees = (0..359).random().toDouble(),
+      )
+    } else {
+      GeoUtils.destinationPoint(
+        baseLat = baseLat,
+        baseLon = baseLon,
+        distanceMeters = (45..260).random().toDouble(),
+        bearingDegrees = (0..359).random().toDouble(),
+      )
+    }
+    val placeLabel = safeAnchor?.name ?: "Zona pública aleatoria"
     viewModelScope.launch {
       _isSubmitting.value = true
       val res = repository.createMission(
@@ -1011,9 +1061,11 @@ class RadarQuestViewModel(
         longitude = lon,
         missionType = missionType,
         iconKey = iconKey,
+        timeLimitSeconds = timeLimitSeconds,
+        placeLabel = placeLabel,
       )
       _isSubmitting.value = false
-      _snackbarMessage.value = if (res.isSuccess) "Misión creada en punto aleatorio del radar" else "Error al crear misión"
+      _snackbarMessage.value = if (res.isSuccess) "Misión creada en punto público aleatorio" else "Error al crear misión"
     }
   }
 
@@ -1110,6 +1162,7 @@ class RadarQuestViewModel(
     val waitingQueue: List<String>,
     val rejectedIds: Set<String>,
     val queuedPromptId: String?,
+    val safeAnchors: List<SafePublicSpot>,
   )
 
   private data class OnboardingGateBundle(

@@ -367,7 +367,10 @@ private fun MainAppShell(
                   )
                 },
                 onCreateMission = { title, desc, cat, xp, type, icon ->
-                  viewModel.createCustomMission(title, desc, cat, xp, type, icon)
+                  viewModel.createCustomMission(title, desc, cat, xp, type, icon, 0)
+                },
+                onCreateTimedMission = { title, desc, cat, xp, type, icon, timeLimit ->
+                  viewModel.createCustomMission(title, desc, cat, xp, type, icon, timeLimit)
                 },
                 onConfirmMissionPhoto = { mission, caption, base64, isPublic ->
                   viewModel.confirmMissionWithPhoto(mission, caption, base64, isPublic)

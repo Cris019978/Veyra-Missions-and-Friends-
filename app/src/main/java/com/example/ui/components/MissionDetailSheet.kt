@@ -11,7 +11,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
@@ -23,6 +26,8 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -36,6 +41,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,8 +65,10 @@ fun MissionDetailSheet(
   showExpandMapButton: Boolean,
   isAccepted: Boolean = false,
   waitQueuePosition: Int? = null,
+  isSubmitting: Boolean = false,
   onDismiss: () -> Unit,
   onStartMissionAction: () -> Unit,
+  onCompleteMiniGame: (caption: String, isPublic: Boolean) -> Unit = { _, _ -> },
   onAcceptMission: () -> Unit = {},
   onWaitMission: () -> Unit = {},
   onRejectMission: () -> Unit = {},
@@ -75,6 +86,12 @@ fun MissionDetailSheet(
     MaterialTheme.colorScheme.tertiary,
   )
   val actionIcon = MissionIcons.typeActionIcon(mission.missionType)
+  val isPuzzleMission = mission.missionType in setOf("wires", "puzzle", "memory")
+
+  // Puzzle missions open directly inside the mission's own menu once inside the geographic point
+  var showInlinePuzzle by remember(mission.id, item.isWithinProximity, hasLocationPermission) {
+    mutableStateOf(isPuzzleMission && item.isWithinProximity && hasLocationPermission)
+  }
 
   val proximityProgress = if (hasLocationPermission) {
     (1f - (item.distanceMeters / (GeoUtils.PROXIMITY_RADIUS_METERS * 3f))).coerceIn(0.08f, 1f)
@@ -83,6 +100,7 @@ fun MissionDetailSheet(
   }
   val remainingMeters = (item.distanceMeters - GeoUtils.PROXIMITY_RADIUS_METERS).coerceAtLeast(0f)
   val dirText = "${GeoUtils.compassArrowForBearing(item.bearingDegrees)} ${GeoUtils.cardinalDirectionEs(item.bearingDegrees)}"
+  val coordsText = String.format("%.5f, %.5f", mission.latitude, mission.longitude)
 
   ModalBottomSheet(
     onDismissRequest = onDismiss,
@@ -92,6 +110,7 @@ fun MissionDetailSheet(
     Column(
       modifier = Modifier
         .fillMaxWidth()
+        .verticalScroll(rememberScrollState())
         .padding(horizontal = 20.dp)
         .padding(bottom = 28.dp),
       verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -142,6 +161,31 @@ fun MissionDetailSheet(
                   modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                 )
               }
+              if (mission.timeLimitSeconds > 0) {
+                Surface(
+                  color = MaterialTheme.colorScheme.errorContainer,
+                  shape = CircleShape,
+                ) {
+                  Row(
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Rounded.Timer,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.onErrorContainer,
+                      modifier = Modifier.size(12.dp),
+                    )
+                    Text(
+                      text = "${mission.timeLimitSeconds}s",
+                      style = MaterialTheme.typography.labelSmall,
+                      fontWeight = FontWeight.Bold,
+                      color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                  }
+                }
+              }
               Surface(
                 color = MaterialTheme.colorScheme.tertiaryContainer,
                 shape = CircleShape,
@@ -173,6 +217,41 @@ fun MissionDetailSheet(
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
+
+      // Demonstrated Geographic Point & Safe Public Area Card
+      Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag("mission_sheet_geo_point_card"),
+      ) {
+        Row(
+          modifier = Modifier.padding(12.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Rounded.VerifiedUser,
+            contentDescription = "Zona pública segura",
+            tint = Color(0xFF1B8E6E),
+            modifier = Modifier.size(22.dp),
+          )
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = "Punto geográfico demostrado: ${mission.placeLabel}",
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            Text(
+              text = "Coords: $coordsText • Zona pública (sin lugares privados o peligrosos)",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f),
+            )
+          }
+        }
+      }
 
       Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -312,8 +391,9 @@ fun MissionDetailSheet(
               !hasLocationPermission ->
                 "Activa el permiso de ubicación para desbloquear al acercarte a menos de ${GeoUtils.PROXIMITY_RADIUS_METERS.toInt()} m."
               item.isWithinProximity -> when (mission.missionType) {
-                "wires" -> "Ya estás en el punto. Conecta los 5 cables de colores para completarla."
-                "puzzle" -> "Ya estás en el punto. Resuelve el rompecabezas 3×3 para completarla."
+                "wires" -> "Ya estás en el punto geográfico demostrado. Conecta los cables aquí abajo."
+                "puzzle" -> "Ya estás en el punto geográfico demostrado. Resuelve el rompecabezas aquí abajo."
+                "memory" -> "Ya estás en el punto geográfico demostrado. Descifra la secuencia aquí abajo."
                 else -> "Ya puedes tomar la foto dentro de la app para completar esta misión."
               }
               else ->
@@ -337,6 +417,37 @@ fun MissionDetailSheet(
           Spacer(modifier = Modifier.width(6.dp))
           Text("Activar ubicación")
         }
+      } else if (isPuzzleMission && item.isWithinProximity) {
+        if (!showInlinePuzzle) {
+          Button(
+            onClick = { showInlinePuzzle = true },
+            shape = CircleShape,
+            modifier = Modifier
+              .fillMaxWidth()
+              .height(52.dp)
+              .testTag("mission_sheet_confirm_button"),
+          ) {
+            Icon(imageVector = actionIcon, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+              text = if (mission.timeLimitSeconds > 0) {
+                "Resolver puzzle (${mission.timeLimitSeconds}s)"
+              } else {
+                "Resolver puzzle aquí"
+              },
+              fontWeight = FontWeight.Bold,
+            )
+          }
+        } else {
+          // Solved directly inside the mission's own menu at the demonstrated geographic point!
+          InlineMissionPuzzlePanel(
+            mission = mission,
+            isSubmitting = isSubmitting,
+            onComplete = { caption, isPublic ->
+              onCompleteMiniGame(caption, isPublic)
+            },
+          )
+        }
       } else {
         Button(
           onClick = onStartMissionAction,
@@ -354,11 +465,7 @@ fun MissionDetailSheet(
           Spacer(modifier = Modifier.width(8.dp))
           Text(
             text = if (item.isWithinProximity) {
-              when (mission.missionType) {
-                "wires" -> "Jugar: Conectar cables"
-                "puzzle" -> "Jugar: Rompecabezas"
-                else -> if (item.isCompletedByMe) "Repetir foto en el punto" else "Confirmar con foto"
-              }
+              if (item.isCompletedByMe) "Repetir foto en el punto" else "Confirmar con foto"
             } else {
               "Acércate a menos de ${GeoUtils.PROXIMITY_RADIUS_METERS.toInt()} m"
             },
@@ -373,7 +480,7 @@ fun MissionDetailSheet(
       ) {
         OutlinedButton(
           onClick = {
-            GeoUtils.openInGoogleMaps(
+            GeoUtils.openInExternalMap(
               context = context,
               latitude = mission.latitude,
               longitude = mission.longitude,
@@ -384,11 +491,11 @@ fun MissionDetailSheet(
           modifier = Modifier
             .weight(1f)
             .height(48.dp)
-            .testTag("mission_sheet_google_maps_button"),
+            .testTag("mission_sheet_external_map_button"),
         ) {
           Icon(Icons.Rounded.Map, contentDescription = null, modifier = Modifier.size(18.dp))
           Spacer(modifier = Modifier.width(6.dp))
-          Text("Google Maps")
+          Text("Ver ruta")
         }
 
         if (showExpandMapButton) {

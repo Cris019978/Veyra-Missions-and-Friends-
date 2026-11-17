@@ -97,6 +97,7 @@ object PhotoUtils {
     val bmp = Bitmap.createBitmap(320, 200, Bitmap.Config.ARGB_8888)
     val canvas = android.graphics.Canvas(bmp)
     val isWires = missionType == "wires"
+    val isMemory = missionType == "memory"
 
     val bgPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
       shader = android.graphics.LinearGradient(
@@ -104,8 +105,16 @@ object PhotoUtils {
         0f,
         320f,
         200f,
-        if (isWires) 0xFF0F2027.toInt() else 0xFF2B1055.toInt(),
-        if (isWires) 0xFF00897B.toInt() else 0xFF753A88.toInt(),
+        when {
+          isWires -> 0xFF0F2027.toInt()
+          isMemory -> 0xFF1A237E.toInt()
+          else -> 0xFF2B1055.toInt()
+        },
+        when {
+          isWires -> 0xFF00897B.toInt()
+          isMemory -> 0xFF00ACC1.toInt()
+          else -> 0xFF753A88.toInt()
+        },
         android.graphics.Shader.TileMode.CLAMP,
       )
     }
@@ -122,6 +131,13 @@ object PhotoUtils {
         linePaint.color = c
         val y = 42f + idx * 34f
         canvas.drawLine(46f, y, 274f, 42f + ((3 - idx) * 34f), linePaint)
+      }
+    } else if (isMemory) {
+      val nodeColors = intArrayOf(0xFFFF7043.toInt(), 0xFF29B6F6.toInt(), 0xFF66BB6A.toInt(), 0xFFAB47BC.toInt())
+      val nodePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+      nodeColors.forEachIndexed { idx, c ->
+        nodePaint.color = c
+        canvas.drawCircle(76f + idx * 56f, 88f, 22f, nodePaint)
       }
     } else {
       linePaint.color = 0x88FFFFFF.toInt()
@@ -141,7 +157,11 @@ object PhotoUtils {
       isFakeBoldText = true
       textAlign = android.graphics.Paint.Align.CENTER
     }
-    val label = if (isWires) "CABLES CONECTADOS" else "ROMPECABEZAS RESUELTO"
+    val label = when {
+      isWires -> "CABLES CONECTADOS"
+      isMemory -> "SECUENCIA DESCIFRADA"
+      else -> "ROMPECABEZAS RESUELTO"
+    }
     canvas.drawText(label, 160f, 174f, textPaint)
     val subPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
       color = 0xDDFFFFFF.toInt()

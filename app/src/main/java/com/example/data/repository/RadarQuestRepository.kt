@@ -322,14 +322,18 @@ class RadarQuestRepository(
     longitude: Double,
     missionType: String = "photo",
     iconKey: String = "explore",
+    timeLimitSeconds: Int = 0,
+    placeLabel: String = "Zona pública segura",
   ): Result<String> {
     return runCatching {
       val uid = requireUserId()
       val id = "m_" + UUID.randomUUID().toString().replace("-", "").take(16)
       val docRef = db.collection("missions").document(id)
       val safeCategory = if (category in VALID_CATEGORIES) category else "explore"
-      val safeType = if (missionType in listOf("photo", "wires", "puzzle")) missionType else "photo"
+      val safeType = if (missionType in listOf("photo", "wires", "puzzle", "memory")) missionType else "photo"
       val safeIcon = iconKey.trim().ifBlank { "explore" }.take(32)
+      val safeTimeLimit = timeLimitSeconds.coerceIn(0, 600)
+      val safePlace = placeLabel.trim().ifBlank { "Zona pública segura" }.take(100)
       val payload = mapOf(
         "creatorId" to uid,
         "creatorName" to creatorName.trim().ifBlank { "Explorador" }.take(40),
@@ -338,6 +342,8 @@ class RadarQuestRepository(
         "category" to safeCategory,
         "missionType" to safeType,
         "iconKey" to safeIcon,
+        "timeLimitSeconds" to safeTimeLimit,
+        "placeLabel" to safePlace,
         "xpReward" to xpReward.coerceIn(25L, 1000L),
         "latitude" to latitude.coerceIn(-90.0, 90.0),
         "longitude" to longitude.coerceIn(-180.0, 180.0),
@@ -569,6 +575,6 @@ class RadarQuestRepository(
   }
 
   private companion object {
-    val VALID_CATEGORIES = setOf("explore", "eco", "social", "challenge", "fitness", "creative")
+    val VALID_CATEGORIES = setOf("explore", "eco", "social", "challenge", "fitness", "creative", "puzzle")
   }
 }

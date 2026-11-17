@@ -203,6 +203,45 @@ test("Missions & Completions: create, query active, submit photo proof, enforce 
     })
   );
 
+  await assertSucceeds(
+    aliceDb.collection("missions").doc("mission_puzzle_timed").set({
+      creatorId: ALICE_UID,
+      creatorName: "Alice",
+      title: "Desactivación Relámpago",
+      description: "Resuelve dentro del menú en 60 segundos",
+      category: "puzzle",
+      missionType: "memory",
+      iconKey: "memory",
+      timeLimitSeconds: 60,
+      placeLabel: "Plaza cívica segura",
+      xpReward: 190,
+      latitude: 37.422,
+      longitude: -122.084,
+      isActive: true,
+      createdAt: ts,
+      updatedAt: ts,
+    })
+  );
+
+  await assertFails(
+    aliceDb.collection("missions").doc("mission_bad_timer").set({
+      creatorId: ALICE_UID,
+      creatorName: "Alice",
+      title: "Misión timer inválido",
+      description: "Excede máximo permitido",
+      category: "puzzle",
+      missionType: "puzzle",
+      iconKey: "extension",
+      timeLimitSeconds: 9999,
+      xpReward: 120,
+      latitude: 37.422,
+      longitude: -122.084,
+      isActive: true,
+      createdAt: ts,
+      updatedAt: ts,
+    })
+  );
+
   await assertSucceeds(aliceDb.collection("mission_completions").where("isPublic", "==", true).get());
   await assertFails(aliceDb.collection("mission_completions").doc("comp_1").delete());
 });
