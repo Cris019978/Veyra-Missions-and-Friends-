@@ -1,49 +1,44 @@
 package com.example.data.repository
 
-import com.example.base.FirestoreEmulatorTestBase
+import com.example.data.local.LocalAuthManager
 import com.example.data.model.Challenge
 import com.example.data.model.UserSettings
-import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class RadarQuestRepositoryRuleTest : FirestoreEmulatorTestBase() {
+class RadarQuestRepositoryRuleTest {
 
   @Test
-  fun saveAndObserveUserSettings_authenticatedOwner_succeeds() = runBlocking {
-    val uid = signInTestUser(ALICE_EMAIL)
-    val repo = RadarQuestRepository(firestore, auth)
+  fun saveAndObserveUserSettings_localUser_succeeds() = runBlocking {
+    val uid = "explorador_uno"
+    val repo = RadarQuestRepository(db = null, localUserId = uid)
 
-    val saveResult = withTimeout(TIMEOUT_MS) {
-      repo.saveUserSettings(
-        UserSettings(
-          userId = uid,
-          themeMode = "dark",
-          paletteKey = "coral",
-          radarStyle = "neon",
-          cornerStyle = "pill",
-          searchRadiusMeters = 3000L,
-          animationTier = "low",
-          notificationsEnabled = true,
-          onboardingCompleted = true,
-          playStyle = "explorer",
-          favoriteCategories = listOf("explore", "fitness", "creative"),
-          privacyComfort = "close_only",
-          missionPace = "daily",
-          gestureNavEnabled = true,
-        )
+    val saveResult = repo.saveUserSettings(
+      UserSettings(
+        userId = uid,
+        themeMode = "dark",
+        paletteKey = "coral",
+        radarStyle = "neon",
+        cornerStyle = "pill",
+        searchRadiusMeters = 3000L,
+        animationTier = "low",
+        notificationsEnabled = true,
+        onboardingCompleted = true,
+        playStyle = "explorer",
+        favoriteCategories = listOf("explore", "fitness", "creative"),
+        privacyComfort = "close_only",
+        missionPace = "daily",
+        gestureNavEnabled = true,
       )
-    }
+    )
     assertTrue(saveResult.isSuccess)
 
-    val loaded = withTimeout(FLOW_TIMEOUT_MS) {
-      repo.observeUserSettings(uid).first { it != null && it.onboardingCompleted }
-    }
+    val loaded = repo.observeUserSettings(uid).first { it != null && it.onboardingCompleted }
     assertNotNull(loaded)
     assertEquals("coral", loaded?.paletteKey)
     assertEquals("low", loaded?.animationTier)
@@ -53,124 +48,88 @@ class RadarQuestRepositoryRuleTest : FirestoreEmulatorTestBase() {
   }
 
   @Test
-  fun playerProfileAndMissionWorkflow_authenticatedUsers_succeeds() = runBlocking {
-    val aliceUid = signInTestUser(ALICE_EMAIL)
-    val repo = RadarQuestRepository(firestore, auth)
+  fun playerProfileAndMissionCompletion_preservesRoleAndTitle() = runBlocking {
+    val repo = RadarQuestRepository(db = null, localUserId = "veyra")
 
-    val profileRes = withTimeout(TIMEOUT_MS) {
-      repo.ensureOrUpdatePlayerProfile(
-        username = "alice_radar",
-        callsign = "AliceRadar",
-        avatarIcon = "explore",
-        avatarColorHex = "#00BFA5",
-        avatarPhotoBase64 = "sample_avatar_b64",
-        bannerPhotoBase64 = "sample_banner_b64",
-        bannerPreset = "sunset",
-        statusMessage = "En ruta",
-        seekingHelp = true,
-        isOnline = true,
-        latitude = 37.422,
-        longitude = -122.084,
-      )
-    }
+    val profileRes = repo.ensureOrUpdatePlayerProfile(
+      username = "veyra",
+      callsign = "VeyraAdmin",
+      avatarIcon = "bolt",
+      avatarColorHex = "#00BFA5",
+      statusMessage = "Creando misiones",
+      seekingHelp = false,
+      isOnline = true,
+      latitude = 19.4326,
+      longitude = -99.1332,
+      role = LocalAuthManager.ROLE_CREATOR,
+      roleTitle = LocalAuthManager.TITLE_CREATOR,
+      initialXp = 500L,
+      initialLevel = 3L,
+    )
     assertTrue(profileRes.isSuccess)
 
-    val missionId = withTimeout(TIMEOUT_MS) {
-      repo.createMission(
-        creatorName = "AliceRadar",
-        title = "Caminata urbana",
-        description = "Camina hasta una plaza y confírmalo en foto",
-        category = "fitness",
-        xpReward = 150L,
-        latitude = 37.422,
-        longitude = -122.084,
-      ).getOrThrow()
-    }
-    assertTrue(missionId.isNotEmpty())
+    val profile = repo.observeMyProfile("veyra").first()
+    assertEquals(LocalAuthManager.ROLE_CREATOR, profile?.role)
+    assertEquals(LocalAuthManager.TITLE_CREATOR, profile?.roleTitle)
+    assertEquals(500L, profile?.xp)
 
-    val bobUid = signInTestUser(BOB_EMAIL)
-    val onlinePlayers = withTimeout(FLOW_TIMEOUT_MS) {
-      repo.observeOnlinePlayers(bobUid).first { list -> list.any { it.userId == aliceUid } }
-    }
-    assertTrue(onlinePlayers.any { it.userId == aliceUid && it.seekingHelp })
+    val missionId = repo.createMission(
+      creatorName = "VeyraAdmin",
+      title = "Caminata urbana",
+      description = "Camina hasta una plaza y confírmalo en foto",
+      category = "fitness",
+      xpReward = 150L,
+      latitude = 19.4326,
+      longitude = -99.1332,
+    ).getOrThrow()
 
-    val completionId = withTimeout(TIMEOUT_MS) {
-      repo.submitMissionCompletion(
-        userName = "BobRunner",
-        missionId = missionId,
-        missionTitle = "Caminata urbana",
-        category = "fitness",
-        xpEarned = 150L,
-        caption = "Foto lista!",
-        photoThumbnailBase64 = "base64_sample_jpeg_payload_ok",
-        latitude = 37.423,
-        longitude = -122.085,
-        isPublic = true,
-      ).getOrThrow()
-    }
+    val completionId = repo.submitMissionCompletion(
+      userName = "VeyraAdmin",
+      missionId = missionId,
+      missionTitle = "Caminata urbana",
+      category = "fitness",
+      xpEarned = 150L,
+      caption = "Foto lista!",
+      photoThumbnailBase64 = "base64_sample",
+      latitude = 19.4326,
+      longitude = -99.1332,
+      isPublic = true,
+      authorRole = LocalAuthManager.ROLE_CREATOR,
+      authorRoleTitle = LocalAuthManager.TITLE_CREATOR,
+    ).getOrThrow()
     assertTrue(completionId.isNotEmpty())
+
+    val publicPosts = repo.observePublicCompletions("veyra").first()
+    assertEquals(1, publicPosts.size)
+    assertEquals(LocalAuthManager.TITLE_CREATOR, publicPosts.first().authorRoleTitle)
   }
 
   @Test
-  fun challengeJoinAndInteraction_twoPlayers_succeeds() = runBlocking {
-    val aliceUid = signInTestUser(ALICE_EMAIL)
-    val repo = RadarQuestRepository(firestore, auth)
+  fun challengeAndInteractionWorkflow_localMode_succeeds() = runBlocking {
+    val repo = RadarQuestRepository(db = null, localUserId = "tester1")
+    assertFalse(repo.isCloudAvailable)
 
-    val challengeId = withTimeout(TIMEOUT_MS) {
-      repo.createChallenge(
-        creatorName = "AliceRadar",
-        mode = "duel",
-        title = "Carrera fotográfica",
-        missionId = "daily_park",
-        xpStake = 200L,
-      ).getOrThrow()
-    }
+    val challengeId = repo.createChallenge(
+      creatorName = "TesterUno",
+      mode = "duel",
+      title = "Carrera fotográfica",
+      missionId = "daily_park",
+      xpStake = 200L,
+    ).getOrThrow()
 
-    val bobUid = signInTestUser(BOB_EMAIL)
-    val openList = withTimeout(FLOW_TIMEOUT_MS) {
-      repo.observeOpenChallenges(bobUid).first { list -> list.any { it.id == challengeId } }
-    }
+    val openList = repo.observeOpenChallenges("tester1").first()
     val target: Challenge = openList.first { it.id == challengeId }
-    val joinRes = withTimeout(TIMEOUT_MS) { repo.joinChallenge(target, "BobRunner") }
+    val joinRes = repo.joinChallenge(target, "RivalBeta")
     assertTrue(joinRes.isSuccess)
 
-    val intRes = withTimeout(TIMEOUT_MS) {
-      repo.sendInteraction(
-        fromUserName = "BobRunner",
-        toUserId = aliceUid,
-        toUserName = "AliceRadar",
-        type = "help",
-        message = "¡Ánimo en el duelo!",
-        xpBonus = 25L,
-      )
-    }
+    val intRes = repo.sendInteraction(
+      fromUserName = "TesterUno",
+      toUserId = "veyra",
+      toUserName = "Veyra",
+      type = "help",
+      message = "¡Ánimo en el duelo!",
+      xpBonus = 25L,
+    )
     assertTrue(intRes.isSuccess)
-  }
-
-  @Test
-  fun observeOnlinePlayers_unauthenticatedUser_failsWithPermissionDenied() = runBlocking {
-    auth.signOut()
-    val repo = RadarQuestRepository(firestore, auth)
-
-    var caught: Throwable? = null
-    try {
-      withTimeout(FLOW_TIMEOUT_MS) {
-        repo.observeOnlinePlayers("unauth_uid").first()
-      }
-    } catch (e: Throwable) {
-      caught = e
-    }
-    assertNotNull(caught)
-    val firestoreException = checkNotNull(caught?.unwrapFirestoreException()) {
-      "Expected nested FirebaseFirestoreException, got $caught"
-    }
-    assertEquals(FirebaseFirestoreException.Code.PERMISSION_DENIED, firestoreException.code)
-  }
-
-  private companion object {
-    const val ALICE_EMAIL = "alice_radar@test.com"
-    const val BOB_EMAIL = "bob_radar@test.com"
-    const val TIMEOUT_MS = 5000L
-    const val FLOW_TIMEOUT_MS = 4000L
   }
 }

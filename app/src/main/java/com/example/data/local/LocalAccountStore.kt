@@ -50,6 +50,8 @@ class LocalAccountStore(private val context: Context) {
     val MISSIONS_COMPLETED = longPreferencesKey("profile_missions_completed")
     val HELPS_GIVEN = longPreferencesKey("profile_helps_given")
     val DUELS_WON = longPreferencesKey("profile_duels_won")
+    val ROLE = stringPreferencesKey("profile_role")
+    val ROLE_TITLE = stringPreferencesKey("profile_role_title")
   }
 
   val accountFlow: Flow<LocalAccountSnapshot> = context.accountPrefsDataStore.data.map { prefs ->
@@ -76,6 +78,8 @@ class LocalAccountStore(private val context: Context) {
         missionsCompleted = prefs[Keys.MISSIONS_COMPLETED] ?: 0L,
         helpsGiven = prefs[Keys.HELPS_GIVEN] ?: 0L,
         duelsWon = prefs[Keys.DUELS_WON] ?: 0L,
+        role = prefs[Keys.ROLE].orEmpty().ifBlank { LocalAuthManager.ROLE_EXPLORER },
+        roleTitle = prefs[Keys.ROLE_TITLE].orEmpty().ifBlank { LocalAuthManager.TITLE_EXPLORER },
       )
     } else {
       null
@@ -157,6 +161,8 @@ class LocalAccountStore(private val context: Context) {
       prefs[Keys.MISSIONS_COMPLETED] = profile.missionsCompleted
       prefs[Keys.HELPS_GIVEN] = profile.helpsGiven
       prefs[Keys.DUELS_WON] = profile.duelsWon
+      prefs[Keys.ROLE] = profile.role.ifBlank { LocalAuthManager.ROLE_EXPLORER }
+      prefs[Keys.ROLE_TITLE] = profile.roleTitle.ifBlank { LocalAuthManager.TITLE_EXPLORER }
     }
   }
 

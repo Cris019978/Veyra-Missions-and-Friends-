@@ -3,6 +3,7 @@ package com.example.ui.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.local.LocalAuthManager
 import com.example.data.local.LocalThemePreferences
 import com.example.data.local.ThemePrefsSnapshot
 import com.example.data.location.LiveLocationPoint
@@ -67,6 +68,7 @@ data class RadarQuestUiState(
   val isSubmitting: Boolean = false,
   val isLoading: Boolean = true,
   val isLocalOfflineMode: Boolean = false,
+  val savedAccountEmail: String = "",
   val errorMessage: String? = null,
 )
 
@@ -77,6 +79,11 @@ class RadarQuestViewModel(
   private val currentUserId: String,
   private val defaultDisplayName: String,
   private val isLocalOfflineMode: Boolean = !repository.isCloudAvailable,
+  private val savedAccountEmail: String = "",
+  private val accountRole: String = LocalAuthManager.ROLE_EXPLORER,
+  private val accountRoleTitle: String = LocalAuthManager.TITLE_EXPLORER,
+  private val initialAccountXp: Long = 0L,
+  private val initialAccountLevel: Long = 1L,
   private val onSystemNotify: (id: Int, title: String, message: String, isProximity: Boolean) -> Unit = { _, _, _, _ -> },
 ) : ViewModel() {
 
@@ -513,12 +520,16 @@ class RadarQuestViewModel(
       isSubmitting = local.isSubmitting,
       isLoading = false,
       isLocalOfflineMode = isLocalOfflineMode,
+      savedAccountEmail = savedAccountEmail,
       errorMessage = gate.errorMessage,
     )
   }.stateIn(
     scope = viewModelScope,
     started = SharingStarted.WhileSubscribed(5000L),
-    initialValue = RadarQuestUiState(isLocalOfflineMode = isLocalOfflineMode),
+    initialValue = RadarQuestUiState(
+      isLocalOfflineMode = isLocalOfflineMode,
+      savedAccountEmail = savedAccountEmail,
+    ),
   )
 
   init {
@@ -547,6 +558,27 @@ class RadarQuestViewModel(
             isOnline = _isBroadcastingRadar.value,
             latitude = _currentLocation.value?.latitude ?: 0.0,
             longitude = _currentLocation.value?.longitude ?: 0.0,
+            role = accountRole,
+            roleTitle = accountRoleTitle,
+            initialXp = initialAccountXp,
+            initialLevel = initialAccountLevel,
+          )
+        } else if (prof.role != accountRole || prof.roleTitle != accountRoleTitle) {
+          repository.ensureOrUpdatePlayerProfile(
+            username = prof.username,
+            callsign = prof.callsign,
+            avatarIcon = prof.avatarIcon,
+            avatarColorHex = prof.avatarColorHex,
+            avatarPhotoBase64 = prof.avatarPhotoBase64,
+            bannerPhotoBase64 = prof.bannerPhotoBase64,
+            bannerPreset = prof.bannerPreset,
+            statusMessage = prof.statusMessage,
+            seekingHelp = prof.seekingHelp,
+            isOnline = prof.isOnline,
+            latitude = prof.latitude,
+            longitude = prof.longitude,
+            role = accountRole,
+            roleTitle = accountRoleTitle,
           )
         }
         return@collect
@@ -894,6 +926,8 @@ class RadarQuestViewModel(
         isOnline = _isBroadcastingRadar.value,
         latitude = loc?.latitude ?: prof?.latitude ?: 0.0,
         longitude = loc?.longitude ?: prof?.longitude ?: 0.0,
+        role = prof?.role ?: accountRole,
+        roleTitle = prof?.roleTitle ?: accountRoleTitle,
       )
       _snackbarMessage.value = if (res.isSuccess) "Perfil guardado" else "Error al guardar perfil"
     }
@@ -1078,7 +1112,10 @@ class RadarQuestViewModel(
     photoThumbnailBase64: String,
     isPublic: Boolean,
   ) {
-    val myName = uiState.value.myProfile?.callsign ?: defaultDisplayName
+    val prof = uiState.value.myProfile
+    val myName = prof?.callsign ?: defaultDisplayName
+    val myRole = prof?.role ?: accountRole
+    val myRoleTitle = prof?.roleTitle ?: accountRoleTitle
     val loc = _currentLocation.value
     val lat = loc?.latitude ?: mission.latitude
     val lon = loc?.longitude ?: mission.longitude
@@ -1095,6 +1132,8 @@ class RadarQuestViewModel(
         latitude = lat,
         longitude = lon,
         isPublic = isPublic,
+        authorRole = myRole,
+        authorRoleTitle = myRoleTitle,
       )
       if (res.isSuccess) {
         repository.awardPlayerStats(addXp = mission.xpReward, addMissionsCompleted = 1L)

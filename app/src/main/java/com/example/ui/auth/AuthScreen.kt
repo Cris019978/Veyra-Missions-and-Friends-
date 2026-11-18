@@ -1,160 +1,198 @@
 package com.example.ui.auth
 
-import android.app.Activity
-import android.content.Context
-import android.util.Log
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AccountCircle
-import androidx.compose.material.icons.rounded.CameraAlt
-import androidx.compose.material.icons.rounded.Explore
-import androidx.compose.material.icons.rounded.Groups
-import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.automirrored.rounded.Login
+import androidx.compose.material.icons.rounded.AlternateEmail
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.PersonAdd
 import androidx.compose.material.icons.rounded.Radar
+import androidx.compose.material.icons.rounded.Science
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.credentials.CredentialManager
-import androidx.credentials.CustomCredential
-import androidx.credentials.GetCredentialRequest
-import androidx.credentials.exceptions.GetCredentialCancellationException
-import androidx.credentials.exceptions.NoCredentialException
 import com.example.R
-import com.google.android.libraries.identity.googleid.GetGoogleIdOption
-import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
-import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
-import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.GoogleAuthProvider
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
-import kotlinx.coroutines.withTimeoutOrNull
+import com.example.data.local.LocalAuthManager
+import com.example.data.local.LocalAuthResult
+
+private val DarkObsidian = Color(0xFF0B0E14)
+private val DarkCardSurface = Color(0xFF141923)
+private val DarkCardBorder = Color(0xFF253042)
+private val DarkInputFill = Color(0xFF0F141D)
+private val VeyraTeal = Color(0xFF00E5C3)
+private val VeyraTealContent = Color(0xFF05241F)
+private val VeyraTextPrimary = Color(0xFFF1F5F9)
+private val VeyraTextSecondary = Color(0xFF94A3B8)
+private val VeyraErrorBg = Color(0xFF3A1419)
+private val VeyraErrorText = Color(0xFFFFB4AB)
 
 @Composable
 fun AuthScreen(
-  firebaseAuth: FirebaseAuth? = null,
-  playServicesAvailable: Boolean = true,
-  playServicesMessage: String? = null,
-  allowAutoSignIn: Boolean = true,
-  onAuthSuccess: () -> Unit,
-  onContinueLocalMode: (() -> Unit)? = null,
+  onLogin: (username: String, pin: String) -> LocalAuthResult,
+  onRegister: (username: String, pin: String, inviteCode: String) -> LocalAuthResult,
+  onAuthenticated: () -> Unit = {},
 ) {
-  val context = LocalContext.current
-  val scope = rememberCoroutineScope()
-  val credentialManager = remember(context) {
-    runCatching { CredentialManager.create(context) }.getOrNull()
-  }
-  val clientId = remember(context) {
-    runCatching { context.getString(R.string.default_web_client_id) }.getOrDefault("")
-  }
-  val canAttemptGoogleSignIn = firebaseAuth != null && clientId.isNotBlank() && playServicesAvailable && credentialManager != null
+  // Block system Back button while unauthenticated on the Auth screen
+  BackHandler(enabled = true) {}
 
-  var isLoading by remember { mutableStateOf(false) }
-  var errorMessage by remember(playServicesMessage) { mutableStateOf(playServicesMessage) }
+  var isRegisterMode by rememberSaveable { mutableStateOf(false) }
+  var username by rememberSaveable { mutableStateOf("") }
+  var pin by rememberSaveable { mutableStateOf("") }
+  var pinVisible by rememberSaveable { mutableStateOf(false) }
+  var showInviteField by rememberSaveable { mutableStateOf(false) }
+  var inviteCode by rememberSaveable { mutableStateOf("") }
+  var errorMessage by remember { mutableStateOf<String?>(null) }
 
-  LaunchedEffect(canAttemptGoogleSignIn, firebaseAuth, allowAutoSignIn) {
-    if (firebaseAuth != null && runCatching { firebaseAuth.currentUser != null }.getOrDefault(false)) {
-      onAuthSuccess()
-      return@LaunchedEffect
+  fun submitAuth() {
+    val cleanUser = LocalAuthManager.normalizeUsername(username)
+    if (cleanUser.length < 3) {
+      errorMessage = "Ingresa un nombre de usuario único de al menos 3 letras o números."
+      return
     }
-    if (canAttemptGoogleSignIn && allowAutoSignIn) {
-      attemptAutoSignIn(
-        context = context,
-        credentialManager = credentialManager,
-        firebaseAuth = firebaseAuth,
-        clientId = clientId,
-        onAuthSuccess = onAuthSuccess,
-        scope = scope,
-      )
+    if (pin.trim().length < 4) {
+      errorMessage = "El PIN o contraseña corta debe tener al menos 4 caracteres o dígitos."
+      return
+    }
+
+    val result = if (isRegisterMode) {
+      onRegister(cleanUser, pin, inviteCode)
+    } else {
+      onLogin(cleanUser, pin)
+    }
+
+    when (result) {
+      is LocalAuthResult.Success -> {
+        errorMessage = null
+        onAuthenticated()
+      }
+      is LocalAuthResult.Error -> {
+        errorMessage = result.message
+      }
     }
   }
 
-  Scaffold { innerPadding ->
+  val textFieldColors = OutlinedTextFieldDefaults.colors(
+    focusedTextColor = VeyraTextPrimary,
+    unfocusedTextColor = VeyraTextPrimary,
+    focusedContainerColor = DarkInputFill,
+    unfocusedContainerColor = DarkInputFill,
+    focusedBorderColor = VeyraTeal,
+    unfocusedBorderColor = DarkCardBorder,
+    focusedLabelColor = VeyraTeal,
+    unfocusedLabelColor = VeyraTextSecondary,
+    focusedLeadingIconColor = VeyraTeal,
+    unfocusedLeadingIconColor = VeyraTextSecondary,
+    focusedTrailingIconColor = VeyraTeal,
+    unfocusedTrailingIconColor = VeyraTextSecondary,
+    focusedPlaceholderColor = VeyraTextSecondary.copy(alpha = 0.6f),
+    unfocusedPlaceholderColor = VeyraTextSecondary.copy(alpha = 0.6f),
+    cursorColor = VeyraTeal,
+  )
+
+  Scaffold(
+    containerColor = DarkObsidian,
+    contentWindowInsets = WindowInsets.safeDrawing,
+  ) { innerPadding ->
     Box(
       modifier = Modifier
         .fillMaxSize()
         .background(
-          Brush.verticalGradient(
-            listOf(
-              MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
-              MaterialTheme.colorScheme.background,
-              MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.25f),
-            )
+          Brush.radialGradient(
+            colors = listOf(
+              VeyraTeal.copy(alpha = 0.16f),
+              DarkObsidian,
+              Color(0xFF07090D),
+            ),
+            radius = 950f,
           )
         )
         .padding(innerPadding)
-        .statusBarsPadding(),
+        .imePadding(),
       contentAlignment = Alignment.Center,
     ) {
       Column(
         modifier = Modifier
-          .widthIn(max = 520.dp)
+          .widthIn(max = 460.dp)
           .fillMaxSize()
           .verticalScroll(rememberScrollState())
-          .padding(horizontal = 24.dp, vertical = 20.dp),
+          .padding(horizontal = 22.dp, vertical = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
       ) {
+        // Minimalist Dark Header Banner
         Surface(
-          shape = MaterialTheme.shapes.extraLarge,
-          tonalElevation = 4.dp,
-          shadowElevation = 6.dp,
+          color = DarkCardSurface,
+          shape = RoundedCornerShape(28.dp),
+          border = BorderStroke(1.dp, DarkCardBorder),
           modifier = Modifier
             .fillMaxWidth()
-            .height(210.dp),
+            .height(172.dp),
         ) {
           Box(modifier = Modifier.fillMaxSize()) {
             Image(
               painter = painterResource(id = R.drawable.img_auth_hero),
               contentDescription = stringResource(id = R.string.auth_title),
               contentScale = ContentScale.Crop,
+              alpha = 0.42f,
               modifier = Modifier.fillMaxSize(),
             )
             Box(
@@ -163,8 +201,8 @@ fun AuthScreen(
                 .background(
                   Brush.verticalGradient(
                     listOf(
-                      MaterialTheme.colorScheme.surface.copy(alpha = 0.05f),
-                      MaterialTheme.colorScheme.surface.copy(alpha = 0.78f),
+                      DarkObsidian.copy(alpha = 0.2f),
+                      DarkObsidian.copy(alpha = 0.92f),
                     )
                   )
                 )
@@ -173,274 +211,304 @@ fun AuthScreen(
               modifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(18.dp),
+              verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-              Surface(
-                color = MaterialTheme.colorScheme.primary,
-                shape = RoundedCornerShape(50),
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
               ) {
+                Box(
+                  modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .background(VeyraTeal.copy(alpha = 0.18f)),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Icon(
+                    imageVector = Icons.Rounded.Radar,
+                    contentDescription = null,
+                    tint = VeyraTeal,
+                    modifier = Modifier.size(18.dp),
+                  )
+                }
                 Text(
-                  text = stringResource(id = R.string.publication_name).uppercase(),
-                  style = MaterialTheme.typography.labelSmall,
-                  color = MaterialTheme.colorScheme.onPrimary,
-                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                  text = stringResource(id = R.string.auth_title),
+                  style = MaterialTheme.typography.headlineLarge,
+                  fontWeight = FontWeight.ExtraBold,
+                  color = VeyraTextPrimary,
                 )
               }
-              Spacer(modifier = Modifier.height(6.dp))
               Text(
-                text = stringResource(id = R.string.auth_title),
-                style = MaterialTheme.typography.displaySmall,
-                color = MaterialTheme.colorScheme.onSurface,
+                text = "Identidad local ligera • Radar en vivo y misiones",
+                style = MaterialTheme.typography.bodySmall,
+                color = VeyraTextSecondary,
               )
             }
           }
         }
 
-        Text(
-          text = stringResource(id = R.string.auth_subtitle),
-          style = MaterialTheme.typography.bodyLarge,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          textAlign = TextAlign.Center,
-        )
-
+        // Main Minimalist Dark Auth Card
         Card(
-          colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-          ),
-          shape = MaterialTheme.shapes.large,
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-          ) {
-            FeatureBullet(
-              icon = Icons.Rounded.Radar,
-              text = stringResource(id = R.string.auth_feature_radar),
-            )
-            FeatureBullet(
-              icon = Icons.Rounded.CameraAlt,
-              text = stringResource(id = R.string.auth_feature_missions),
-            )
-            FeatureBullet(
-              icon = Icons.Rounded.Groups,
-              text = stringResource(id = R.string.auth_feature_social),
-            )
-            FeatureBullet(
-              icon = Icons.Rounded.Palette,
-              text = stringResource(id = R.string.auth_feature_material_you),
-            )
-          }
-        }
-
-        if (!errorMessage.isNullOrBlank()) {
-          Surface(
-            color = MaterialTheme.colorScheme.errorContainer,
-            shape = MaterialTheme.shapes.medium,
-            modifier = Modifier
-              .fillMaxWidth()
-              .testTag("auth_error_banner"),
-          ) {
-            Text(
-              text = errorMessage.orEmpty(),
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onErrorContainer,
-              textAlign = TextAlign.Center,
-              modifier = Modifier.padding(12.dp),
-            )
-          }
-        }
-
-        Button(
-          onClick = {
-            if (!canAttemptGoogleSignIn || firebaseAuth == null || credentialManager == null) {
-              errorMessage = playServicesMessage ?: "Google Services no disponible en este entorno. Usa el modo exploración local."
-              return@Button
-            }
-            isLoading = true
-            errorMessage = null
-            onGoogleSignInClicked(
-              context = context,
-              credentialManager = credentialManager,
-              firebaseAuth = firebaseAuth,
-              clientId = clientId,
-              onAuthSuccess = {
-                isLoading = false
-                onAuthSuccess()
-              },
-              onAuthError = { msg ->
-                isLoading = false
-                errorMessage = msg
-              },
-              onAuthCancelled = {
-                isLoading = false
-                errorMessage = "Inicio de sesión cancelado. Reintenta o explora en modo local."
-              },
-              scope = scope,
-            )
-          },
-          enabled = !isLoading,
-          shape = MaterialTheme.shapes.large,
-          contentPadding = ButtonDefaults.ContentPadding,
+          colors = CardDefaults.cardColors(containerColor = DarkCardSurface),
+          shape = RoundedCornerShape(28.dp),
+          border = BorderStroke(1.dp, DarkCardBorder),
           modifier = Modifier
             .fillMaxWidth()
-            .height(54.dp)
-            .testTag("google_sign_in_button"),
+            .testTag("veyra_auth_card"),
         ) {
-          if (isLoading) {
-            CircularProgressIndicator(
-              modifier = Modifier.size(22.dp),
-              color = MaterialTheme.colorScheme.onPrimary,
-              strokeWidth = 2.dp,
-            )
-          } else {
-            Icon(
-              imageVector = Icons.Rounded.AccountCircle,
-              contentDescription = null,
-              modifier = Modifier.size(22.dp),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-              text = stringResource(id = R.string.auth_sign_in_google),
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold,
-            )
-          }
-        }
-
-        if (onContinueLocalMode != null) {
-          OutlinedButton(
-            onClick = onContinueLocalMode,
-            shape = MaterialTheme.shapes.large,
-            contentPadding = ButtonDefaults.ContentPadding,
-            modifier = Modifier
-              .fillMaxWidth()
-              .height(50.dp)
-              .testTag("continue_local_mode_button"),
+          Column(
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
           ) {
-            Icon(Icons.Rounded.Explore, contentDescription = null, modifier = Modifier.size(20.dp))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-              text = "Explorar en modo local",
-              style = MaterialTheme.typography.titleSmall,
-              fontWeight = FontWeight.SemiBold,
+            // Segmented Toggle: Iniciar Sesión vs Crear Cuenta
+            Surface(
+              color = DarkInputFill,
+              shape = RoundedCornerShape(16.dp),
+              border = BorderStroke(1.dp, DarkCardBorder),
+              modifier = Modifier.fillMaxWidth(),
+            ) {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+              ) {
+                AuthModePill(
+                  label = stringResource(id = R.string.auth_mode_login),
+                  selected = !isRegisterMode,
+                  onClick = {
+                    isRegisterMode = false
+                    errorMessage = null
+                  },
+                  modifier = Modifier
+                    .weight(1f)
+                    .testTag("auth_mode_login_tab"),
+                )
+                AuthModePill(
+                  label = stringResource(id = R.string.auth_mode_register),
+                  selected = isRegisterMode,
+                  onClick = {
+                    isRegisterMode = true
+                    errorMessage = null
+                  },
+                  modifier = Modifier
+                    .weight(1f)
+                    .testTag("auth_mode_register_tab"),
+                )
+              }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+              Text(
+                text = if (isRegisterMode) "Crea tu acceso rápido" else "Entra a tu radar",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = VeyraTextPrimary,
+              )
+              Text(
+                text = if (isRegisterMode) {
+                  "Solo elige tu @usuario único y un PIN corto (mín. 4 caracteres)."
+                } else {
+                  "Ingresa tu @usuario y tu PIN guardado en este dispositivo."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = VeyraTextSecondary,
+              )
+            }
+
+            // Field 1: Unique Username
+            OutlinedTextField(
+              value = username,
+              onValueChange = { input ->
+                val sanitized = input
+                  .lowercase()
+                  .replace(" ", "")
+                  .replace(Regex("[^a-z0-9_@]"), "")
+                  .take(25)
+                username = sanitized
+                if (errorMessage != null) errorMessage = null
+              },
+              label = { Text(stringResource(id = R.string.auth_username_label)) },
+              placeholder = { Text("@explorador") },
+              leadingIcon = {
+                Icon(Icons.Rounded.AlternateEmail, contentDescription = null)
+              },
+              singleLine = true,
+              colors = textFieldColors,
+              shape = RoundedCornerShape(16.dp),
+              keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Ascii,
+                imeAction = ImeAction.Next,
+              ),
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("auth_username_input"),
             )
+
+            // Field 2: Short PIN / Password
+            OutlinedTextField(
+              value = pin,
+              onValueChange = { input ->
+                pin = input.take(20)
+                if (errorMessage != null) errorMessage = null
+              },
+              label = { Text(stringResource(id = R.string.auth_pin_label)) },
+              placeholder = { Text("Mínimo 4 dígitos o caracteres") },
+              leadingIcon = {
+                Icon(Icons.Rounded.Lock, contentDescription = null)
+              },
+              trailingIcon = {
+                IconButton(
+                  onClick = { pinVisible = !pinVisible },
+                  modifier = Modifier.testTag("auth_pin_visibility_toggle"),
+                ) {
+                  Icon(
+                    imageVector = if (pinVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                    contentDescription = if (pinVisible) "Ocultar PIN" else "Mostrar PIN",
+                  )
+                }
+              },
+              visualTransformation = if (pinVisible) VisualTransformation.None else PasswordVisualTransformation(),
+              singleLine = true,
+              colors = textFieldColors,
+              shape = RoundedCornerShape(16.dp),
+              keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Password,
+                imeAction = if (isRegisterMode && showInviteField) ImeAction.Next else ImeAction.Done,
+              ),
+              keyboardActions = KeyboardActions(
+                onDone = { submitAuth() },
+              ),
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("auth_pin_input"),
+            )
+
+            // Optional expandable Beta Tester invite code inside Create Account mode
+            AnimatedVisibility(visible = isRegisterMode) {
+              Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(
+                  onClick = { showInviteField = !showInviteField },
+                  modifier = Modifier
+                    .align(Alignment.Start)
+                    .testTag("toggle_invite_code_button"),
+                ) {
+                  Icon(
+                    imageVector = Icons.Rounded.Science,
+                    contentDescription = null,
+                    tint = VeyraTeal,
+                    modifier = Modifier.size(16.dp),
+                  )
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text(
+                    text = if (showInviteField) "Ocultar código Beta Tester" else "¿Tienes código Beta Tester?",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = VeyraTeal,
+                  )
+                }
+
+                AnimatedVisibility(visible = showInviteField) {
+                  OutlinedTextField(
+                    value = inviteCode,
+                    onValueChange = { inviteCode = it.uppercase().take(24) },
+                    label = { Text("Código Beta Tester (opcional)") },
+                    placeholder = { Text("Ej. VEYRA-BETA") },
+                    leadingIcon = {
+                      Icon(Icons.Rounded.Science, contentDescription = null)
+                    },
+                    singleLine = true,
+                    colors = textFieldColors,
+                    shape = RoundedCornerShape(16.dp),
+                    keyboardOptions = KeyboardOptions(
+                      imeAction = ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(
+                      onDone = { submitAuth() },
+                    ),
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .testTag("auth_invite_code_input"),
+                  )
+                }
+              }
+            }
+
+            if (!errorMessage.isNullOrBlank()) {
+              Surface(
+                color = VeyraErrorBg,
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, VeyraErrorText.copy(alpha = 0.3f)),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .testTag("veyra_auth_error_banner"),
+              ) {
+                Text(
+                  text = errorMessage.orEmpty(),
+                  style = MaterialTheme.typography.bodySmall,
+                  color = VeyraErrorText,
+                  modifier = Modifier.padding(12.dp),
+                )
+              }
+            }
+
+            Button(
+              onClick = { submitAuth() },
+              shape = RoundedCornerShape(18.dp),
+              colors = ButtonDefaults.buttonColors(
+                containerColor = VeyraTeal,
+                contentColor = VeyraTealContent,
+              ),
+              modifier = Modifier
+                .fillMaxWidth()
+                .height(54.dp)
+                .testTag("veyra_submit_auth_button"),
+            ) {
+              Icon(
+                imageVector = if (isRegisterMode) Icons.Rounded.PersonAdd else Icons.AutoMirrored.Rounded.Login,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+              )
+              Spacer(modifier = Modifier.width(8.dp))
+              Text(
+                text = if (isRegisterMode) {
+                  stringResource(id = R.string.auth_create_account_cta)
+                } else {
+                  stringResource(id = R.string.auth_submit_veyra)
+                },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+              )
+            }
           }
         }
       }
-    }
-  }
-}
-
-private fun attemptAutoSignIn(
-  context: Context,
-  credentialManager: CredentialManager?,
-  firebaseAuth: FirebaseAuth?,
-  clientId: String,
-  onAuthSuccess: () -> Unit,
-  scope: CoroutineScope,
-) {
-  if (credentialManager == null || firebaseAuth == null || clientId.isBlank()) return
-  if (runCatching { firebaseAuth.currentUser != null }.getOrDefault(false)) {
-    onAuthSuccess()
-    return
-  }
-  val googleIdOption = runCatching {
-    GetGoogleIdOption.Builder()
-      .setFilterByAuthorizedAccounts(true)
-      .setServerClientId(clientId)
-      .setAutoSelectEnabled(true)
-      .build()
-  }.getOrNull() ?: return
-
-  val request = GetCredentialRequest.Builder()
-    .addCredentialOption(googleIdOption)
-    .build()
-
-  scope.launch {
-    try {
-      val result = withTimeoutOrNull(8_000L) {
-        credentialManager.getCredential(context, request)
-      } ?: return@launch
-      val cred = result.credential
-      if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-        val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
-        firebaseAuth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
-        onAuthSuccess()
-      }
-    } catch (e: Exception) {
-      Log.d("Auth", "Silent auto sign-in skipped: ${e.message}")
-    }
-  }
-}
-
-private fun onGoogleSignInClicked(
-  context: Context,
-  credentialManager: CredentialManager,
-  firebaseAuth: FirebaseAuth,
-  clientId: String,
-  onAuthSuccess: () -> Unit,
-  onAuthError: (String) -> Unit,
-  onAuthCancelled: () -> Unit,
-  scope: CoroutineScope,
-) {
-  val activityContext = context as? Activity
-  if (activityContext == null) {
-    onAuthError("No se encontró una Activity válida para iniciar sesión.")
-    return
-  }
-
-  val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
-  val request = GetCredentialRequest.Builder()
-    .addCredentialOption(signInOption)
-    .build()
-
-  scope.launch {
-    try {
-      val cred = credentialManager.getCredential(activityContext, request).credential
-      if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-        val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
-        firebaseAuth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
-        onAuthSuccess()
-      } else {
-        onAuthError("Tipo de credencial inesperado al iniciar sesión.")
-      }
-    } catch (e: GetCredentialCancellationException) {
-      Log.w("Auth", "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
-      onAuthCancelled()
-    } catch (e: NoCredentialException) {
-      Log.w("Auth", "No Google credentials available on device/emulator: ${e.message}", e)
-      onAuthError("No hay cuenta de Google disponible en este dispositivo/emulador. Usa el modo exploración local.")
-    } catch (e: Exception) {
-      Log.e("Auth", "Google Sign-In failed", e)
-      onAuthError(e.localizedMessage ?: "No se pudo conectar con Google Services.")
     }
   }
 }
 
 @Composable
-private fun FeatureBullet(icon: ImageVector, text: String) {
-  Row(
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(12.dp),
+private fun AuthModePill(
+  label: String,
+  selected: Boolean,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    color = if (selected) VeyraTeal else Color.Transparent,
+    contentColor = if (selected) VeyraTealContent else VeyraTextSecondary,
+    shape = RoundedCornerShape(12.dp),
+    modifier = modifier
+      .height(48.dp)
+      .clip(RoundedCornerShape(12.dp))
+      .clickable(onClick = onClick),
   ) {
-    Box(
-      modifier = Modifier
-        .size(36.dp)
-        .clip(CircleShape)
-        .background(MaterialTheme.colorScheme.primaryContainer),
-      contentAlignment = Alignment.Center,
-    ) {
-      Icon(
-        imageVector = icon,
-        contentDescription = null,
-        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-        modifier = Modifier.size(20.dp),
+    Box(contentAlignment = Alignment.Center) {
+      Text(
+        text = label,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+        color = if (selected) VeyraTealContent else VeyraTextSecondary,
       )
     }
-    Text(
-      text = text,
-      style = MaterialTheme.typography.bodyMedium,
-      color = MaterialTheme.colorScheme.onSurface,
-    )
   }
 }

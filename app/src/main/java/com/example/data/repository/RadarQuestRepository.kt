@@ -1,6 +1,7 @@
 package com.example.data.repository
 
 import com.example.data.local.LocalAccountStore
+import com.example.data.local.LocalAuthManager
 import com.example.data.model.Challenge
 import com.example.data.model.Mission
 import com.example.data.model.MissionCompletion
@@ -10,7 +11,6 @@ import com.example.data.model.UserSettings
 import com.example.data.remote.OperationType
 import com.example.data.remote.handleFirestoreError
 import com.google.firebase.Timestamp
-import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
@@ -27,20 +27,17 @@ import kotlinx.coroutines.tasks.await
 import java.util.UUID
 
 /**
- * Dual-mode repository:
- * - When [db] and [auth] are non-null, reads and writes directly against Firebase Firestore.
- * - When [db] or [auth] is null (e.g. google-services.json absent or Google Services unavailable),
- *   transparently operates in local exploration mode backed by [LocalAccountStore] + reactive flows
- *   without requiring authentication or throwing Firebase exceptions.
+ * Dual-mode repository operating 100% locally with [LocalAccountStore] when [db] is null,
+ * without any dependency on Firebase Auth or Google Sign-In.
  */
 class RadarQuestRepository(
   private val db: FirebaseFirestore? = null,
-  private val auth: FirebaseAuth? = null,
+  private val localUserId: String = LOCAL_USER_ID,
   private val localAccountStore: LocalAccountStore? = null,
 ) {
 
   val isCloudAvailable: Boolean
-    get() = db != null && auth != null
+    get() = db != null
 
   private val localSettingsFlow = MutableStateFlow<UserSettings?>(null)
   private val localProfileFlow = MutableStateFlow<PlayerProfile?>(null)
@@ -52,8 +49,7 @@ class RadarQuestRepository(
   private val localInteractionsFlow = MutableStateFlow<List<PlayerInteraction>>(emptyList())
 
   private fun requireUserId(): String =
-    auth?.currentUser?.uid
-      ?: throw IllegalStateException("El usuario debe iniciar sesión con Google.")
+    localUserId.ifBlank { LOCAL_USER_ID }
 
   private fun <T> Flow<T>.logFirestoreErrors(op: OperationType, path: String, uid: String): Flow<T> =
     catch { error ->
@@ -63,7 +59,7 @@ class RadarQuestRepository(
           .firstOrNull()
       if (firestoreError == null && error is CancellationException) throw error
       val exceptionToLog = firestoreError ?: (error as? Exception)
-      if (exceptionToLog != null && auth?.currentUser?.uid == uid) {
+      if (exceptionToLog != null && requireUserId() == uid) {
         handleFirestoreError(exceptionToLog, op, path)
       }
       throw error
@@ -72,7 +68,7 @@ class RadarQuestRepository(
   // --- User Settings ---
   fun observeUserSettings(uid: String): Flow<UserSettings?> {
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
       return localSettingsFlow
     }
     val path = "users/$uid"
@@ -115,9 +111,9 @@ class RadarQuestRepository(
     }
 
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
       localSettingsFlow.value = settings.copy(
-        userId = settings.userId.ifBlank { LOCAL_USER_ID },
+        userId = settings.userId.ifBlank { requireUserId() },
         playStyle = safePlayStyle,
         favoriteCategories = safeCategories,
         privacyComfort = safePrivacy,
@@ -173,7 +169,7 @@ class RadarQuestRepository(
       Unit
     }.onFailure { e ->
       if (e is CancellationException) throw e
-      handleFirestoreError(e, OperationType.WRITE, "users/${auth.currentUser?.uid}")
+      handleFirestoreError(e, OperationType.WRITE, "users/${requireUserId()}")
     }
   }
 
@@ -181,16 +177,17 @@ class RadarQuestRepository(
     val cached = localProfileFlow.value
     if (cached != null) return cached
     val stored = runCatching { localAccountStore?.getSnapshotOnce()?.savedProfile }.getOrNull()
-    if (stored != null) {
+    if (stored != null && (stored.userId == requireUserId() || stored.userId == LOCAL_USER_ID)) {
       localProfileFlow.value = stored
+      return stored
     }
-    return stored
+    return null
   }
 
   // --- Players & Real-Time Location ---
   fun observeMyProfile(uid: String): Flow<PlayerProfile?> {
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
       return flow {
         ensureHydratedLocalProfile()
         emitAll(localProfileFlow)
@@ -215,7 +212,7 @@ class RadarQuestRepository(
 
   fun observeOnlinePlayers(uid: String): Flow<List<PlayerProfile>> {
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
       return localProfileFlow.map { prof -> listOfNotNull(prof) }
     }
     val path = "players"
@@ -241,6 +238,10 @@ class RadarQuestRepository(
     isOnline: Boolean,
     latitude: Double,
     longitude: Double,
+    role: String? = null,
+    roleTitle: String? = null,
+    initialXp: Long = 0L,
+    initialLevel: Long = 1L,
   ): Result<Unit> {
     val safeUsername = username.trim().replace(Regex("[^a-zA-Z0-9_]"), "").take(24)
     val safeCallsign = callsign.trim().ifBlank { "Explorador" }.take(32).padEnd(2, 'X')
@@ -248,11 +249,16 @@ class RadarQuestRepository(
     val safePreset = if (bannerPreset in listOf("topo", "sunset", "cosmos", "emerald", "custom")) bannerPreset else "topo"
 
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
       val current = ensureHydratedLocalProfile()
+      val activeUid = requireUserId()
+      val resolvedRole = role?.ifBlank { null } ?: current?.role ?: LocalAuthManager.ROLE_EXPLORER
+      val resolvedTitle = roleTitle?.ifBlank { null } ?: current?.roleTitle ?: LocalAuthManager.TITLE_EXPLORER
+      val resolvedXp = current?.xp ?: initialXp.coerceAtLeast(0L)
+      val resolvedLevel = current?.level ?: initialLevel.coerceAtLeast(1L)
       val updated = PlayerProfile(
-        id = current?.id ?: LOCAL_USER_ID,
-        userId = current?.userId ?: LOCAL_USER_ID,
+        id = current?.id?.ifBlank { activeUid } ?: activeUid,
+        userId = current?.userId?.ifBlank { activeUid } ?: activeUid,
         username = safeUsername,
         callsign = safeCallsign,
         avatarIcon = avatarIcon.take(32),
@@ -265,11 +271,13 @@ class RadarQuestRepository(
         isOnline = isOnline,
         latitude = latitude.coerceIn(-90.0, 90.0),
         longitude = longitude.coerceIn(-180.0, 180.0),
-        xp = current?.xp ?: 0L,
-        level = current?.level ?: 1L,
+        xp = resolvedXp,
+        level = resolvedLevel,
         missionsCompleted = current?.missionsCompleted ?: 0L,
         helpsGiven = current?.helpsGiven ?: 0L,
         duelsWon = current?.duelsWon ?: 0L,
+        role = resolvedRole,
+        roleTitle = resolvedTitle,
       )
       localProfileFlow.value = updated
       runCatching { localAccountStore?.saveProfile(updated) }
@@ -281,7 +289,7 @@ class RadarQuestRepository(
       val docRef = firestore.collection("players").document(uid)
       val existing = docRef.get().await()
       if (existing.exists()) {
-        val updates = mapOf(
+        val updates = mutableMapOf<String, Any>(
           "username" to safeUsername,
           "callsign" to safeCallsign,
           "avatarIcon" to avatarIcon.take(32),
@@ -296,6 +304,8 @@ class RadarQuestRepository(
           "longitude" to longitude.coerceIn(-180.0, 180.0),
           "updatedAt" to FieldValue.serverTimestamp(),
         )
+        if (!role.isNullOrBlank()) updates["role"] = role
+        if (!roleTitle.isNullOrBlank()) updates["roleTitle"] = roleTitle
         docRef.update(updates).await()
       } else {
         val payload = mapOf(
@@ -312,11 +322,13 @@ class RadarQuestRepository(
           "isOnline" to isOnline,
           "latitude" to latitude.coerceIn(-90.0, 90.0),
           "longitude" to longitude.coerceIn(-180.0, 180.0),
-          "xp" to 0L,
-          "level" to 1L,
+          "xp" to initialXp.coerceAtLeast(0L),
+          "level" to initialLevel.coerceAtLeast(1L),
           "missionsCompleted" to 0L,
           "helpsGiven" to 0L,
           "duelsWon" to 0L,
+          "role" to (role?.ifBlank { null } ?: LocalAuthManager.ROLE_EXPLORER),
+          "roleTitle" to (roleTitle?.ifBlank { null } ?: LocalAuthManager.TITLE_EXPLORER),
           "createdAt" to FieldValue.serverTimestamp(),
           "updatedAt" to FieldValue.serverTimestamp(),
         )
@@ -325,16 +337,17 @@ class RadarQuestRepository(
       Unit
     }.onFailure { e ->
       if (e is CancellationException) throw e
-      handleFirestoreError(e, OperationType.WRITE, "players/${auth.currentUser?.uid}")
+      handleFirestoreError(e, OperationType.WRITE, "players/${requireUserId()}")
     }
   }
 
   suspend fun updateLiveLocation(latitude: Double, longitude: Double, isOnline: Boolean): Result<Unit> {
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
+      val uid = requireUserId()
       val current = ensureHydratedLocalProfile() ?: PlayerProfile(
-        id = LOCAL_USER_ID,
-        userId = LOCAL_USER_ID,
+        id = uid,
+        userId = uid,
         callsign = "Explorador",
       )
       val updated = current.copy(
@@ -364,7 +377,7 @@ class RadarQuestRepository(
       Unit
     }.onFailure { e ->
       if (e is CancellationException) throw e
-      handleFirestoreError(e, OperationType.UPDATE, "players/${auth.currentUser?.uid}")
+      handleFirestoreError(e, OperationType.UPDATE, "players/${requireUserId()}")
     }
   }
 
@@ -375,10 +388,11 @@ class RadarQuestRepository(
     addDuelsWon: Long = 0L,
   ): Result<Unit> {
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
+      val uid = requireUserId()
       val current = ensureHydratedLocalProfile() ?: PlayerProfile(
-        id = LOCAL_USER_ID,
-        userId = LOCAL_USER_ID,
+        id = uid,
+        userId = uid,
         callsign = "Explorador",
       )
       val newXp = (current.xp + addXp).coerceAtLeast(0L)
@@ -418,14 +432,14 @@ class RadarQuestRepository(
       Unit
     }.onFailure { e ->
       if (e is CancellationException) throw e
-      handleFirestoreError(e, OperationType.UPDATE, "players/${auth.currentUser?.uid}")
+      handleFirestoreError(e, OperationType.UPDATE, "players/${requireUserId()}")
     }
   }
 
   // --- Real-Life Missions ---
   fun observeActiveMissions(uid: String): Flow<List<Mission>> {
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
       return localMissionsFlow
     }
     val path = "missions"
@@ -440,7 +454,7 @@ class RadarQuestRepository(
 
   suspend fun fetchActiveMissionsOnce(): Result<List<Mission>> {
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
       return Result.success(localMissionsFlow.value)
     }
     return runCatching {
@@ -477,10 +491,11 @@ class RadarQuestRepository(
     val safePlace = placeLabel.trim().ifBlank { "Zona pública segura" }.take(100)
 
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
+      val uid = requireUserId()
       val localMission = Mission(
         id = id,
-        creatorId = LOCAL_USER_ID,
+        creatorId = uid,
         creatorName = creatorName.trim().ifBlank { "Explorador" }.take(40),
         title = title.trim().take(80),
         description = description.trim().take(280),
@@ -531,7 +546,7 @@ class RadarQuestRepository(
   // --- Photo-Confirmed Mission Completions ---
   fun observeMyCompletions(uid: String): Flow<List<MissionCompletion>> {
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
       return localMyCompletionsFlow
     }
     val path = "mission_completions"
@@ -546,7 +561,7 @@ class RadarQuestRepository(
 
   fun observePublicCompletions(uid: String): Flow<List<MissionCompletion>> {
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
       return localPublicCompletionsFlow
     }
     val path = "mission_completions"
@@ -570,15 +585,20 @@ class RadarQuestRepository(
     latitude: Double,
     longitude: Double,
     isPublic: Boolean = true,
+    authorRole: String = LocalAuthManager.ROLE_EXPLORER,
+    authorRoleTitle: String = LocalAuthManager.TITLE_EXPLORER,
   ): Result<String> {
     val id = "c_" + UUID.randomUUID().toString().replace("-", "").take(16)
     val safeCategory = if (category in VALID_CATEGORIES) category else "explore"
+    val safeRole = authorRole.ifBlank { LocalAuthManager.ROLE_EXPLORER }
+    val safeRoleTitle = authorRoleTitle.ifBlank { LocalAuthManager.TITLE_EXPLORER }
 
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
+      val uid = requireUserId()
       val completion = MissionCompletion(
         id = id,
-        userId = LOCAL_USER_ID,
+        userId = uid,
         userName = userName.trim().ifBlank { "Explorador" }.take(40),
         missionId = missionId.take(128),
         missionTitle = missionTitle.trim().take(80),
@@ -589,6 +609,8 @@ class RadarQuestRepository(
         latitude = latitude.coerceIn(-90.0, 90.0),
         longitude = longitude.coerceIn(-180.0, 180.0),
         isPublic = isPublic,
+        authorRole = safeRole,
+        authorRoleTitle = safeRoleTitle,
         createdAt = Timestamp.now(),
       )
       localMyCompletionsFlow.value = listOf(completion) + localMyCompletionsFlow.value
@@ -613,6 +635,8 @@ class RadarQuestRepository(
         "latitude" to latitude.coerceIn(-90.0, 90.0),
         "longitude" to longitude.coerceIn(-180.0, 180.0),
         "isPublic" to isPublic,
+        "authorRole" to safeRole,
+        "authorRoleTitle" to safeRoleTitle,
         "createdAt" to FieldValue.serverTimestamp(),
         "updatedAt" to FieldValue.serverTimestamp(),
       )
@@ -627,7 +651,7 @@ class RadarQuestRepository(
   // --- Challenges (Compete & Play) ---
   fun observeOpenChallenges(uid: String): Flow<List<Challenge>> {
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
       return localOpenChallengesFlow
     }
     val path = "challenges"
@@ -642,7 +666,7 @@ class RadarQuestRepository(
 
   fun observeMyChallenges(uid: String): Flow<List<Challenge>> {
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
       return localMyChallengesFlow
     }
     val path = "challenges"
@@ -664,17 +688,18 @@ class RadarQuestRepository(
   ): Result<String> {
     val id = "ch_" + UUID.randomUUID().toString().replace("-", "").take(16)
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
+      val uid = requireUserId()
       val localChallenge = Challenge(
         id = id,
-        creatorId = LOCAL_USER_ID,
+        creatorId = uid,
         creatorName = creatorName.trim().ifBlank { "Explorador" }.take(40),
         mode = mode,
         title = title.trim().take(80),
         missionId = missionId.take(128),
         xpStake = xpStake.coerceIn(25L, 1000L),
         status = "open",
-        participantIds = listOf(LOCAL_USER_ID),
+        participantIds = listOf(uid),
         creatorProgress = 0L,
         opponentProgress = 0L,
         createdAt = Timestamp.now(),
@@ -712,10 +737,11 @@ class RadarQuestRepository(
 
   suspend fun joinChallenge(challenge: Challenge, opponentName: String): Result<Unit> {
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
+      val uid = requireUserId()
       val updated = challenge.copy(
-        participantIds = listOf(challenge.creatorId, LOCAL_USER_ID),
-        opponentId = LOCAL_USER_ID,
+        participantIds = listOf(challenge.creatorId, uid),
+        opponentId = uid,
         opponentName = opponentName.trim().ifBlank { "Rival" }.take(40),
         status = "active",
         updatedAt = Timestamp.now(),
@@ -749,9 +775,10 @@ class RadarQuestRepository(
     newProgress: Long,
   ): Result<Unit> {
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
+      val uid = requireUserId()
       val clamped = newProgress.coerceIn(0L, 100L)
-      val isCreator = LOCAL_USER_ID == challenge.creatorId
+      val isCreator = uid == challenge.creatorId
       val newCreatorProg = if (isCreator) clamped else challenge.creatorProgress
       val newOpponentProg = if (!isCreator) clamped else challenge.opponentProgress
       val completed =
@@ -764,7 +791,7 @@ class RadarQuestRepository(
         creatorProgress = newCreatorProg,
         opponentProgress = newOpponentProg,
         status = if (completed) "completed" else "active",
-        winnerId = if (completed) LOCAL_USER_ID else challenge.winnerId,
+        winnerId = if (completed) uid else challenge.winnerId,
         updatedAt = Timestamp.now(),
       )
       localMyChallengesFlow.value = localMyChallengesFlow.value.map { if (it.id == challenge.id) updated else it }
@@ -803,7 +830,7 @@ class RadarQuestRepository(
   // --- Interactions (Help, Radar Pulse, Cheer) ---
   fun observeMyInteractions(uid: String): Flow<List<PlayerInteraction>> {
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
       return localInteractionsFlow
     }
     val path = "interactions"
@@ -826,17 +853,18 @@ class RadarQuestRepository(
   ): Result<String> {
     val id = "in_" + UUID.randomUUID().toString().replace("-", "").take(16)
     val firestore = db
-    if (firestore == null || auth == null) {
+    if (firestore == null) {
+      val uid = requireUserId()
       val localInteraction = PlayerInteraction(
         id = id,
-        fromUserId = LOCAL_USER_ID,
+        fromUserId = uid,
         fromUserName = fromUserName.trim().ifBlank { "Explorador" }.take(40),
         toUserId = toUserId.take(128),
         toUserName = toUserName.trim().ifBlank { "Jugador" }.take(40),
         type = type,
         message = message.trim().take(160),
         xpBonus = xpBonus.coerceIn(0L, 200L),
-        participantIds = listOf(LOCAL_USER_ID, toUserId),
+        participantIds = listOf(uid, toUserId),
         createdAt = Timestamp.now(),
       )
       localInteractionsFlow.value = listOf(localInteraction) + localInteractionsFlow.value

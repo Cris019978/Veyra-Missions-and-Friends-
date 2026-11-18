@@ -71,6 +71,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.ui.components.RoleTitleBadge
 import com.example.ui.theme.PaletteOption
 import com.example.ui.viewmodel.RadarQuestUiState
 import com.example.util.PhotoUtils
@@ -396,15 +397,25 @@ fun ProfileScreen(
             style = MaterialTheme.typography.headlineSmall,
             textAlign = TextAlign.Center,
           )
-          Surface(
-            color = MaterialTheme.colorScheme.secondaryContainer,
-            shape = CircleShape,
+          Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
           ) {
-            Text(
-              text = if (username.isNotBlank()) "@$username" else "@sin_usuario",
-              style = MaterialTheme.typography.labelMedium,
-              color = MaterialTheme.colorScheme.onSecondaryContainer,
-              modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            Surface(
+              color = MaterialTheme.colorScheme.secondaryContainer,
+              shape = CircleShape,
+            ) {
+              Text(
+                text = if (username.isNotBlank()) "@$username" else "@sin_usuario",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+              )
+            }
+            RoleTitleBadge(
+              role = profile?.role ?: "explorer",
+              roleTitle = profile?.roleTitle ?: "Explorador",
+              modifier = Modifier.testTag("profile_role_badge"),
             )
           }
           if (statusMsg.isNotBlank()) {

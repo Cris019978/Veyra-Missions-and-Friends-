@@ -655,11 +655,16 @@ fun CustomizeStyleScreen(
               .fillMaxWidth()
               .testTag("local_mode_account_card"),
           ) {
+            val activeHandle = profile?.username?.takeIf { it.isNotBlank() } ?: uiState.savedAccountEmail
+            val activeRoleTitle = profile?.roleTitle?.takeIf { it.isNotBlank() } ?: "Explorador"
             Text(
-              text = if (uiState.isLocalOfflineMode) {
-                "Cuenta guardada localmente en este dispositivo. No necesitas volver a iniciar sesión al abrir Veyra."
-              } else {
-                "Sesión y cuenta guardadas localmente para entrar directo cada vez que abras Veyra."
+              text = buildString {
+                if (activeHandle.isNotBlank()) {
+                  append("Sesión activa: @${activeHandle.removePrefix("@")} • $activeRoleTitle. ")
+                } else {
+                  append("Cuenta guardada localmente en este dispositivo. ")
+                }
+                append("Tu sesión y XP se conservan automáticamente al reabrir Veyra.")
               },
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,

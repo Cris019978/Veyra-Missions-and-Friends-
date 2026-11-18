@@ -9,10 +9,7 @@ import com.example.data.remote.OsmSafePlaceFinder
 import com.example.ui.crash.CrashReportActivity
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
-import com.google.firebase.Firebase
 import com.google.firebase.FirebaseApp
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -27,7 +24,6 @@ data class GooglePlayServicesStatus(
 
 data class FirebaseRuntimeState(
   val isAvailable: Boolean,
-  val auth: FirebaseAuth? = null,
   val firestore: FirebaseFirestore? = null,
   val playServicesStatus: GooglePlayServicesStatus = GooglePlayServicesStatus(false, -1, null),
   val failureReason: String? = null,
@@ -214,13 +210,6 @@ object SafeRuntimeBootstrap {
         )
       }
 
-      val auth = try {
-        Firebase.auth
-      } catch (t: Throwable) {
-        Log.w(TAG, "FirebaseAuth unavailable: ${t.message}", t)
-        null
-      }
-
       val firestore = try {
         if (databaseId.isNotBlank()) {
           FirebaseFirestore.getInstance(firebaseApp, databaseId)
@@ -232,10 +221,9 @@ object SafeRuntimeBootstrap {
         null
       }
 
-      if (auth == null || firestore == null) {
+      if (firestore == null) {
         FirebaseRuntimeState(
           isAvailable = false,
-          auth = null,
           firestore = null,
           playServicesStatus = playStatus,
           failureReason = playStatus.statusMessage ?: "Servicios de Firebase no disponibles en este entorno",
@@ -243,7 +231,6 @@ object SafeRuntimeBootstrap {
       } else {
         FirebaseRuntimeState(
           isAvailable = true,
-          auth = auth,
           firestore = firestore,
           playServicesStatus = playStatus,
           failureReason = playStatus.statusMessage,

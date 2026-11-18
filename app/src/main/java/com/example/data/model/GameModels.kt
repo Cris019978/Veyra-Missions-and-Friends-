@@ -67,6 +67,8 @@ data class PlayerProfile(
   val missionsCompleted: Long = 0L,
   val helpsGiven: Long = 0L,
   val duelsWon: Long = 0L,
+  val role: String = "explorer", // explorer, creator, beta_tester
+  val roleTitle: String = "Explorador",
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null,
 )
@@ -106,6 +108,8 @@ data class MissionCompletion(
   val latitude: Double = 0.0,
   val longitude: Double = 0.0,
   val isPublic: Boolean = true,
+  val authorRole: String = "explorer",
+  val authorRoleTitle: String = "Explorador",
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null,
 )

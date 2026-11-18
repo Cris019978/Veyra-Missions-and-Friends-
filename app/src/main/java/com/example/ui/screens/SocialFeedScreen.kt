@@ -60,9 +60,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import com.example.data.model.MissionCategory
 import com.example.data.model.MissionCompletion
 import com.example.data.model.PlayerProfile
+import com.example.ui.components.RoleTitleBadge
 import com.example.ui.viewmodel.RadarQuestUiState
 import com.example.util.PhotoUtils
 
@@ -377,9 +380,12 @@ private fun SocialFeedPostCard(
             }
           }
 
+          val postRole = authorProfile?.role?.takeIf { it.isNotBlank() } ?: comp.authorRole
+          val postRoleTitle = authorProfile?.roleTitle?.takeIf { it.isNotBlank() } ?: comp.authorRoleTitle
+          @OptIn(ExperimentalLayoutApi::class)
           Column {
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
+            FlowRow(
+              verticalArrangement = Arrangement.spacedBy(4.dp),
               horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
               Text(
@@ -388,14 +394,23 @@ private fun SocialFeedPostCard(
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.align(Alignment.CenterVertically),
               )
               if (!authorProfile?.username.isNullOrBlank()) {
                 Text(
                   text = "@${authorProfile?.username}",
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier.align(Alignment.CenterVertically),
                 )
               }
+              RoleTitleBadge(
+                role = postRole,
+                roleTitle = postRoleTitle,
+                modifier = Modifier
+                  .align(Alignment.CenterVertically)
+                  .testTag("social_post_role_badge_${comp.id}"),
+              )
             }
             Text(
               text = "${cat.label} • Misión confirmada",

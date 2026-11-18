@@ -15,6 +15,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
@@ -122,7 +124,7 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `social feed screen shows public photo completion and allows cheering`() {
+  fun `social feed screen shows public photo completion with role badge and allows cheering`() {
     var cheeredTarget: MissionCompletion? = null
     val completion = MissionCompletion(
       id = "comp_social_1",
@@ -135,6 +137,8 @@ class ExampleRobolectricTest {
       caption = "¡Confirmada cerca del lago!",
       photoThumbnail = "invalid_placeholder_ok",
       isPublic = true,
+      authorRole = "beta_tester",
+      authorRoleTitle = "Beta Tester",
     )
 
     composeTestRule.setContent {
@@ -149,6 +153,8 @@ class ExampleRobolectricTest {
 
     composeTestRule.onNodeWithText("Red Social").assertIsDisplayed()
     composeTestRule.onNodeWithText("Luna").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("social_post_role_badge_comp_social_1").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Beta Tester").assertIsDisplayed()
     composeTestRule.onNodeWithText("Árbol centenario")
       .performScrollTo()
       .assertIsDisplayed()
@@ -504,7 +510,7 @@ class ExampleRobolectricTest {
 
   @Test
   fun `radarQuestRepository operates cleanly in local exploration mode without Firebase`() = runBlocking {
-    val repo = RadarQuestRepository(db = null, auth = null)
+    val repo = RadarQuestRepository(db = null)
     assertFalse(repo.isCloudAvailable)
 
     val saveProfileRes = repo.ensureOrUpdatePlayerProfile(
@@ -640,27 +646,120 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `auth screen renders Play Services warning when unavailable and allows continuing in local mode`() {
-    var continuedLocal = false
+  fun `auth screen toggles login and register with 2 primary fields and validates PIN`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val authManager = com.example.data.local.LocalAuthManager(context)
+    authManager.clearAllAccountsForTest()
+
     composeTestRule.setContent {
-      RadarQuestTheme {
+      RadarQuestTheme(themeMode = "dark") {
         com.example.ui.auth.AuthScreen(
-          firebaseAuth = null,
-          playServicesAvailable = false,
-          playServicesMessage = "Google Play Services no está instalado en este dispositivo/emulador",
-          onAuthSuccess = {},
-          onContinueLocalMode = { continuedLocal = true },
+          onLogin = { u, p -> authManager.login(u, p) },
+          onRegister = { u, p, code -> authManager.registerAccount(u, p, code) },
         )
       }
     }
 
-    composeTestRule.onNodeWithTag("auth_error_banner").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Continuar con Google").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
-    composeTestRule.onNodeWithTag("continue_local_mode_button")
-      .performScrollTo()
-      .performClick()
-    assertTrue(continuedLocal)
+    // Default Login mode shows 2 primary inputs: username & PIN
+    composeTestRule.onNodeWithTag("auth_username_input").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("auth_pin_input").assertIsDisplayed()
+
+    // Short PIN rejected
+    composeTestRule.onNodeWithTag("auth_username_input").performScrollTo().performTextInput("@explorador")
+    composeTestRule.onNodeWithTag("auth_pin_input").performScrollTo().performTextInput("12")
+    composeTestRule.onNodeWithTag("veyra_submit_auth_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("veyra_auth_error_banner").assertIsDisplayed()
+    assertFalse(authManager.isLoggedIn())
+
+    // Switch to Crear Cuenta tab & create account with creator handle
+    composeTestRule.onNodeWithTag("auth_mode_register_tab").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("auth_username_input").performScrollTo().performTextReplacement("@veyra")
+    composeTestRule.onNodeWithTag("auth_pin_input").performScrollTo().performTextReplacement("4321")
+    composeTestRule.onNodeWithTag("veyra_submit_auth_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+
+    assertTrue(authManager.isLoggedIn())
+    val session = authManager.getCurrentSession()
+    assertEquals("veyra", session?.username)
+    assertEquals("creator", session?.role)
+    assertEquals("Creador", session?.roleTitle)
+  }
+
+  @Test
+  fun `localAuthManager hashes PIN with SHA-256, persists session, assigns roles, and clears isLoggedIn on logout`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val manager = com.example.data.local.LocalAuthManager(context)
+    manager.clearAllAccountsForTest()
+
+    // 1. Default explorer role + SHA-256 PIN verification
+    val regUser = manager.registerAccount("@ana_radar", "9876")
+    assertTrue(regUser is com.example.data.local.LocalAuthResult.Success)
+    val userSession = (regUser as com.example.data.local.LocalAuthResult.Success).session
+    assertEquals("explorer", userSession.role)
+    assertEquals("Explorador", userSession.roleTitle)
+    assertFalse(userSession.pinHash == "9876")
+    assertEquals(64, userSession.pinHash.length)
+
+    // Verify SharedPreferences does NOT store plaintext PIN anywhere
+    val rawPrefs = context.getSharedPreferences("veyra_local_auth_prefs", Context.MODE_PRIVATE).all.values.joinToString(",")
+    assertFalse(rawPrefs.contains("9876"))
+
+    // 2. Beta tester by invite code
+    manager.logout()
+    assertFalse(manager.isLoggedIn())
+
+    val regBeta = manager.registerAccount("@luis_beta", "2025", "VEYRA-BETA")
+    assertTrue(regBeta is com.example.data.local.LocalAuthResult.Success)
+    assertEquals("Beta Tester", (regBeta as com.example.data.local.LocalAuthResult.Success).session.roleTitle)
+
+    // 3. Creator role by admin username
+    manager.logout()
+    val regCreator = manager.registerAccount("@veyra", "7777")
+    assertTrue(regCreator is com.example.data.local.LocalAuthResult.Success)
+    assertEquals("creator", (regCreator as com.example.data.local.LocalAuthResult.Success).session.role)
+    assertEquals("Creador", regCreator.session.roleTitle)
+
+    // 4. Re-opening app (brand-new LocalAuthManager instance) keeps active session
+    manager.updateActiveStats(xp = 420L, level = 2L)
+    val reopened = com.example.data.local.LocalAuthManager(context)
+    assertTrue(reopened.isLoggedIn())
+    assertEquals("veyra", reopened.getCurrentSession()?.username)
+    assertEquals(420L, reopened.getCurrentSession()?.xp)
+
+    // 5. Wrong PIN fails and right PIN succeeds after logout
+    reopened.logout()
+    assertFalse(reopened.isLoggedIn())
+    assertNull(reopened.getCurrentSession())
+    assertTrue(reopened.login("@veyra", "0000") is com.example.data.local.LocalAuthResult.Error)
+    assertTrue(reopened.login("@veyra", "7777") is com.example.data.local.LocalAuthResult.Success)
+    assertTrue(reopened.isLoggedIn())
+  }
+
+  @Test
+  fun `profile screen displays Creador role title badge alongside username`() {
+    val profile = com.example.data.model.PlayerProfile(
+      userId = "veyra",
+      username = "veyra",
+      callsign = "Veyra",
+      role = "creator",
+      roleTitle = "Creador",
+    )
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        com.example.ui.screens.ProfileScreen(
+          uiState = RadarQuestUiState(myProfile = profile, isLoading = false),
+          onSaveProfile = { _, _, _, _, _, _, _, _, _ -> },
+          onQuickSelectPalette = {},
+          onOpenStyleCustomization = {},
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithText("@veyra").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("profile_role_badge").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Creador").assertIsDisplayed()
   }
 
   @Test
@@ -674,7 +773,7 @@ class ExampleRobolectricTest {
       userId = RadarQuestRepository.LOCAL_USER_ID,
       defaultDisplayName = "CapitanaVeyra",
     )
-    val repoFirstLaunch = RadarQuestRepository(db = null, auth = null, localAccountStore = store)
+    val repoFirstLaunch = RadarQuestRepository(db = null, localAccountStore = store)
     repoFirstLaunch.ensureOrUpdatePlayerProfile(
       username = "capitana_veyra",
       callsign = "CapitanaVeyra",
@@ -685,17 +784,20 @@ class ExampleRobolectricTest {
       isOnline = true,
       latitude = 19.4326,
       longitude = -99.1332,
+      role = "beta_tester",
+      roleTitle = "Beta Tester",
     )
     repoFirstLaunch.awardPlayerStats(addXp = 310L, addMissionsCompleted = 2L)
 
     // Simulate reopening the app with a brand-new repository instance backed by LocalAccountStore
-    val repoReopen = RadarQuestRepository(db = null, auth = null, localAccountStore = store)
+    val repoReopen = RadarQuestRepository(db = null, localAccountStore = store)
     val restoredSnapshot = store.getSnapshotOnce()
     val restoredProfile = repoReopen.observeMyProfile(RadarQuestRepository.LOCAL_USER_ID).first()
 
     assertTrue(restoredSnapshot.isSessionSaved)
     assertFalse(restoredSnapshot.explicitlySignedOut)
     assertEquals("CapitanaVeyra", restoredProfile?.callsign)
+    assertEquals("Beta Tester", restoredProfile?.roleTitle)
     assertEquals(310L, restoredProfile?.xp)
     assertEquals(2L, restoredProfile?.missionsCompleted)
 

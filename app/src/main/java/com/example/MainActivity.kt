@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -55,14 +54,13 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
-import androidx.credentials.ClearCredentialStateRequest
-import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.data.local.LocalAccountStore
+import com.example.data.local.LocalAuthManager
 import com.example.data.local.LocalThemePreferences
 import com.example.data.local.ThemePrefsSnapshot
 import com.example.data.location.LocationTracker
@@ -83,12 +81,7 @@ import com.example.ui.theme.RadarQuestTheme
 import com.example.ui.viewmodel.RadarQuestViewModel
 import com.example.util.SafeRuntimeBootstrap
 import com.example.util.VeyraNotificationManager
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.FirebaseUser
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -107,200 +100,80 @@ class MainActivity : ComponentActivity() {
   }
 }
 
-internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
-  val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
-    trySend(firebaseAuth.currentUser)
-  }
-  addAuthStateListener(listener)
-  awaitClose { removeAuthStateListener(listener) }
-}
-
 @Composable
 fun AppNavigation() {
   val context = LocalContext.current
   val navScope = rememberCoroutineScope()
+  val authManager = remember(context) { LocalAuthManager(context.applicationContext) }
   val localPrefs = remember(context) { LocalThemePreferences(context.applicationContext) }
   val accountStore = remember(context) { LocalAccountStore(context.applicationContext) }
   val notificationManager = remember(context) { VeyraNotificationManager(context.applicationContext) }
-  val credentialManager = remember(context) {
-    runCatching { CredentialManager.create(context) }.getOrNull()
-  }
   val localThemeSnapshot by localPrefs.prefsFlow.collectAsStateWithLifecycle(initialValue = ThemePrefsSnapshot())
-  val accountSnapshot by accountStore.accountFlow.collectAsStateWithLifecycle(initialValue = null)
-
-  val firebaseState = remember(context) {
-    val dbId = runCatching { context.getString(R.string.firestore_database_id) }.getOrDefault("")
-    SafeRuntimeBootstrap.tryInitFirebase(context.applicationContext, dbId)
-  }
-
-  val firebaseAuth = firebaseState.auth
-  val currentUser by if (firebaseState.isAvailable && firebaseAuth != null && firebaseState.playServicesStatus.isAvailable) {
-    remember(firebaseAuth) { firebaseAuth.authStateFlow() }
-      .collectAsStateWithLifecycle(initialValue = runCatching { firebaseAuth.currentUser }.getOrNull())
-  } else {
-    remember { mutableStateOf<FirebaseUser?>(null) }
-  }
-
-  val snapshot = accountSnapshot
-  if (snapshot == null) {
-    RadarQuestTheme(
-      themeMode = localThemeSnapshot.themeMode,
-      paletteKey = localThemeSnapshot.paletteKey,
-      cornerStyle = localThemeSnapshot.cornerStyle,
-    ) {
-      Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center,
-      ) {
-        CircularProgressIndicator()
-      }
-    }
-    return
-  }
-
-  val cloudReady = firebaseState.isAvailable &&
-    firebaseState.playServicesStatus.isAvailable &&
-    firebaseAuth != null &&
-    firebaseState.firestore != null
-  val user = currentUser
+  val authSession by authManager.sessionFlow.collectAsStateWithLifecycle()
 
   val handleSignOut: () -> Unit = {
     navScope.launch {
       withContext(NonCancellable) {
         ProximityGuidanceService.stop(context.applicationContext)
-        try {
-          credentialManager?.clearCredentialState(ClearCredentialStateRequest())
-        } catch (e: Exception) {
-          Log.w("Auth", "Failed to clear credential state: ${e.message}")
-        } finally {
-          runCatching { firebaseAuth?.signOut() ?: FirebaseAuth.getInstance().signOut() }
-          localPrefs.clearAll()
-          accountStore.clearSavedAccount(markExplicitlySignedOut = true)
-        }
+        authManager.logout()
+        localPrefs.clearAll()
+        accountStore.clearSavedAccount(markExplicitlySignedOut = false)
       }
     }
   }
 
-  val useCloudAuthenticatedSession = cloudReady && user != null && !snapshot.explicitlySignedOut
-  val useSavedLocalSession = snapshot.isSessionSaved && snapshot.authMode == "local" && !snapshot.explicitlySignedOut
-  val autoEnterLocalWithoutCloud = !cloudReady && !snapshot.explicitlySignedOut
-
-  when {
-    useCloudAuthenticatedSession && user != null -> {
-      LaunchedEffect(user.uid) {
-        accountStore.markSessionSaved(
-          authMode = "google",
-          userId = user.uid,
-          email = user.email.orEmpty(),
-          defaultDisplayName = user.displayName ?: "Explorador",
-        )
-      }
-      val sessionKey = "${user.uid}_${snapshot.sessionId.ifBlank { "cloud" }}"
-      key(sessionKey) {
-        val viewModel: RadarQuestViewModel = viewModel(
-          key = sessionKey,
-          factory = viewModelFactory {
-            initializer {
-              val app = checkNotNull(this[APPLICATION_KEY])
-              RadarQuestViewModel(
-                repository = RadarQuestRepository(
-                  db = firebaseState.firestore,
-                  auth = firebaseAuth,
-                  localAccountStore = LocalAccountStore(app),
-                ),
-                localPrefs = LocalThemePreferences(app),
-                currentUserId = user.uid,
-                defaultDisplayName = user.displayName ?: "Explorador",
-                isLocalOfflineMode = false,
-                onSystemNotify = notificationManager::postNotification,
-              )
-            }
-          },
-        )
-        MainAppShell(
-          viewModel = viewModel,
-          notificationManager = notificationManager,
-          currentUserId = user.uid,
-          onSignOutRequested = handleSignOut,
-        )
-      }
+  val activeSession = authSession
+  if (activeSession != null && activeSession.isLoggedIn) {
+    val localUid = activeSession.username
+    val sessionKey = "local_${localUid}"
+    key(sessionKey) {
+      val viewModel: RadarQuestViewModel = viewModel(
+        key = sessionKey,
+        factory = viewModelFactory {
+          initializer {
+            val app = checkNotNull(this[APPLICATION_KEY])
+            RadarQuestViewModel(
+              repository = RadarQuestRepository(
+                db = null,
+                localUserId = localUid,
+                localAccountStore = LocalAccountStore(app),
+              ),
+              localPrefs = LocalThemePreferences(app),
+              currentUserId = localUid,
+              defaultDisplayName = localUid,
+              isLocalOfflineMode = true,
+              savedAccountEmail = localUid,
+              accountRole = activeSession.role,
+              accountRoleTitle = activeSession.roleTitle,
+              initialAccountXp = activeSession.xp,
+              initialAccountLevel = activeSession.level,
+              onSystemNotify = notificationManager::postNotification,
+            )
+          }
+        },
+      )
+      MainAppShell(
+        viewModel = viewModel,
+        notificationManager = notificationManager,
+        currentUserId = localUid,
+        onSyncSessionStats = { xp, level ->
+          authManager.updateActiveStats(xp, level)
+        },
+        onSignOutRequested = handleSignOut,
+      )
     }
-
-    useSavedLocalSession || autoEnterLocalWithoutCloud -> {
-      LaunchedEffect(snapshot.isSessionSaved) {
-        if (!snapshot.isSessionSaved) {
-          accountStore.markSessionSaved(
-            authMode = "local",
-            userId = RadarQuestRepository.LOCAL_USER_ID,
-            defaultDisplayName = "Explorador",
-          )
-        }
-      }
-      val localUid = RadarQuestRepository.LOCAL_USER_ID
-      val sessionKey = "${localUid}_${snapshot.sessionId.ifBlank { "local" }}"
-      key(sessionKey) {
-        val viewModel: RadarQuestViewModel = viewModel(
-          key = sessionKey,
-          factory = viewModelFactory {
-            initializer {
-              val app = checkNotNull(this[APPLICATION_KEY])
-              RadarQuestViewModel(
-                repository = RadarQuestRepository(
-                  db = null,
-                  auth = null,
-                  localAccountStore = LocalAccountStore(app),
-                ),
-                localPrefs = LocalThemePreferences(app),
-                currentUserId = localUid,
-                defaultDisplayName = snapshot.savedProfile?.callsign ?: "Explorador",
-                isLocalOfflineMode = true,
-                onSystemNotify = notificationManager::postNotification,
-              )
-            }
-          },
-        )
-        MainAppShell(
-          viewModel = viewModel,
-          notificationManager = notificationManager,
-          currentUserId = localUid,
-          onSignOutRequested = handleSignOut,
-        )
-      }
-    }
-
-    else -> {
-      RadarQuestTheme(
-        themeMode = localThemeSnapshot.themeMode,
-        paletteKey = localThemeSnapshot.paletteKey,
-        cornerStyle = localThemeSnapshot.cornerStyle,
-      ) {
-        AuthScreen(
-          firebaseAuth = if (cloudReady) firebaseAuth else null,
-          playServicesAvailable = firebaseState.playServicesStatus.isAvailable,
-          playServicesMessage = firebaseState.playServicesStatus.statusMessage,
-          allowAutoSignIn = !snapshot.explicitlySignedOut,
-          onAuthSuccess = {
-            navScope.launch {
-              val signedUser = runCatching { firebaseAuth?.currentUser }.getOrNull()
-              accountStore.markSessionSaved(
-                authMode = "google",
-                userId = signedUser?.uid ?: "google_user",
-                email = signedUser?.email.orEmpty(),
-                defaultDisplayName = signedUser?.displayName ?: "Explorador",
-              )
-            }
-          },
-          onContinueLocalMode = {
-            navScope.launch {
-              accountStore.markSessionSaved(
-                authMode = "local",
-                userId = RadarQuestRepository.LOCAL_USER_ID,
-                defaultDisplayName = "Explorador",
-              )
-            }
-          },
-        )
-      }
+  } else {
+    RadarQuestTheme(
+      themeMode = "dark",
+      paletteKey = localThemeSnapshot.paletteKey,
+      cornerStyle = localThemeSnapshot.cornerStyle,
+    ) {
+      AuthScreen(
+        onLogin = { username, pin -> authManager.login(username, pin) },
+        onRegister = { username, pin, inviteCode ->
+          authManager.registerAccount(username, pin, inviteCode)
+        },
+      )
     }
   }
 }
@@ -310,6 +183,7 @@ private fun MainAppShell(
   viewModel: RadarQuestViewModel,
   notificationManager: VeyraNotificationManager,
   currentUserId: String,
+  onSyncSessionStats: (xp: Long, level: Long) -> Unit,
   onSignOutRequested: () -> Unit,
 ) {
   val context = LocalContext.current
@@ -322,6 +196,13 @@ private fun MainAppShell(
   var showNotificationsSheet by remember { mutableStateOf(false) }
   val disableAnimations = uiState.settings.animationTier == "low"
   val gestureNavEnabled = uiState.settings.gestureNavEnabled
+
+  LaunchedEffect(uiState.myProfile?.xp, uiState.myProfile?.level) {
+    val prof = uiState.myProfile
+    if (prof != null) {
+      onSyncSessionStats(prof.xp, prof.level)
+    }
+  }
 
   val selectTab: (Int) -> Unit = { targetPage ->
     showStyleInProfile = false
