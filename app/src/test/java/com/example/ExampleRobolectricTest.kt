@@ -43,8 +43,12 @@ import com.example.ui.screens.SocialFeedScreen
 import com.example.ui.theme.RadarQuestTheme
 import com.example.ui.viewmodel.RadarQuestUiState
 import com.example.util.SafeRuntimeBootstrap
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -853,5 +857,258 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithTag("confirm_sign_out_button").performClick()
     composeTestRule.waitForIdle()
     assertEquals(1, signOutCalls)
+  }
+
+  @Test
+  fun `localMissionFeedRepository stores and reactively emits posts in Room with author roles`() = runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val db = androidx.room.Room.inMemoryDatabaseBuilder(
+      context,
+      com.example.data.local.db.VeyraLocalDatabase::class.java,
+    ).allowMainThreadQueries().build()
+
+    try {
+      val feedRepo = com.example.data.local.LocalMissionFeedRepository(db.localMissionPostDao())
+      assertEquals(0, feedRepo.postsFlow.first().size)
+
+      // Initial seed inserts 5 localized posts with Creator, Beta Tester, and Explorer roles
+      feedRepo.seedInitialPostsIfEmpty(baseLat = 19.4326, baseLon = -99.1332)
+      val seeded = feedRepo.postsFlow.first()
+      assertEquals(5, seeded.size)
+      assertTrue(seeded.any { it.authorRoleTitle == "Creador" })
+      assertTrue(seeded.any { it.authorRoleTitle == "Beta Tester" })
+
+      // Publishing a user mission post triggers reactive Flow update immediately
+      val customPost = feedRepo.publishMissionPost(
+        title = "Baliza en Alameda",
+        description = "Fotografía la glorieta principal desde la acera norte.",
+        category = "explore",
+        xpReward = 200L,
+        authorUserId = "veyra",
+        authorDisplayName = "Veyra Admin",
+        authorUsername = "veyra",
+        authorRole = "creator",
+        authorRoleTitle = "Creador",
+        latitude = 19.4350,
+        longitude = -99.1440,
+        placeLabel = "Alameda Central",
+      )
+
+      val updated = feedRepo.postsFlow.first()
+      assertEquals(6, updated.size)
+      assertEquals(customPost.id, updated.first().id)
+      assertEquals("Creador", updated.first().authorRoleTitle)
+      assertEquals("Fotografía la glorieta principal desde la acera norte.", updated.first().description)
+
+      // Generating a fresh nearby batch appends 3 more proximity missions
+      val batch = feedRepo.generateNewNearbyBatch(baseLat = 19.4326, baseLon = -99.1332)
+      assertEquals(3, batch.size)
+      assertEquals(9, feedRepo.postsFlow.first().size)
+    } finally {
+      db.close()
+    }
+  }
+
+  @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+  @Test
+  fun `radarQuestViewModel computes live GPS proximity and dynamically updates local mission feed`() = runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val db = androidx.room.Room.inMemoryDatabaseBuilder(
+      context,
+      com.example.data.local.db.VeyraLocalDatabase::class.java,
+    ).allowMainThreadQueries().build()
+
+    val dispatcher = kotlinx.coroutines.test.UnconfinedTestDispatcher()
+    Dispatchers.setMain(dispatcher)
+    try {
+      val feedRepo = com.example.data.local.LocalMissionFeedRepository(db.localMissionPostDao())
+      val themePrefs = com.example.data.local.LocalThemePreferences(context)
+      val localRepo = RadarQuestRepository(db = null)
+      val viewModel = com.example.ui.viewmodel.RadarQuestViewModel(
+        repository = localRepo,
+        localPrefs = themePrefs,
+        currentUserId = "tester1",
+        defaultDisplayName = "Tester Uno",
+        isLocalOfflineMode = true,
+        accountRole = "beta_tester",
+        accountRoleTitle = "Beta Tester",
+        localMissionFeedRepository = feedRepo,
+      )
+
+      // Activate SharingStarted.WhileSubscribed collector
+      val collectJob = kotlinx.coroutines.CoroutineScope(dispatcher).launch {
+        viewModel.uiState.collect {}
+      }
+
+      // Publish a post at an exact known coordinate (19.4326, -99.1332)
+      feedRepo.publishMissionPost(
+        title = "Fuente del Centro",
+        description = "Verifica la fuente histórica del zócalo.",
+        category = "explore",
+        xpReward = 170L,
+        authorUserId = "tester1",
+        authorDisplayName = "Tester Uno",
+        authorUsername = "tester1",
+        authorRole = "beta_tester",
+        authorRoleTitle = "Beta Tester",
+        latitude = 19.4326,
+        longitude = -99.1332,
+        placeLabel = "Zócalo",
+      )
+
+      // Move GPS ~500m away first -> NOT immediate proximity
+      viewModel.onLocationUpdated(
+        com.example.data.location.LiveLocationPoint(
+          latitude = 19.4371,
+          longitude = -99.1332,
+          accuracyMeters = 6f,
+        )
+      )
+      val farItem = viewModel.uiState.first { state ->
+        state.localMissionFeed.any { it.post.title == "Fuente del Centro" }
+      }.localMissionFeed.first { it.post.title == "Fuente del Centro" }
+      assertTrue(farItem.distanceMeters > 350f)
+      assertFalse(farItem.isImmediateProximity)
+
+      // Move GPS within ~30m -> updates dynamically to immediate proximity (<= 120m)
+      viewModel.onLocationUpdated(
+        com.example.data.location.LiveLocationPoint(
+          latitude = 19.4328,
+          longitude = -99.1332,
+          accuracyMeters = 4f,
+        )
+      )
+      val closeItem = viewModel.uiState.first { state ->
+        state.localMissionFeed.firstOrNull { it.post.title == "Fuente del Centro" }?.isImmediateProximity == true
+      }.localMissionFeed.first { it.post.title == "Fuente del Centro" }
+      assertTrue(closeItem.distanceMeters <= 120f)
+      assertTrue(closeItem.isImmediateProximity)
+
+      // Publish directly through ViewModel -> appears dynamically in localMissionFeed
+      viewModel.publishLocalFeedMission(
+        title = "Mural Nuevo",
+        description = "Captura el nuevo mural junto al cruce.",
+        category = "creative",
+        xpReward = 250L,
+        placeLabel = "Cruce Norte",
+      )
+      val afterPublish = viewModel.uiState.first { state ->
+        state.localMissionFeed.any { it.post.title == "Mural Nuevo" }
+      }.localMissionFeed.first { it.post.title == "Mural Nuevo" }
+      assertEquals("Beta Tester", afterPublish.post.authorRoleTitle)
+      assertTrue(afterPublish.isImmediateProximity)
+
+      collectJob.cancel()
+    } finally {
+      Dispatchers.resetMain()
+      db.close()
+    }
+  }
+
+  @Test
+  fun `socialFeedScreen displays real-time local mission feed with role, timestamp, GPS distance and publish dialog`() {
+    val now = System.currentTimeMillis()
+    val closePost = com.example.data.model.LocalMissionPost(
+      id = "feed_close_1",
+      title = "Mirador del Lago",
+      description = "Toma una foto del reflejo del puente desde el sendero oeste.",
+      category = "eco",
+      xpReward = 190L,
+      authorUserId = "veyra",
+      authorDisplayName = "Veyra HQ",
+      authorUsername = "veyra",
+      authorRole = "creator",
+      authorRoleTitle = "Creador",
+      latitude = 19.4326,
+      longitude = -99.1332,
+      placeLabel = "Lago Mayor",
+      createdAtMillis = now - 5 * 60_000L,
+    )
+    val farPost = com.example.data.model.LocalMissionPost(
+      id = "feed_far_1",
+      title = "Arco del Sur",
+      description = "Explora la entrada sur y registra el arco conmemorativo.",
+      category = "explore",
+      xpReward = 140L,
+      authorUserId = "tester1",
+      authorDisplayName = "Tester Alfa",
+      authorUsername = "tester1",
+      authorRole = "beta_tester",
+      authorRoleTitle = "Beta Tester",
+      latitude = 19.4360,
+      longitude = -99.1332,
+      placeLabel = "Paseo Sur",
+      createdAtMillis = now - 2 * 3_600_000L,
+    )
+    val feedItems = listOf(
+      com.example.data.model.LocalMissionFeedItem(
+        post = closePost,
+        distanceMeters = 64f,
+        bearingDegrees = 45f,
+        isImmediateProximity = true,
+      ),
+      com.example.data.model.LocalMissionFeedItem(
+        post = farPost,
+        distanceMeters = 380f,
+        bearingDegrees = 180f,
+        isImmediateProximity = false,
+      ),
+    )
+
+    var publishedTitle = ""
+    var publishedDesc = ""
+
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        SocialFeedScreen(
+          uiState = RadarQuestUiState(
+            localMissionFeed = feedItems,
+            currentLocation = com.example.data.location.LiveLocationPoint(19.4326, -99.1332, 5f),
+          ),
+          currentUserId = "other_me",
+          onCheerCompletion = {},
+          onPublishLocalMission = { title, desc, _, _, _ ->
+            publishedTitle = title
+            publishedDesc = desc
+          },
+        )
+      }
+    }
+
+    // Verify immediate proximity card renders mission description, author role, timestamp, and GPS distance
+    composeTestRule.onNodeWithTag("local_feed_live_banner").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Mirador del Lago").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("Toma una foto del reflejo del puente desde el sendero oeste.")
+      .performScrollTo()
+      .assertIsDisplayed()
+    composeTestRule.onNodeWithTag("feed_post_role_badge_feed_close_1")
+      .performScrollTo()
+      .assertIsDisplayed()
+    composeTestRule.onNodeWithText("Creador").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("feed_post_timestamp_feed_close_1")
+      .performScrollTo()
+      .assertIsDisplayed()
+    composeTestRule.onNodeWithText("Hace 5 min").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("feed_post_distance_feed_close_1")
+      .performScrollTo()
+      .assertIsDisplayed()
+    composeTestRule.onNodeWithText("64 m • ¡En tu rango!").assertIsDisplayed()
+
+    // Filter to "Muy cerca" -> hides farPost (>120 m) and keeps closePost
+    composeTestRule.onNodeWithTag("feed_mode_immediate").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("Mirador del Lago").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Arco del Sur").assertDoesNotExist()
+
+    // Open publish dialog and create a local mission post
+    composeTestRule.onNodeWithTag("create_local_feed_post_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("feed_post_title_input").performTextInput("Kiosco Históric")
+    composeTestRule.onNodeWithTag("feed_post_description_input").performTextInput("Captura el techo del kiosco central.")
+    composeTestRule.onNodeWithTag("confirm_publish_feed_post_button").performClick()
+    composeTestRule.waitForIdle()
+
+    assertEquals("Kiosco Históric", publishedTitle)
+    assertEquals("Captura el techo del kiosco central.", publishedDesc)
   }
 }

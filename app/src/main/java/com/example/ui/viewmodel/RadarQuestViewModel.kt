@@ -4,11 +4,14 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.LocalAuthManager
+import com.example.data.local.LocalMissionFeedRepository
 import com.example.data.local.LocalThemePreferences
 import com.example.data.local.ThemePrefsSnapshot
 import com.example.data.location.LiveLocationPoint
 import com.example.data.model.AppNotificationItem
 import com.example.data.model.Challenge
+import com.example.data.model.LocalMissionFeedItem
+import com.example.data.model.LocalMissionPost
 import com.example.data.model.Mission
 import com.example.data.model.MissionCompletion
 import com.example.data.model.MissionWithDistance
@@ -49,6 +52,7 @@ data class RadarQuestUiState(
   val nearbyPlayers: List<NearbyPlayerItem> = emptyList(),
   val leaderboardPlayers: List<PlayerProfile> = emptyList(),
   val missions: List<MissionWithDistance> = emptyList(),
+  val localMissionFeed: List<LocalMissionFeedItem> = emptyList(),
   val activeAcceptedMissionId: String? = null,
   val activeAcceptedMission: MissionWithDistance? = null,
   val waitingMissionQueue: List<String> = emptyList(),
@@ -84,6 +88,7 @@ class RadarQuestViewModel(
   private val accountRoleTitle: String = LocalAuthManager.TITLE_EXPLORER,
   private val initialAccountXp: Long = 0L,
   private val initialAccountLevel: Long = 1L,
+  private val localMissionFeedRepository: LocalMissionFeedRepository? = null,
   private val onSystemNotify: (id: Int, title: String, message: String, isProximity: Boolean) -> Unit = { _, _, _, _ -> },
 ) : ViewModel() {
 
@@ -109,6 +114,8 @@ class RadarQuestViewModel(
   private val _rejectedMissionIds = MutableStateFlow<Set<String>>(emptySet())
   private val _queuedPromptMissionId = MutableStateFlow<String?>(null)
   private val _safePublicAnchors = MutableStateFlow<List<SafePublicSpot>>(emptyList())
+  private val _fallbackLocalFeedPosts = MutableStateFlow<List<LocalMissionPost>>(emptyList())
+  private var hasSeededGpsFeedBatch = false
 
   private var respawnJob: Job? = null
   private var placesFetchJob: Job? = null
@@ -268,14 +275,25 @@ class RadarQuestViewModel(
     CoreBundle(profile, remoteSettings, onlinePlayers, missions, myComps)
   }
 
+  private val feedPostsFlow = localMissionFeedRepository?.postsFlow ?: _fallbackLocalFeedPosts
+
   private val socialDataFlow = combine(
     publicCompletionsFlow,
     openChallengesFlow,
     myChallengesFlow,
     interactionsFlow,
-    localPrefs.prefsFlow,
-  ) { publicComps, openChals, myChals, inters, localTheme ->
-    SocialBundle(publicComps, openChals, myChals, inters, localTheme)
+    combine(localPrefs.prefsFlow, feedPostsFlow) { localTheme, feedPosts ->
+      localTheme to feedPosts
+    },
+  ) { publicComps, openChals, myChals, inters, themeAndFeed ->
+    SocialBundle(
+      publicCompletions = publicComps,
+      openChallenges = openChals,
+      myChallenges = myChals,
+      interactions = inters,
+      localTheme = themeAndFeed.first,
+      localFeedPosts = themeAndFeed.second,
+    )
   }
 
   private val localControlFlow = combine(
@@ -401,7 +419,31 @@ class RadarQuestViewModel(
       safeAnchors = workflow.safeAnchors,
     )
 
-    val allMissions = (core.missions + local.refreshedMissions + randomGeneratedMissions)
+    val localFeedItems = social.localFeedPosts.map { post ->
+      val feedBaseLat = if (hasValidRef) refLat else anchor.first
+      val feedBaseLon = if (hasValidRef) refLon else anchor.second
+      val dist = GeoUtils.distanceMeters(feedBaseLat, feedBaseLon, post.latitude, post.longitude)
+      val bearing = GeoUtils.bearingDegrees(feedBaseLat, feedBaseLon, post.latitude, post.longitude)
+      LocalMissionFeedItem(
+        post = post,
+        distanceMeters = dist,
+        bearingDegrees = bearing,
+        isImmediateProximity = dist <= GeoUtils.PROXIMITY_RADIUS_METERS,
+      )
+    }
+      .filter { it.distanceMeters <= radiusMeters.coerceAtLeast(600f) || !it.post.isSystemGenerated }
+      .sortedWith(
+        compareByDescending<LocalMissionFeedItem> { it.isImmediateProximity }
+          .thenBy { it.distanceMeters }
+          .thenByDescending { it.post.createdAtMillis }
+      )
+
+    val allMissions = (
+      core.missions +
+        social.localFeedPosts.map { it.toRadarMission() } +
+        local.refreshedMissions +
+        randomGeneratedMissions
+      )
       .distinctBy { it.id }
       .filterNot { it.id in workflow.rejectedIds }
 
@@ -499,6 +541,7 @@ class RadarQuestViewModel(
       nearbyPlayers = nearby,
       leaderboardPlayers = core.onlinePlayers.sortedByDescending { it.xp },
       missions = missionsWithDist,
+      localMissionFeed = localFeedItems,
       activeAcceptedMissionId = workflow.activeAcceptedId,
       activeAcceptedMission = activeAccepted,
       waitingMissionQueue = workflow.waitingQueue,
@@ -534,6 +577,12 @@ class RadarQuestViewModel(
 
   init {
     ensureInitialProfileAndSettings()
+    viewModelScope.launch {
+      localMissionFeedRepository?.seedInitialPostsIfEmpty(
+        baseLat = 19.4326,
+        baseLon = -99.1332,
+      )
+    }
   }
 
   private fun ensureInitialProfileAndSettings() {
@@ -836,6 +885,16 @@ class RadarQuestViewModel(
       radiusMeters = uiState.value.settings.searchRadiusMeters.toInt(),
       force = false,
     )
+    if (!hasSeededGpsFeedBatch && localMissionFeedRepository != null) {
+      hasSeededGpsFeedBatch = true
+      viewModelScope.launch {
+        localMissionFeedRepository.generateNewNearbyBatch(
+          baseLat = point.latitude,
+          baseLon = point.longitude,
+          safeAnchors = _safePublicAnchors.value,
+        )
+      }
+    }
     val movedEnough = previous == null ||
       GeoUtils.distanceMeters(previous.latitude, previous.longitude, point.latitude, point.longitude) > 8f
     if (movedEnough) {
@@ -1101,8 +1160,94 @@ class RadarQuestViewModel(
         timeLimitSeconds = timeLimitSeconds,
         placeLabel = placeLabel,
       )
+      localMissionFeedRepository?.publishMissionPost(
+        title = title,
+        description = description,
+        category = category,
+        xpReward = xpReward,
+        authorUserId = currentUserId,
+        authorDisplayName = myName,
+        authorUsername = prof?.username ?: currentUserId,
+        authorRole = prof?.role ?: accountRole,
+        authorRoleTitle = prof?.roleTitle ?: accountRoleTitle,
+        latitude = lat,
+        longitude = lon,
+        placeLabel = placeLabel,
+      )
       _isSubmitting.value = false
       _snackbarMessage.value = if (res.isSuccess) "Misión creada en punto público aleatorio" else "Error al crear misión"
+    }
+  }
+
+  fun publishLocalFeedMission(
+    title: String,
+    description: String,
+    category: String,
+    xpReward: Long,
+    placeLabel: String,
+  ) {
+    val prof = uiState.value.myProfile
+    val myName = prof?.callsign ?: defaultDisplayName
+    val myUsername = prof?.username?.ifBlank { currentUserId } ?: currentUserId
+    val myRole = prof?.role ?: accountRole
+    val myRoleTitle = prof?.roleTitle ?: accountRoleTitle
+    val loc = _currentLocation.value
+    val baseLat = loc?.latitude ?: prof?.latitude?.takeIf { it != 0.0 } ?: 19.4326
+    val baseLon = loc?.longitude ?: prof?.longitude?.takeIf { it != 0.0 } ?: -99.1332
+    viewModelScope.launch {
+      _isSubmitting.value = true
+      val post = localMissionFeedRepository?.publishMissionPost(
+        title = title,
+        description = description,
+        category = category,
+        xpReward = xpReward,
+        authorUserId = currentUserId,
+        authorDisplayName = myName,
+        authorUsername = myUsername,
+        authorRole = myRole,
+        authorRoleTitle = myRoleTitle,
+        latitude = baseLat,
+        longitude = baseLon,
+        placeLabel = placeLabel.ifBlank { "Ubicación GPS actual" },
+      )
+      if (post == null) {
+        val localPost = LocalMissionPost(
+          id = "feed_${System.currentTimeMillis()}",
+          title = title.trim().ifBlank { "Misión local" },
+          description = description.trim(),
+          category = category,
+          xpReward = xpReward,
+          authorUserId = currentUserId,
+          authorDisplayName = myName,
+          authorUsername = myUsername,
+          authorRole = myRole,
+          authorRoleTitle = myRoleTitle,
+          latitude = baseLat,
+          longitude = baseLon,
+          placeLabel = placeLabel.ifBlank { "Ubicación GPS actual" },
+          createdAtMillis = System.currentTimeMillis(),
+        )
+        _fallbackLocalFeedPosts.value = listOf(localPost) + _fallbackLocalFeedPosts.value
+      }
+      _isSubmitting.value = false
+      _snackbarMessage.value = "Misión publicada en el feed local en vivo"
+    }
+  }
+
+  fun generateFreshLocalFeedMissions() {
+    val loc = _currentLocation.value
+    val prof = uiState.value.myProfile
+    val baseLat = loc?.latitude ?: prof?.latitude?.takeIf { it != 0.0 } ?: 19.4326
+    val baseLon = loc?.longitude ?: prof?.longitude?.takeIf { it != 0.0 } ?: -99.1332
+    viewModelScope.launch {
+      _isRefreshing.value = true
+      localMissionFeedRepository?.generateNewNearbyBatch(
+        baseLat = baseLat,
+        baseLon = baseLon,
+        safeAnchors = _safePublicAnchors.value,
+      )
+      _isRefreshing.value = false
+      _snackbarMessage.value = "Nuevas misiones cercanas actualizadas en el feed"
     }
   }
 
@@ -1183,6 +1328,7 @@ class RadarQuestViewModel(
     val myChallenges: List<Challenge>,
     val interactions: List<PlayerInteraction>,
     val localTheme: ThemePrefsSnapshot,
+    val localFeedPosts: List<LocalMissionPost>,
   )
 
   private data class LocalControlBundle(

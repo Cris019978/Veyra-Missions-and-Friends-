@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -7,6 +8,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -20,18 +23,30 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.MyLocation
+import androidx.compose.material.icons.rounded.NearMe
 import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.Radar
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Verified
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -40,11 +55,15 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -60,13 +79,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
+import com.example.data.model.LocalMissionFeedItem
+import com.example.data.model.LocalMissionPost
 import com.example.data.model.MissionCategory
 import com.example.data.model.MissionCompletion
 import com.example.data.model.PlayerProfile
 import com.example.ui.components.RoleTitleBadge
 import com.example.ui.viewmodel.RadarQuestUiState
+import com.example.util.GeoUtils
 import com.example.util.PhotoUtils
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -76,11 +96,16 @@ fun SocialFeedScreen(
   currentUserId: String,
   onRefresh: () -> Unit = {},
   onCheerCompletion: (MissionCompletion) -> Unit,
+  onPublishLocalMission: (title: String, description: String, category: String, xpReward: Long, placeLabel: String) -> Unit = { _, _, _, _, _ -> },
+  onGenerateLocalMissions: () -> Unit = {},
+  onOpenFeedMissionOnRadar: (LocalMissionPost) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
+  var feedScope by remember { mutableStateOf("all") } // all, missions, immediate, photos
   var selectedCategory by remember { mutableStateOf("all") }
   var cheeredIds by remember { mutableStateOf<Set<String>>(emptySet()) }
   var zoomedPost by remember { mutableStateOf<MissionCompletion?>(null) }
+  var showCreateFeedPostDialog by remember { mutableStateOf(false) }
 
   val playersById = remember(uiState.leaderboardPlayers, uiState.myProfile) {
     val map = uiState.leaderboardPlayers.associateBy { it.userId }.toMutableMap()
@@ -88,12 +113,26 @@ fun SocialFeedScreen(
     map
   }
 
-  val filteredPosts = remember(uiState.publicCompletions, selectedCategory) {
+  val filteredMissionFeed = remember(uiState.localMissionFeed, selectedCategory, feedScope) {
+    uiState.localMissionFeed.filter { item ->
+      val catOk = selectedCategory == "all" || item.post.category == selectedCategory
+      val proxOk = feedScope != "immediate" || item.isImmediateProximity
+      catOk && proxOk
+    }
+  }
+
+  val filteredPhotoPosts = remember(uiState.publicCompletions, selectedCategory) {
     if (selectedCategory == "all") {
       uiState.publicCompletions
     } else {
       uiState.publicCompletions.filter { it.category == selectedCategory }
     }
+  }
+
+  val showMissionSection = feedScope != "photos"
+  val showPhotoSection = feedScope == "all" || feedScope == "photos"
+  val immediateCount = remember(uiState.localMissionFeed) {
+    uiState.localMissionFeed.count { it.isImmediateProximity }
   }
 
   PullToRefreshBox(
@@ -110,7 +149,8 @@ fun SocialFeedScreen(
       LazyColumn(
         modifier = Modifier
           .widthIn(max = 680.dp)
-          .fillMaxSize(),
+          .fillMaxSize()
+          .testTag("social_feed_list"),
         contentPadding = PaddingValues(
           start = 16.dp,
           end = 16.dp,
@@ -119,143 +159,341 @@ fun SocialFeedScreen(
         ),
         verticalArrangement = Arrangement.spacedBy(14.dp),
       ) {
-      // Header
-      item {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.weight(1f),
-          ) {
-            Box(
-              modifier = Modifier
-                .size(42.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = Icons.Rounded.Public,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-              )
-            }
-            Column {
-              Text("Red Social", style = MaterialTheme.typography.headlineMedium)
-              Text(
-                "Fotos publicadas por exploradores al confirmar misiones",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-          }
-
-          Surface(
-            color = MaterialTheme.colorScheme.secondaryContainer,
-            shape = CircleShape,
-          ) {
-            Text(
-              text = "${uiState.publicCompletions.size} fotos",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSecondaryContainer,
-              modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            )
-          }
-        }
-      }
-
-      // Category Filter Row
-      item {
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          item(key = "all") {
-            FilterChip(
-              selected = selectedCategory == "all",
-              onClick = { selectedCategory = "all" },
-              shape = CircleShape,
-              label = { Text("Todas") },
-              leadingIcon = {
-                Icon(Icons.Rounded.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
-              },
-            )
-          }
-          items(MissionCategory.entries, key = { it.key }) { cat ->
-            FilterChip(
-              selected = selectedCategory == cat.key,
-              onClick = { selectedCategory = cat.key },
-              shape = CircleShape,
-              label = { Text(cat.label) },
-            )
-          }
-        }
-      }
-
-      if (filteredPosts.isEmpty()) {
+        // Header
         item {
-          Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-            shape = MaterialTheme.shapes.large,
+          Row(
             modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
           ) {
-            Column(
-              modifier = Modifier
-                .fillMaxWidth()
-                .padding(24.dp),
-              horizontalAlignment = Alignment.CenterHorizontally,
-              verticalArrangement = Arrangement.spacedBy(10.dp),
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
+              modifier = Modifier.weight(1f),
             ) {
               Box(
                 modifier = Modifier
-                  .size(56.dp)
+                  .size(42.dp)
                   .clip(CircleShape)
                   .background(MaterialTheme.colorScheme.primaryContainer),
                 contentAlignment = Alignment.Center,
               ) {
                 Icon(
-                  imageVector = Icons.Rounded.CameraAlt,
+                  imageVector = Icons.Rounded.Public,
                   contentDescription = null,
                   tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                  modifier = Modifier.size(28.dp),
                 )
               }
+              Column {
+                Text("Red Social", style = MaterialTheme.typography.headlineMedium)
+                Text(
+                  "Feed local en vivo por proximidad GPS y fotos de exploradores",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+            }
+
+            Surface(
+              color = MaterialTheme.colorScheme.secondaryContainer,
+              shape = CircleShape,
+            ) {
               Text(
-                text = "El muro social está esperando tus fotos",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-              )
-              Text(
-                text = "Cuando confirmes una misión con tu cámara y actives 'Publicar en Red Social', la foto aparecerá aquí para toda la comunidad.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = "${uiState.localMissionFeed.size} cerca",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
               )
             }
           }
         }
-      } else {
-        items(filteredPosts, key = { it.id }) { comp ->
-          val authorProfile = playersById[comp.userId]
-          val isMine = comp.userId == currentUserId
-          val alreadyCheered = comp.id in cheeredIds
 
-          SocialFeedPostCard(
-            comp = comp,
-            authorProfile = authorProfile,
-            isMine = isMine,
-            alreadyCheered = alreadyCheered,
-            onPhotoClick = { zoomedPost = comp },
-            onCheer = {
-              cheeredIds = cheeredIds + comp.id
-              onCheerCompletion(comp)
-            },
-          )
+        // Local Real-Time GPS Proximity Actions Row
+        item {
+          Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+            shape = MaterialTheme.shapes.large,
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("local_feed_live_banner"),
+          ) {
+            Column(
+              modifier = Modifier.padding(14.dp),
+              verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Rounded.MyLocation,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(18.dp),
+                )
+                Text(
+                  text = if (uiState.currentLocation != null) {
+                    "GPS activo • $immediateCount misiones en rango inmediato (≤${GeoUtils.PROXIMITY_RADIUS_METERS.toInt()} m)"
+                  } else {
+                    "Almacenamiento local Room activo • Actualizando por proximidad"
+                  },
+                  style = MaterialTheme.typography.labelMedium,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  fontWeight = FontWeight.SemiBold,
+                )
+              }
+
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Button(
+                  onClick = { showCreateFeedPostDialog = true },
+                  shape = CircleShape,
+                  contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                  modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp)
+                    .testTag("create_local_feed_post_button"),
+                ) {
+                  Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text("Publicar misión", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+
+                FilledTonalButton(
+                  onClick = onGenerateLocalMissions,
+                  shape = CircleShape,
+                  contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                  modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp)
+                    .testTag("generate_local_feed_button"),
+                ) {
+                  Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text("Generar cerca", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+              }
+            }
+          }
+        }
+
+        // Feed Scope Selector (All / Live Proximity / Immediate <=120m / Photos)
+        item {
+          LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            item(key = "scope_all") {
+              FilterChip(
+                selected = feedScope == "all",
+                onClick = { feedScope = "all" },
+                shape = CircleShape,
+                label = { Text("Todo") },
+                modifier = Modifier.testTag("feed_mode_all"),
+              )
+            }
+            item(key = "scope_missions") {
+              FilterChip(
+                selected = feedScope == "missions",
+                onClick = { feedScope = "missions" },
+                shape = CircleShape,
+                label = { Text("Misiones en vivo (${uiState.localMissionFeed.size})") },
+                leadingIcon = {
+                  Icon(Icons.Rounded.Radar, contentDescription = null, modifier = Modifier.size(16.dp))
+                },
+                modifier = Modifier.testTag("feed_mode_missions"),
+              )
+            }
+            item(key = "scope_immediate") {
+              FilterChip(
+                selected = feedScope == "immediate",
+                onClick = { feedScope = "immediate" },
+                shape = CircleShape,
+                label = { Text("Muy cerca ($immediateCount)") },
+                leadingIcon = {
+                  Icon(Icons.Rounded.NearMe, contentDescription = null, modifier = Modifier.size(16.dp))
+                },
+                modifier = Modifier.testTag("feed_mode_immediate"),
+              )
+            }
+            item(key = "scope_photos") {
+              FilterChip(
+                selected = feedScope == "photos",
+                onClick = { feedScope = "photos" },
+                shape = CircleShape,
+                label = { Text("Fotos (${uiState.publicCompletions.size})") },
+                modifier = Modifier.testTag("feed_mode_photos"),
+              )
+            }
+          }
+        }
+
+        // Category Filter Row
+        item {
+          LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            item(key = "cat_all") {
+              FilterChip(
+                selected = selectedCategory == "all",
+                onClick = { selectedCategory = "all" },
+                shape = CircleShape,
+                label = { Text("Todas las categorías") },
+                leadingIcon = {
+                  Icon(Icons.Rounded.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+                },
+              )
+            }
+            items(MissionCategory.entries, key = { it.key }) { cat ->
+              FilterChip(
+                selected = selectedCategory == cat.key,
+                onClick = { selectedCategory = cat.key },
+                shape = CircleShape,
+                label = { Text(cat.label) },
+              )
+            }
+          }
+        }
+
+        // Section 1: Real-Time Local Proximity Mission Feed
+        if (showMissionSection) {
+          if (filteredMissionFeed.isNotEmpty()) {
+            item {
+              Text(
+                text = if (feedScope == "immediate") {
+                  "Misiones en proximidad inmediata (≤120 m)"
+                } else {
+                  "Feed de misiones locales en tiempo real"
+                },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+              )
+            }
+            items(filteredMissionFeed, key = { "live_${it.post.id}" }) { feedItem ->
+              LocalMissionFeedCard(
+                item = feedItem,
+                isMine = feedItem.post.authorUserId == currentUserId,
+                onOpenOnRadar = { onOpenFeedMissionOnRadar(feedItem.post) },
+              )
+            }
+          } else if (feedScope != "all" || filteredPhotoPosts.isEmpty()) {
+            item {
+              Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier.fillMaxWidth(),
+              ) {
+                Column(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                  horizontalAlignment = Alignment.CenterHorizontally,
+                  verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Rounded.Explore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(32.dp),
+                  )
+                  Text(
+                    text = if (feedScope == "immediate") {
+                      "No hay misiones a menos de 120 m en este filtro"
+                    } else {
+                      "Aún no hay publicaciones locales en este filtro"
+                    },
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                  )
+                  FilledTonalButton(onClick = onGenerateLocalMissions) {
+                    Text("Generar misiones cercanas")
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Section 2: Community Photo Proofs
+        if (showPhotoSection) {
+          if (filteredPhotoPosts.isNotEmpty()) {
+            item {
+              Text(
+                text = "Fotos confirmadas de la comunidad (${filteredPhotoPosts.size})",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+              )
+            }
+            items(filteredPhotoPosts, key = { "photo_${it.id}" }) { comp ->
+              val authorProfile = playersById[comp.userId]
+              val isMine = comp.userId == currentUserId
+              val alreadyCheered = comp.id in cheeredIds
+
+              SocialFeedPostCard(
+                comp = comp,
+                authorProfile = authorProfile,
+                isMine = isMine,
+                alreadyCheered = alreadyCheered,
+                onPhotoClick = { zoomedPost = comp },
+                onCheer = {
+                  cheeredIds = cheeredIds + comp.id
+                  onCheerCompletion(comp)
+                },
+              )
+            }
+          } else if (feedScope == "photos") {
+            item {
+              Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier.fillMaxWidth(),
+              ) {
+                Column(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                  horizontalAlignment = Alignment.CenterHorizontally,
+                  verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                  Box(
+                    modifier = Modifier
+                      .size(56.dp)
+                      .clip(CircleShape)
+                      .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center,
+                  ) {
+                    Icon(
+                      imageVector = Icons.Rounded.CameraAlt,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                      modifier = Modifier.size(28.dp),
+                    )
+                  }
+                  Text(
+                    text = "El muro social está esperando tus fotos",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                  )
+                  Text(
+                    text = "Cuando confirmes una misión con tu cámara y actives 'Publicar en Red Social', la foto aparecerá aquí para toda la comunidad.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+              }
+            }
+          }
         }
       }
     }
-    }
+  }
+
+  if (showCreateFeedPostDialog) {
+    CreateLocalMissionFeedDialog(
+      onDismiss = { showCreateFeedPostDialog = false },
+      onPublish = { title, desc, cat, xp, place ->
+        onPublishLocalMission(title, desc, cat, xp, place)
+        showCreateFeedPostDialog = false
+      },
+    )
   }
 
   zoomedPost?.let { post ->
@@ -303,6 +541,346 @@ fun SocialFeedScreen(
                 Text(post.caption, style = MaterialTheme.typography.bodySmall)
               }
             }
+          }
+        }
+      }
+    }
+  }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun LocalMissionFeedCard(
+  item: LocalMissionFeedItem,
+  isMine: Boolean,
+  onOpenOnRadar: () -> Unit,
+) {
+  val post = item.post
+  val cat = MissionCategory.fromKey(post.category)
+  val distanceText = GeoUtils.formatDistance(item.distanceMeters)
+  val arrow = GeoUtils.compassArrowForBearing(item.bearingDegrees)
+  val dir = GeoUtils.cardinalDirectionEs(item.bearingDegrees)
+  val relativeTime = remember(post.createdAtMillis) {
+    GeoUtils.formatRelativeTimestamp(post.createdAtMillis)
+  }
+
+  Card(
+    colors = CardDefaults.cardColors(
+      containerColor = if (item.isImmediateProximity) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.30f)
+      } else {
+        MaterialTheme.colorScheme.surfaceContainer
+      },
+    ),
+    border = if (item.isImmediateProximity) {
+      BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+    } else {
+      null
+    },
+    shape = MaterialTheme.shapes.large,
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("local_mission_feed_card_${post.id}"),
+  ) {
+    Column(
+      modifier = Modifier.padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      // Author row with Role Badge + Timestamp
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Top,
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+          modifier = Modifier.weight(1f),
+        ) {
+          Box(
+            modifier = Modifier
+              .size(40.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+          ) {
+            Text(
+              text = post.authorDisplayName.take(1).uppercase().ifBlank { "V" },
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+          }
+
+          Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            FlowRow(
+              verticalArrangement = Arrangement.spacedBy(4.dp),
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Text(
+                text = if (isMine) "${post.authorDisplayName} (Tú)" else post.authorDisplayName,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.align(Alignment.CenterVertically),
+              )
+              Text(
+                text = "@${post.authorUsername}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.CenterVertically),
+              )
+              RoleTitleBadge(
+                role = post.authorRole,
+                roleTitle = post.authorRoleTitle,
+                modifier = Modifier
+                  .align(Alignment.CenterVertically)
+                  .testTag("feed_post_role_badge_${post.id}"),
+              )
+            }
+
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Rounded.Schedule,
+                contentDescription = "Hora de publicación",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(13.dp),
+              )
+              Text(
+                text = relativeTime,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("feed_post_timestamp_${post.id}"),
+              )
+              Text(
+                text = "• ${cat.label}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+              )
+            }
+          }
+        }
+
+        Surface(
+          color = MaterialTheme.colorScheme.tertiaryContainer,
+          shape = CircleShape,
+        ) {
+          Text(
+            text = "+${post.xpReward} XP",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onTertiaryContainer,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+          )
+        }
+      }
+
+      // Mission Title & Description
+      Text(
+        text = post.title,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurface,
+      )
+      Text(
+        text = post.description,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+
+      // Distance / Proximity & Place + Action
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Surface(
+          color = if (item.isImmediateProximity) {
+            MaterialTheme.colorScheme.primary
+          } else {
+            MaterialTheme.colorScheme.secondaryContainer
+          },
+          shape = CircleShape,
+          modifier = Modifier.testTag("feed_post_distance_${post.id}"),
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+          ) {
+            Icon(
+              imageVector = if (item.isImmediateProximity) Icons.Rounded.NearMe else Icons.Rounded.LocationOn,
+              contentDescription = "Distancia GPS",
+              tint = if (item.isImmediateProximity) {
+                MaterialTheme.colorScheme.onPrimary
+              } else {
+                MaterialTheme.colorScheme.onSecondaryContainer
+              },
+              modifier = Modifier.size(14.dp),
+            )
+            Text(
+              text = if (item.isImmediateProximity) {
+                "$distanceText • ¡En tu rango!"
+              } else {
+                "$distanceText • $arrow $dir"
+              },
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.Bold,
+              color = if (item.isImmediateProximity) {
+                MaterialTheme.colorScheme.onPrimary
+              } else {
+                MaterialTheme.colorScheme.onSecondaryContainer
+              },
+            )
+          }
+        }
+
+        OutlinedButton(
+          onClick = onOpenOnRadar,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+          modifier = Modifier
+            .height(40.dp)
+            .testTag("open_feed_mission_radar_${post.id}"),
+        ) {
+          Icon(Icons.Rounded.Radar, contentDescription = null, modifier = Modifier.size(16.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("Ver en Radar", style = MaterialTheme.typography.labelMedium)
+        }
+      }
+
+      if (post.placeLabel.isNotBlank()) {
+        Text(
+          text = "Zona: ${post.placeLabel}",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun CreateLocalMissionFeedDialog(
+  onDismiss: () -> Unit,
+  onPublish: (title: String, description: String, category: String, xpReward: Long, placeLabel: String) -> Unit,
+) {
+  var title by remember { mutableStateOf("") }
+  var description by remember { mutableStateOf("") }
+  var placeLabel by remember { mutableStateOf("") }
+  var selectedCat by remember { mutableStateOf("explore") }
+  var xpReward by remember { mutableLongStateOf(150L) }
+
+  Dialog(
+    onDismissRequest = onDismiss,
+    properties = DialogProperties(usePlatformDefaultWidth = false),
+  ) {
+    Surface(
+      color = MaterialTheme.colorScheme.surfaceContainerHigh,
+      shape = MaterialTheme.shapes.extraLarge,
+      tonalElevation = 6.dp,
+      modifier = Modifier
+        .fillMaxWidth()
+        .widthIn(max = 520.dp)
+        .padding(horizontal = 20.dp, vertical = 24.dp)
+        .testTag("create_local_feed_dialog"),
+    ) {
+      Column(
+        modifier = Modifier
+          .verticalScroll(rememberScrollState())
+          .padding(22.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        Text(
+          text = "Publicar misión en el feed local",
+          style = MaterialTheme.typography.headlineSmall,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+          text = "Se guardará localmente con tu rol actual y tu coordenada GPS en tiempo real.",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(
+          value = title,
+          onValueChange = { if (it.length <= 80) title = it },
+          label = { Text("Título de la misión") },
+          placeholder = { Text("Ej. Mirador del parque") },
+          singleLine = true,
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("feed_post_title_input"),
+        )
+        OutlinedTextField(
+          value = description,
+          onValueChange = { if (it.length <= 240) description = it },
+          label = { Text("Descripción") },
+          placeholder = { Text("Qué debe encontrar o fotografiar el explorador") },
+          minLines = 2,
+          maxLines = 4,
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("feed_post_description_input"),
+        )
+        OutlinedTextField(
+          value = placeLabel,
+          onValueChange = { if (it.length <= 80) placeLabel = it },
+          label = { Text("Lugar o referencia (opcional)") },
+          placeholder = { Text("Plaza principal / Parque") },
+          singleLine = true,
+          modifier = Modifier.fillMaxWidth(),
+        )
+        @OptIn(ExperimentalLayoutApi::class)
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          MissionCategory.entries.take(5).forEach { cat ->
+            FilterChip(
+              selected = selectedCat == cat.key,
+              onClick = { selectedCat = cat.key },
+              label = { Text(cat.label) },
+            )
+          }
+        }
+        @OptIn(ExperimentalLayoutApi::class)
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          listOf(100L, 150L, 250L).forEach { xp ->
+            FilterChip(
+              selected = xpReward == xp,
+              onClick = { xpReward = xp },
+              label = { Text("+$xp XP") },
+            )
+          }
+        }
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.End,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          TextButton(onClick = onDismiss) {
+            Text("Cancelar")
+          }
+          Spacer(modifier = Modifier.width(8.dp))
+          Button(
+            onClick = {
+              onPublish(
+                title.trim().ifBlank { "Misión rápida cercana" },
+                description.trim().ifBlank { "Explora esta ubicación cerca de tu radar y confírmala." },
+                selectedCat,
+                xpReward,
+                placeLabel.trim().ifBlank { "Ubicación GPS actual" },
+              )
+            },
+            modifier = Modifier.testTag("confirm_publish_feed_post_button"),
+          ) {
+            Text("Publicar")
           }
         }
       }

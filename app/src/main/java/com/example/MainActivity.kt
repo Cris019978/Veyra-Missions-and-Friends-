@@ -61,8 +61,10 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.data.local.LocalAccountStore
 import com.example.data.local.LocalAuthManager
+import com.example.data.local.LocalMissionFeedRepository
 import com.example.data.local.LocalThemePreferences
 import com.example.data.local.ThemePrefsSnapshot
+import com.example.data.local.db.VeyraLocalDatabase
 import com.example.data.location.LocationTracker
 import com.example.data.repository.RadarQuestRepository
 import com.example.service.ProximityGuidanceService
@@ -132,6 +134,9 @@ fun AppNavigation() {
         factory = viewModelFactory {
           initializer {
             val app = checkNotNull(this[APPLICATION_KEY])
+            val feedRepo = LocalMissionFeedRepository(
+              VeyraLocalDatabase.getInstance(app).localMissionPostDao()
+            )
             RadarQuestViewModel(
               repository = RadarQuestRepository(
                 db = null,
@@ -147,6 +152,7 @@ fun AppNavigation() {
               accountRoleTitle = activeSession.roleTitle,
               initialAccountXp = activeSession.xp,
               initialAccountLevel = activeSession.level,
+              localMissionFeedRepository = feedRepo,
               onSystemNotify = notificationManager::postNotification,
             )
           }
@@ -481,8 +487,16 @@ private fun MainAppShell(
               2 -> SocialFeedScreen(
                 uiState = uiState,
                 currentUserId = currentUserId,
-                onRefresh = { viewModel.refreshAll() },
+                onRefresh = { viewModel.generateFreshLocalFeedMissions() },
                 onCheerCompletion = { viewModel.cheerCompletion(it) },
+                onPublishLocalMission = { title, desc, cat, xp, place ->
+                  viewModel.publishLocalFeedMission(title, desc, cat, xp, place)
+                },
+                onGenerateLocalMissions = { viewModel.generateFreshLocalFeedMissions() },
+                onOpenFeedMissionOnRadar = { post ->
+                  viewModel.acceptMission(post.id)
+                  selectTab(0)
+                },
               )
 
               3 -> SocialArenaScreen(

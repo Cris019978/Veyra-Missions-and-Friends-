@@ -179,3 +179,44 @@ data class NearbyMissionPopup(
   val xpReward: Long,
 )
 
+data class LocalMissionPost(
+  val id: String,
+  val title: String,
+  val description: String,
+  val category: String,
+  val xpReward: Long,
+  val authorUserId: String,
+  val authorDisplayName: String,
+  val authorUsername: String,
+  val authorRole: String = "explorer",
+  val authorRoleTitle: String = "Explorador",
+  val latitude: Double,
+  val longitude: Double,
+  val placeLabel: String,
+  val createdAtMillis: Long,
+  val isSystemGenerated: Boolean = false,
+) {
+  fun toRadarMission(): Mission = Mission(
+    id = id,
+    creatorId = authorUserId,
+    creatorName = authorDisplayName,
+    title = title,
+    description = description,
+    category = category,
+    missionType = "photo",
+    iconKey = category,
+    placeLabel = placeLabel,
+    isSafePublicVerified = true,
+    xpReward = xpReward,
+    latitude = latitude,
+    longitude = longitude,
+    isActive = true,
+  )
+}
+
+data class LocalMissionFeedItem(
+  val post: LocalMissionPost,
+  val distanceMeters: Float,
+  val bearingDegrees: Float,
+  val isImmediateProximity: Boolean,
+)

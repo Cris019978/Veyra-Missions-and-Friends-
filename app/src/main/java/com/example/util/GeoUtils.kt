@@ -105,6 +105,24 @@ object GeoUtils {
     }
   }
 
+  fun formatRelativeTimestamp(
+    timestampMillis: Long,
+    nowMillis: Long = System.currentTimeMillis(),
+  ): String {
+    if (timestampMillis <= 0L) return "Reciente"
+    val diff = (nowMillis - timestampMillis).coerceAtLeast(0L)
+    val mins = diff / 60_000L
+    val hours = diff / 3_600_000L
+    val days = diff / 86_400_000L
+    return when {
+      mins < 1L -> "Ahora mismo"
+      mins < 60L -> "Hace $mins min"
+      hours < 24L -> "Hace $hours h"
+      days == 1L -> "Ayer"
+      else -> "Hace $days d"
+    }
+  }
+
   fun openInExternalMap(
     context: Context,
     latitude: Double,
