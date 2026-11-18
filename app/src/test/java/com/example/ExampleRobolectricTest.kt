@@ -8,15 +8,18 @@ import android.widget.Button
 import android.widget.TextView
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.local.LocalAccountStore
 import com.example.data.location.LocationTracker
 import com.example.data.model.Mission
 import com.example.data.model.MissionCompletion
@@ -43,6 +46,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -624,5 +628,127 @@ class ExampleRobolectricTest {
     }
 
     composeTestRule.onNodeWithTag("local_offline_mode_banner").assertIsDisplayed()
+  }
+
+  @Test
+  fun `safeRuntimeBootstrap checkGooglePlayServices returns structured status without throwing`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val status = SafeRuntimeBootstrap.checkGooglePlayServices(context)
+    // In Robolectric without GMS APK, GoogleApiAvailability reports unavailable with a clear Spanish message
+    assertFalse(status.isAvailable)
+    assertNotNull(status.statusMessage)
+  }
+
+  @Test
+  fun `auth screen renders Play Services warning when unavailable and allows continuing in local mode`() {
+    var continuedLocal = false
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        com.example.ui.auth.AuthScreen(
+          firebaseAuth = null,
+          playServicesAvailable = false,
+          playServicesMessage = "Google Play Services no está instalado en este dispositivo/emulador",
+          onAuthSuccess = {},
+          onContinueLocalMode = { continuedLocal = true },
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("auth_error_banner").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("continue_local_mode_button")
+      .performScrollTo()
+      .performClick()
+    assertTrue(continuedLocal)
+  }
+
+  @Test
+  fun `localAccountStore persists saved account across repository instances and clears on sign out`() = runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val store = LocalAccountStore(context)
+    store.clearSavedAccount(markExplicitlySignedOut = false)
+
+    store.markSessionSaved(
+      authMode = "local",
+      userId = RadarQuestRepository.LOCAL_USER_ID,
+      defaultDisplayName = "CapitanaVeyra",
+    )
+    val repoFirstLaunch = RadarQuestRepository(db = null, auth = null, localAccountStore = store)
+    repoFirstLaunch.ensureOrUpdatePlayerProfile(
+      username = "capitana_veyra",
+      callsign = "CapitanaVeyra",
+      avatarIcon = "bolt",
+      avatarColorHex = "#5C6BC0",
+      statusMessage = "Lista para explorar",
+      seekingHelp = false,
+      isOnline = true,
+      latitude = 19.4326,
+      longitude = -99.1332,
+    )
+    repoFirstLaunch.awardPlayerStats(addXp = 310L, addMissionsCompleted = 2L)
+
+    // Simulate reopening the app with a brand-new repository instance backed by LocalAccountStore
+    val repoReopen = RadarQuestRepository(db = null, auth = null, localAccountStore = store)
+    val restoredSnapshot = store.getSnapshotOnce()
+    val restoredProfile = repoReopen.observeMyProfile(RadarQuestRepository.LOCAL_USER_ID).first()
+
+    assertTrue(restoredSnapshot.isSessionSaved)
+    assertFalse(restoredSnapshot.explicitlySignedOut)
+    assertEquals("CapitanaVeyra", restoredProfile?.callsign)
+    assertEquals(310L, restoredProfile?.xp)
+    assertEquals(2L, restoredProfile?.missionsCompleted)
+
+    // Sign out deletes saved local account data and marks explicit sign-out
+    store.clearSavedAccount(markExplicitlySignedOut = true)
+    val clearedSnapshot = store.getSnapshotOnce()
+    assertFalse(clearedSnapshot.isSessionSaved)
+    assertTrue(clearedSnapshot.explicitlySignedOut)
+    assertNull(clearedSnapshot.savedProfile)
+  }
+
+  @Test
+  fun `customize style screen shows sign out confirmation dialog with No Regresar and Si Acepto`() {
+    var signOutCalls = 0
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        CustomizeStyleScreen(
+          uiState = RadarQuestUiState(isLocalOfflineMode = true),
+          onSaveTheme = { _, _, _, _ -> },
+          onSaveAnimationTier = {},
+          onToggleNotifications = {},
+          onToggleGestureNav = {},
+          onRequestNotificationPermission = {},
+          onSaveProfile = { _, _, _, _, _ -> },
+          onReopenOnboardingQuest = {},
+          onSignOut = { signOutCalls += 1 },
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("customize_style_list")
+      .performScrollToNode(hasTestTag("sign_out_button"))
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("sign_out_button")
+      .assertIsDisplayed()
+      .performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("sign_out_confirmation_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Realmente quieres cerrar la sesión").assertIsDisplayed()
+
+    // Pressing "No, Regresar" closes only the confirmation dialog without signing out
+    composeTestRule.onNodeWithTag("cancel_sign_out_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("sign_out_confirmation_dialog").assertDoesNotExist()
+    assertEquals(0, signOutCalls)
+
+    // Reopen and confirm "Si Acepto"
+    composeTestRule.onNodeWithTag("sign_out_button")
+      .assertIsDisplayed()
+      .performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("confirm_sign_out_button").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(1, signOutCalls)
   }
 }

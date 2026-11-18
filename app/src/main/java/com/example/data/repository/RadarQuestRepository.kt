@@ -1,5 +1,6 @@
 package com.example.data.repository
 
+import com.example.data.local.LocalAccountStore
 import com.example.data.model.Challenge
 import com.example.data.model.Mission
 import com.example.data.model.MissionCompletion
@@ -19,7 +20,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.util.UUID
@@ -28,12 +30,13 @@ import java.util.UUID
  * Dual-mode repository:
  * - When [db] and [auth] are non-null, reads and writes directly against Firebase Firestore.
  * - When [db] or [auth] is null (e.g. google-services.json absent or Google Services unavailable),
- *   transparently operates in local exploration mode backed by in-memory reactive flows without
- *   requiring authentication or throwing Firebase exceptions.
+ *   transparently operates in local exploration mode backed by [LocalAccountStore] + reactive flows
+ *   without requiring authentication or throwing Firebase exceptions.
  */
 class RadarQuestRepository(
   private val db: FirebaseFirestore? = null,
   private val auth: FirebaseAuth? = null,
+  private val localAccountStore: LocalAccountStore? = null,
 ) {
 
   val isCloudAvailable: Boolean
@@ -174,18 +177,35 @@ class RadarQuestRepository(
     }
   }
 
+  private suspend fun ensureHydratedLocalProfile(): PlayerProfile? {
+    val cached = localProfileFlow.value
+    if (cached != null) return cached
+    val stored = runCatching { localAccountStore?.getSnapshotOnce()?.savedProfile }.getOrNull()
+    if (stored != null) {
+      localProfileFlow.value = stored
+    }
+    return stored
+  }
+
   // --- Players & Real-Time Location ---
   fun observeMyProfile(uid: String): Flow<PlayerProfile?> {
     val firestore = db
     if (firestore == null || auth == null) {
-      return localProfileFlow
+      return flow {
+        ensureHydratedLocalProfile()
+        emitAll(localProfileFlow)
+      }
     }
     val path = "players/$uid"
     return firestore.collection("players").document(uid)
       .snapshots()
       .map { snap ->
         if (snap.exists()) {
-          snap.toObject(PlayerProfile::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+          val prof = snap.toObject(PlayerProfile::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+          if (prof != null) {
+            runCatching { localAccountStore?.saveProfile(prof) }
+          }
+          prof
         } else {
           null
         }
@@ -229,8 +249,8 @@ class RadarQuestRepository(
 
     val firestore = db
     if (firestore == null || auth == null) {
-      val current = localProfileFlow.value
-      localProfileFlow.value = PlayerProfile(
+      val current = ensureHydratedLocalProfile()
+      val updated = PlayerProfile(
         id = current?.id ?: LOCAL_USER_ID,
         userId = current?.userId ?: LOCAL_USER_ID,
         username = safeUsername,
@@ -251,6 +271,8 @@ class RadarQuestRepository(
         helpsGiven = current?.helpsGiven ?: 0L,
         duelsWon = current?.duelsWon ?: 0L,
       )
+      localProfileFlow.value = updated
+      runCatching { localAccountStore?.saveProfile(updated) }
       return Result.success(Unit)
     }
 
@@ -310,16 +332,18 @@ class RadarQuestRepository(
   suspend fun updateLiveLocation(latitude: Double, longitude: Double, isOnline: Boolean): Result<Unit> {
     val firestore = db
     if (firestore == null || auth == null) {
-      val current = localProfileFlow.value ?: PlayerProfile(
+      val current = ensureHydratedLocalProfile() ?: PlayerProfile(
         id = LOCAL_USER_ID,
         userId = LOCAL_USER_ID,
         callsign = "Explorador",
       )
-      localProfileFlow.value = current.copy(
+      val updated = current.copy(
         latitude = latitude.coerceIn(-90.0, 90.0),
         longitude = longitude.coerceIn(-180.0, 180.0),
         isOnline = isOnline,
       )
+      localProfileFlow.value = updated
+      runCatching { localAccountStore?.saveProfile(updated) }
       return Result.success(Unit)
     }
 
@@ -352,20 +376,22 @@ class RadarQuestRepository(
   ): Result<Unit> {
     val firestore = db
     if (firestore == null || auth == null) {
-      val current = localProfileFlow.value ?: PlayerProfile(
+      val current = ensureHydratedLocalProfile() ?: PlayerProfile(
         id = LOCAL_USER_ID,
         userId = LOCAL_USER_ID,
         callsign = "Explorador",
       )
       val newXp = (current.xp + addXp).coerceAtLeast(0L)
       val newLevel = (newXp / 250L) + 1L
-      localProfileFlow.value = current.copy(
+      val updated = current.copy(
         xp = newXp,
         level = newLevel,
         missionsCompleted = current.missionsCompleted + addMissionsCompleted,
         helpsGiven = current.helpsGiven + addHelpsGiven,
         duelsWon = current.duelsWon + addDuelsWon,
       )
+      localProfileFlow.value = updated
+      runCatching { localAccountStore?.saveProfile(updated) }
       return Result.success(Unit)
     }
 

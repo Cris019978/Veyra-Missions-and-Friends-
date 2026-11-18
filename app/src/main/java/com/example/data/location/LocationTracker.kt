@@ -16,8 +16,10 @@ import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
 data class LiveLocationPoint(
@@ -29,7 +31,8 @@ data class LiveLocationPoint(
 /**
  * Provides live location updates using Google Play Services [FusedLocationProviderClient]
  * when available, and automatically falls back to Android's native [LocationManager]
- * (GPS + Network providers) if Google Play Services are missing, outdated, or fail at runtime.
+ * (GPS + Network providers) if Google Play Services are missing, outdated, fail at runtime,
+ * or stall without emitting a fix.
  */
 class LocationTracker(
   context: Context,
@@ -52,12 +55,14 @@ class LocationTracker(
   fun observeLocationUpdates(intervalMs: Long = 5000L): Flow<LiveLocationPoint> = callbackFlow {
     val nativeStarted = AtomicBoolean(false)
     val fusedAttached = AtomicBoolean(false)
+    val receivedAnyLocation = AtomicBoolean(false)
     var fusedClient: FusedLocationProviderClient? = null
     var fusedCallback: LocationCallback? = null
     var nativeManager: LocationManager? = null
     var nativeListener: LocationListenerCompat? = null
 
     fun emitLocation(location: Location) {
+      receivedAnyLocation.set(true)
       trySend(
         LiveLocationPoint(
           latitude = location.latitude,
@@ -163,6 +168,15 @@ class LocationTracker(
             Log.w(TAG, "Fused requestLocationUpdates failed (${err.message}); falling back to LocationManager")
             startNativeLocationManager()
           }
+
+        // Watchdog: if Fused location stays silent (e.g. GMS stalled in emulator), enable native LocationManager
+        launch {
+          delay(4000L)
+          if (!receivedAnyLocation.get()) {
+            Log.i(TAG, "Fused location quiet after 4s; enabling native LocationManager fallback alongside")
+            startNativeLocationManager()
+          }
+        }
       } catch (t: Throwable) {
         Log.w(TAG, "Fused location threw (${t.message}); falling back to LocationManager", t)
         startNativeLocationManager()

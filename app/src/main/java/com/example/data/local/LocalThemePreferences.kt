@@ -90,4 +90,10 @@ class LocalThemePreferences(private val context: Context) {
       prefs[Keys.GESTURE_NAV_ENABLED] = snapshot.gestureNavEnabled
     }
   }
+
+  suspend fun clearAll() {
+    context.radarPrefsDataStore.edit { prefs ->
+      prefs.clear()
+    }
+  }
 }

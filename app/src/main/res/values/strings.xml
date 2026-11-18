@@ -29,4 +29,9 @@
     <string name="grant_location_desc">Para mostrar tu mapa radar redondo y ver jugadores y misiones cercanas, concede el permiso de ubicación.</string>
     <string name="grant_location_btn">Activar ubicación</string>
     <string name="sign_out">Cerrar sesión</string>
+    <string name="sign_out_confirm_title">Cerrar sesión</string>
+    <string name="sign_out_confirm_message">Realmente quieres cerrar la sesión</string>
+    <string name="sign_out_confirm_detail">Se eliminarán los datos de cuenta y sesión guardados localmente en este dispositivo.</string>
+    <string name="sign_out_confirm_accept">Si Acepto</string>
+    <string name="sign_out_confirm_cancel">No, Regresar</string>
 </resources>

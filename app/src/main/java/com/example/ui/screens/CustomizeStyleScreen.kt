@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Swipe
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -64,7 +65,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.R
 import com.example.ui.theme.AnimationTierOption
 import com.example.ui.theme.CornerStyleOption
@@ -95,6 +99,7 @@ fun CustomizeStyleScreen(
   var statusMsg by remember(profile?.statusMessage) { mutableStateOf(profile?.statusMessage ?: "Listo para misiones") }
   var seekingHelp by remember(profile?.seekingHelp) { mutableStateOf(profile?.seekingHelp ?: false) }
   var auraHex by remember(profile?.avatarColorHex) { mutableStateOf(profile?.avatarColorHex ?: "#00BFA5") }
+  var showSignOutConfirmDialog by remember { mutableStateOf(false) }
 
   LaunchedEffect(profile?.userId) {
     if (profile != null) {
@@ -122,7 +127,8 @@ fun CustomizeStyleScreen(
     LazyColumn(
       modifier = Modifier
         .widthIn(max = 680.dp)
-        .fillMaxSize(),
+        .fillMaxSize()
+        .testTag("customize_style_list"),
       contentPadding = PaddingValues(
         start = 16.dp,
         end = 16.dp,
@@ -636,9 +642,12 @@ fun CustomizeStyleScreen(
         }
       }
 
-      // 5. Sign Out / Local Mode Info
+      // 5. Saved Account Info & Sign Out Button (Always shown at bottom of Estilo)
       item {
-        if (uiState.isLocalOfflineMode) {
+        Column(
+          modifier = Modifier.fillMaxWidth(),
+          verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
           Surface(
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = MaterialTheme.shapes.large,
@@ -647,23 +656,135 @@ fun CustomizeStyleScreen(
               .testTag("local_mode_account_card"),
           ) {
             Text(
-              text = "Sesión local activa (sin servicios en la nube). Tus ajustes y estilos se guardan en este dispositivo.",
+              text = if (uiState.isLocalOfflineMode) {
+                "Cuenta guardada localmente en este dispositivo. No necesitas volver a iniciar sesión al abrir Veyra."
+              } else {
+                "Sesión y cuenta guardadas localmente para entrar directo cada vez que abras Veyra."
+              },
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
               modifier = Modifier.padding(14.dp),
             )
           }
-        } else {
+
           OutlinedButton(
-            onClick = onSignOut,
+            onClick = { showSignOutConfirmDialog = true },
+            colors = ButtonDefaults.outlinedButtonColors(
+              contentColor = MaterialTheme.colorScheme.error,
+            ),
             modifier = Modifier
               .fillMaxWidth()
-              .height(50.dp)
+              .height(52.dp)
               .testTag("sign_out_button"),
           ) {
-            Icon(Icons.AutoMirrored.Rounded.Logout, contentDescription = null)
+            Icon(Icons.AutoMirrored.Rounded.Logout, contentDescription = stringResource(id = R.string.sign_out))
             Spacer(modifier = Modifier.width(8.dp))
-            Text(stringResource(id = R.string.sign_out))
+            Text(
+              text = stringResource(id = R.string.sign_out),
+              style = MaterialTheme.typography.titleSmall,
+              fontWeight = FontWeight.SemiBold,
+            )
+          }
+        }
+      }
+    }
+
+    if (showSignOutConfirmDialog) {
+      Dialog(
+        onDismissRequest = { showSignOutConfirmDialog = false },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+      ) {
+        Box(
+          modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.6f))
+            .padding(24.dp),
+          contentAlignment = Alignment.Center,
+        ) {
+          Card(
+            shape = MaterialTheme.shapes.extraLarge,
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            ),
+            modifier = Modifier
+              .widthIn(max = 420.dp)
+              .fillMaxWidth()
+              .testTag("sign_out_confirmation_dialog"),
+          ) {
+            Column(
+              modifier = Modifier.padding(24.dp),
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+              Box(
+                modifier = Modifier
+                  .size(56.dp)
+                  .clip(CircleShape)
+                  .background(MaterialTheme.colorScheme.errorContainer),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = Icons.AutoMirrored.Rounded.Logout,
+                  contentDescription = stringResource(id = R.string.sign_out_confirm_title),
+                  tint = MaterialTheme.colorScheme.onErrorContainer,
+                  modifier = Modifier.size(28.dp),
+                )
+              }
+
+              Text(
+                text = stringResource(id = R.string.sign_out_confirm_message),
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+              )
+
+              Text(
+                text = stringResource(id = R.string.sign_out_confirm_detail),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+              )
+
+              Spacer(modifier = Modifier.height(4.dp))
+
+              Button(
+                onClick = {
+                  showSignOutConfirmDialog = false
+                  onSignOut()
+                },
+                colors = ButtonDefaults.buttonColors(
+                  containerColor = MaterialTheme.colorScheme.error,
+                  contentColor = MaterialTheme.colorScheme.onError,
+                ),
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .height(50.dp)
+                  .testTag("confirm_sign_out_button"),
+              ) {
+                Text(
+                  text = stringResource(id = R.string.sign_out_confirm_accept),
+                  style = MaterialTheme.typography.titleSmall,
+                  fontWeight = FontWeight.Bold,
+                )
+              }
+
+              OutlinedButton(
+                onClick = { showSignOutConfirmDialog = false },
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .height(50.dp)
+                  .testTag("cancel_sign_out_button"),
+              ) {
+                Text(
+                  text = stringResource(id = R.string.sign_out_confirm_cancel),
+                  style = MaterialTheme.typography.titleSmall,
+                  fontWeight = FontWeight.SemiBold,
+                )
+              }
+            }
           }
         }
       }

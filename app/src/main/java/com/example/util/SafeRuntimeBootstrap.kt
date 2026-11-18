@@ -7,6 +7,8 @@ import android.os.Process
 import android.util.Log
 import com.example.data.remote.OsmSafePlaceFinder
 import com.example.ui.crash.CrashReportActivity
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
 import com.google.firebase.Firebase
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
@@ -17,10 +19,17 @@ import java.util.Date
 import java.util.Locale
 import kotlin.system.exitProcess
 
+data class GooglePlayServicesStatus(
+  val isAvailable: Boolean,
+  val statusCode: Int,
+  val statusMessage: String? = null,
+)
+
 data class FirebaseRuntimeState(
   val isAvailable: Boolean,
   val auth: FirebaseAuth? = null,
   val firestore: FirebaseFirestore? = null,
+  val playServicesStatus: GooglePlayServicesStatus = GooglePlayServicesStatus(false, -1, null),
   val failureReason: String? = null,
 )
 
@@ -28,8 +37,8 @@ data class FirebaseRuntimeState(
  * Centralizes crash-proof startup initialization:
  * 1. Global UncaughtExceptionHandler -> launches [CrashReportActivity] with Copy & Retry.
  * 2. Safe osmdroid tile cache configuration into app-private cacheDir (no storage permissions).
- * 3. Safe Firebase initialization returning [FirebaseRuntimeState] without throwing if
- *    google-services.json or Google Play Services are unavailable.
+ * 3. Safe Google Play Services & Firebase initialization returning [FirebaseRuntimeState] without
+ *    throwing or hanging if google-services.json or Google Play Services are unavailable.
  */
 object SafeRuntimeBootstrap {
 
@@ -145,11 +154,40 @@ object SafeRuntimeBootstrap {
     }
   }
 
+  fun checkGooglePlayServices(context: Context): GooglePlayServicesStatus {
+    return try {
+      val appCtx = context.applicationContext
+      val code = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(appCtx)
+      if (code == ConnectionResult.SUCCESS) {
+        GooglePlayServicesStatus(isAvailable = true, statusCode = code, statusMessage = null)
+      } else {
+        val label = when (code) {
+          ConnectionResult.SERVICE_MISSING -> "Google Play Services no está instalado en este dispositivo/emulador"
+          ConnectionResult.SERVICE_UPDATING -> "Google Play Services se está actualizando temporalmente"
+          ConnectionResult.SERVICE_VERSION_UPDATE_REQUIRED -> "Google Play Services requiere actualización"
+          ConnectionResult.SERVICE_DISABLED -> "Google Play Services está deshabilitado"
+          ConnectionResult.SERVICE_INVALID -> "La firma o instalación de Google Play Services no es válida"
+          else -> "Google Play Services no disponible temporalmente (código $code)"
+        }
+        Log.w(TAG, label)
+        GooglePlayServicesStatus(isAvailable = false, statusCode = code, statusMessage = label)
+      }
+    } catch (t: Throwable) {
+      Log.w(TAG, "Google Play Services check failed: ${t.message}", t)
+      GooglePlayServicesStatus(
+        isAvailable = false,
+        statusCode = -1,
+        statusMessage = "Error al verificar Google Play Services: ${t.message ?: "desconocido"}",
+      )
+    }
+  }
+
   fun tryInitFirebase(
     context: Context,
     databaseId: String,
   ): FirebaseRuntimeState {
     val appCtx = context.applicationContext
+    val playStatus = checkGooglePlayServices(appCtx)
     return try {
       val apps = FirebaseApp.getApps(appCtx)
       val firebaseApp = if (apps.isNotEmpty()) {
@@ -161,6 +199,7 @@ object SafeRuntimeBootstrap {
       if (firebaseApp == null) {
         return FirebaseRuntimeState(
           isAvailable = false,
+          playServicesStatus = playStatus,
           failureReason = "google-services.json ausente o sin configurar",
         )
       }
@@ -170,6 +209,7 @@ object SafeRuntimeBootstrap {
       if (appId.isBlank() || projectId.isNullOrBlank() || projectId == "remixed-project-id") {
         return FirebaseRuntimeState(
           isAvailable = false,
+          playServicesStatus = playStatus,
           failureReason = "Configuración de Firebase inválida o incompleta",
         )
       }
@@ -197,20 +237,24 @@ object SafeRuntimeBootstrap {
           isAvailable = false,
           auth = null,
           firestore = null,
-          failureReason = "Servicios de Firebase no disponibles en este entorno",
+          playServicesStatus = playStatus,
+          failureReason = playStatus.statusMessage ?: "Servicios de Firebase no disponibles en este entorno",
         )
       } else {
         FirebaseRuntimeState(
           isAvailable = true,
           auth = auth,
           firestore = firestore,
+          playServicesStatus = playStatus,
+          failureReason = playStatus.statusMessage,
         )
       }
     } catch (t: Throwable) {
       Log.w(TAG, "Firebase initialization failed gracefully: ${t.message}", t)
       FirebaseRuntimeState(
         isAvailable = false,
-        failureReason = t.message ?: "Firebase no disponible",
+        playServicesStatus = playStatus,
+        failureReason = t.message ?: playStatus.statusMessage ?: "Firebase no disponible",
       )
     }
   }

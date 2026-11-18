@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Radar
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
@@ -61,6 +62,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.data.local.LocalAccountStore
 import com.example.data.local.LocalThemePreferences
 import com.example.data.local.ThemePrefsSnapshot
 import com.example.data.location.LocationTracker
@@ -116,91 +118,189 @@ internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
 @Composable
 fun AppNavigation() {
   val context = LocalContext.current
+  val navScope = rememberCoroutineScope()
   val localPrefs = remember(context) { LocalThemePreferences(context.applicationContext) }
+  val accountStore = remember(context) { LocalAccountStore(context.applicationContext) }
   val notificationManager = remember(context) { VeyraNotificationManager(context.applicationContext) }
+  val credentialManager = remember(context) {
+    runCatching { CredentialManager.create(context) }.getOrNull()
+  }
   val localThemeSnapshot by localPrefs.prefsFlow.collectAsStateWithLifecycle(initialValue = ThemePrefsSnapshot())
+  val accountSnapshot by accountStore.accountFlow.collectAsStateWithLifecycle(initialValue = null)
 
   val firebaseState = remember(context) {
     val dbId = runCatching { context.getString(R.string.firestore_database_id) }.getOrDefault("")
     SafeRuntimeBootstrap.tryInitFirebase(context.applicationContext, dbId)
   }
 
-  var forceLocalExploration by remember(firebaseState.isAvailable) {
-    mutableStateOf(!firebaseState.isAvailable)
-  }
-
   val firebaseAuth = firebaseState.auth
-  val currentUser by if (firebaseState.isAvailable && firebaseAuth != null && !forceLocalExploration) {
+  val currentUser by if (firebaseState.isAvailable && firebaseAuth != null && firebaseState.playServicesStatus.isAvailable) {
     remember(firebaseAuth) { firebaseAuth.authStateFlow() }
       .collectAsStateWithLifecycle(initialValue = runCatching { firebaseAuth.currentUser }.getOrNull())
   } else {
     remember { mutableStateOf<FirebaseUser?>(null) }
   }
 
-  val useCloudMode = firebaseState.isAvailable && firebaseAuth != null && firebaseState.firestore != null && !forceLocalExploration
-  val user = currentUser
-
-  if (useCloudMode && user == null) {
+  val snapshot = accountSnapshot
+  if (snapshot == null) {
     RadarQuestTheme(
       themeMode = localThemeSnapshot.themeMode,
       paletteKey = localThemeSnapshot.paletteKey,
       cornerStyle = localThemeSnapshot.cornerStyle,
     ) {
-      AuthScreen(
-        onAuthSuccess = { /* Reactive authStateFlow transitions automatically */ },
-        onContinueLocalMode = { forceLocalExploration = true },
-      )
+      Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+      ) {
+        CircularProgressIndicator()
+      }
     }
-  } else if (useCloudMode && user != null) {
-    key(user.uid) {
-      val viewModel: RadarQuestViewModel = viewModel(
-        key = user.uid,
-        factory = viewModelFactory {
-          initializer {
-            val app = checkNotNull(this[APPLICATION_KEY])
-            RadarQuestViewModel(
-              repository = RadarQuestRepository(firebaseState.firestore, firebaseAuth),
-              localPrefs = LocalThemePreferences(app),
-              currentUserId = user.uid,
-              defaultDisplayName = user.displayName ?: "Explorador",
-              isLocalOfflineMode = false,
-              onSystemNotify = notificationManager::postNotification,
-            )
-          }
-        },
-      )
-      MainAppShell(
-        viewModel = viewModel,
-        notificationManager = notificationManager,
-        currentUserId = user.uid,
-        firebaseAuth = firebaseAuth,
-      )
+    return
+  }
+
+  val cloudReady = firebaseState.isAvailable &&
+    firebaseState.playServicesStatus.isAvailable &&
+    firebaseAuth != null &&
+    firebaseState.firestore != null
+  val user = currentUser
+
+  val handleSignOut: () -> Unit = {
+    navScope.launch {
+      withContext(NonCancellable) {
+        ProximityGuidanceService.stop(context.applicationContext)
+        try {
+          credentialManager?.clearCredentialState(ClearCredentialStateRequest())
+        } catch (e: Exception) {
+          Log.w("Auth", "Failed to clear credential state: ${e.message}")
+        } finally {
+          runCatching { firebaseAuth?.signOut() }
+          localPrefs.clearAll()
+          accountStore.clearSavedAccount(markExplicitlySignedOut = true)
+        }
+      }
     }
-  } else {
-    val localUid = RadarQuestRepository.LOCAL_USER_ID
-    key(localUid) {
-      val viewModel: RadarQuestViewModel = viewModel(
-        key = localUid,
-        factory = viewModelFactory {
-          initializer {
-            val app = checkNotNull(this[APPLICATION_KEY])
-            RadarQuestViewModel(
-              repository = RadarQuestRepository(db = null, auth = null),
-              localPrefs = LocalThemePreferences(app),
-              currentUserId = localUid,
-              defaultDisplayName = "Explorador",
-              isLocalOfflineMode = true,
-              onSystemNotify = notificationManager::postNotification,
-            )
-          }
-        },
-      )
-      MainAppShell(
-        viewModel = viewModel,
-        notificationManager = notificationManager,
-        currentUserId = localUid,
-        firebaseAuth = null,
-      )
+  }
+
+  val useCloudAuthenticatedSession = cloudReady && user != null && !snapshot.explicitlySignedOut
+  val useSavedLocalSession = snapshot.isSessionSaved && snapshot.authMode == "local" && !snapshot.explicitlySignedOut
+  val autoEnterLocalWithoutCloud = !cloudReady && !snapshot.explicitlySignedOut
+
+  when {
+    useCloudAuthenticatedSession && user != null -> {
+      LaunchedEffect(user.uid) {
+        accountStore.markSessionSaved(
+          authMode = "google",
+          userId = user.uid,
+          email = user.email.orEmpty(),
+          defaultDisplayName = user.displayName ?: "Explorador",
+        )
+      }
+      val sessionKey = "${user.uid}_${snapshot.sessionId.ifBlank { "cloud" }}"
+      key(sessionKey) {
+        val viewModel: RadarQuestViewModel = viewModel(
+          key = sessionKey,
+          factory = viewModelFactory {
+            initializer {
+              val app = checkNotNull(this[APPLICATION_KEY])
+              RadarQuestViewModel(
+                repository = RadarQuestRepository(
+                  db = firebaseState.firestore,
+                  auth = firebaseAuth,
+                  localAccountStore = LocalAccountStore(app),
+                ),
+                localPrefs = LocalThemePreferences(app),
+                currentUserId = user.uid,
+                defaultDisplayName = user.displayName ?: "Explorador",
+                isLocalOfflineMode = false,
+                onSystemNotify = notificationManager::postNotification,
+              )
+            }
+          },
+        )
+        MainAppShell(
+          viewModel = viewModel,
+          notificationManager = notificationManager,
+          currentUserId = user.uid,
+          onSignOutRequested = handleSignOut,
+        )
+      }
+    }
+
+    useSavedLocalSession || autoEnterLocalWithoutCloud -> {
+      LaunchedEffect(snapshot.isSessionSaved) {
+        if (!snapshot.isSessionSaved) {
+          accountStore.markSessionSaved(
+            authMode = "local",
+            userId = RadarQuestRepository.LOCAL_USER_ID,
+            defaultDisplayName = "Explorador",
+          )
+        }
+      }
+      val localUid = RadarQuestRepository.LOCAL_USER_ID
+      val sessionKey = "${localUid}_${snapshot.sessionId.ifBlank { "local" }}"
+      key(sessionKey) {
+        val viewModel: RadarQuestViewModel = viewModel(
+          key = sessionKey,
+          factory = viewModelFactory {
+            initializer {
+              val app = checkNotNull(this[APPLICATION_KEY])
+              RadarQuestViewModel(
+                repository = RadarQuestRepository(
+                  db = null,
+                  auth = null,
+                  localAccountStore = LocalAccountStore(app),
+                ),
+                localPrefs = LocalThemePreferences(app),
+                currentUserId = localUid,
+                defaultDisplayName = snapshot.savedProfile?.callsign ?: "Explorador",
+                isLocalOfflineMode = true,
+                onSystemNotify = notificationManager::postNotification,
+              )
+            }
+          },
+        )
+        MainAppShell(
+          viewModel = viewModel,
+          notificationManager = notificationManager,
+          currentUserId = localUid,
+          onSignOutRequested = handleSignOut,
+        )
+      }
+    }
+
+    else -> {
+      RadarQuestTheme(
+        themeMode = localThemeSnapshot.themeMode,
+        paletteKey = localThemeSnapshot.paletteKey,
+        cornerStyle = localThemeSnapshot.cornerStyle,
+      ) {
+        AuthScreen(
+          firebaseAuth = if (cloudReady) firebaseAuth else null,
+          playServicesAvailable = firebaseState.playServicesStatus.isAvailable,
+          playServicesMessage = firebaseState.playServicesStatus.statusMessage,
+          allowAutoSignIn = !snapshot.explicitlySignedOut,
+          onAuthSuccess = {
+            navScope.launch {
+              val signedUser = runCatching { firebaseAuth?.currentUser }.getOrNull()
+              accountStore.markSessionSaved(
+                authMode = "google",
+                userId = signedUser?.uid ?: "google_user",
+                email = signedUser?.email.orEmpty(),
+                defaultDisplayName = signedUser?.displayName ?: "Explorador",
+              )
+            }
+          },
+          onContinueLocalMode = {
+            navScope.launch {
+              accountStore.markSessionSaved(
+                authMode = "local",
+                userId = RadarQuestRepository.LOCAL_USER_ID,
+                defaultDisplayName = "Explorador",
+              )
+            }
+          },
+        )
+      }
     }
   }
 }
@@ -210,15 +310,12 @@ private fun MainAppShell(
   viewModel: RadarQuestViewModel,
   notificationManager: VeyraNotificationManager,
   currentUserId: String,
-  firebaseAuth: FirebaseAuth?,
+  onSignOutRequested: () -> Unit,
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
   val uiState by viewModel.uiState.collectAsStateWithLifecycle()
   val snackbarHostState = remember { SnackbarHostState() }
-  val credentialManager = remember(context) {
-    runCatching { CredentialManager.create(context) }.getOrNull()
-  }
   val locationTracker = remember(context) { LocationTracker(context) }
   val pagerState = rememberPagerState(initialPage = 0, pageCount = { 4 })
   var showStyleInProfile by remember { mutableStateOf(false) }
@@ -472,17 +569,8 @@ private fun MainAppShell(
                   },
                   onReopenOnboardingQuest = { viewModel.reopenOnboardingQuest() },
                   onSignOut = {
-                    scope.launch {
-                      withContext(NonCancellable) {
-                        try {
-                          credentialManager?.clearCredentialState(ClearCredentialStateRequest())
-                        } catch (e: Exception) {
-                          Log.w("Auth", "Failed to clear credential state: ${e.message}")
-                        } finally {
-                          runCatching { firebaseAuth?.signOut() }
-                        }
-                      }
-                    }
+                    showStyleInProfile = false
+                    onSignOutRequested()
                   },
                   onBack = { showStyleInProfile = false },
                 )
