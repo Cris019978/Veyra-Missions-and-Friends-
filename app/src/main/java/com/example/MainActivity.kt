@@ -173,7 +173,7 @@ fun AppNavigation() {
         } catch (e: Exception) {
           Log.w("Auth", "Failed to clear credential state: ${e.message}")
         } finally {
-          runCatching { firebaseAuth?.signOut() }
+          runCatching { firebaseAuth?.signOut() ?: FirebaseAuth.getInstance().signOut() }
           localPrefs.clearAll()
           accountStore.clearSavedAccount(markExplicitlySignedOut = true)
         }

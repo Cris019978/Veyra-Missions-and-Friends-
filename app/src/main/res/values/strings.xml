@@ -3,7 +3,7 @@
     <string name="publication_name">Veyra: Missions and Friends</string>
     <string name="auth_title">Veyra</string>
     <string name="auth_subtitle">Explora tu mundo real, conecta con amigos cercanos y confirma misiones con tu cámara.</string>
-    <string name="auth_sign_in_google">Iniciar sesión con Google</string>
+    <string name="auth_sign_in_google">Continuar con Google</string>
     <string name="auth_feature_radar">Mapa radar redondo en vivo con jugadores cercanos</string>
     <string name="auth_feature_missions">Misiones en la vida real confirmadas con foto</string>
     <string name="auth_feature_social">Ayuda, compite en duelos y juega en equipo</string>

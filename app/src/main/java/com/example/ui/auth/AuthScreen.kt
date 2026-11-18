@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Groups
@@ -277,7 +278,7 @@ fun AuthScreen(
               scope = scope,
             )
           },
-          enabled = !isLoading && firebaseAuth != null && clientId.isNotBlank(),
+          enabled = !isLoading,
           shape = MaterialTheme.shapes.large,
           contentPadding = ButtonDefaults.ContentPadding,
           modifier = Modifier
@@ -292,6 +293,12 @@ fun AuthScreen(
               strokeWidth = 2.dp,
             )
           } else {
+            Icon(
+              imageVector = Icons.Rounded.AccountCircle,
+              contentDescription = null,
+              modifier = Modifier.size(22.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
             Text(
               text = stringResource(id = R.string.auth_sign_in_google),
               style = MaterialTheme.typography.titleMedium,

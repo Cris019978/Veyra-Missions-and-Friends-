@@ -655,6 +655,7 @@ class ExampleRobolectricTest {
     }
 
     composeTestRule.onNodeWithTag("auth_error_banner").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Continuar con Google").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithTag("continue_local_mode_button")
       .performScrollTo()
