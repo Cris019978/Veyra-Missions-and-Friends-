@@ -84,6 +84,7 @@ import com.example.data.model.LocalMissionPost
 import com.example.data.model.MissionCategory
 import com.example.data.model.MissionCompletion
 import com.example.data.model.PlayerProfile
+import com.example.ui.components.ContributionScoreBadge
 import com.example.ui.components.RoleTitleBadge
 import com.example.ui.viewmodel.RadarQuestUiState
 import com.example.util.GeoUtils
@@ -127,6 +128,10 @@ fun SocialFeedScreen(
     } else {
       uiState.publicCompletions.filter { it.category == selectedCategory }
     }
+  }
+
+  val completionCountsByAuthor = remember(uiState.publicCompletions) {
+    uiState.publicCompletions.groupingBy { it.userId.trim().lowercase() }.eachCount()
   }
 
   val showMissionSection = feedScope != "photos"
@@ -426,10 +431,19 @@ fun SocialFeedScreen(
               val authorProfile = playersById[comp.userId]
               val isMine = comp.userId == currentUserId
               val alreadyCheered = comp.id in cheeredIds
+              val uidKey = comp.userId.trim().lowercase()
+              val unameKey = authorProfile?.username?.trim()?.removePrefix("@")?.lowercase().orEmpty()
+              val authorContributionScore = maxOf(
+                uiState.authorContributionScores[uidKey] ?: 0L,
+                uiState.authorContributionScores[unameKey] ?: 0L,
+                authorProfile?.missionsCompleted ?: 0L,
+                (completionCountsByAuthor[uidKey] ?: 0).toLong(),
+              )
 
               SocialFeedPostCard(
                 comp = comp,
                 authorProfile = authorProfile,
+                authorContributionScore = authorContributionScore,
                 isMine = isMine,
                 alreadyCheered = alreadyCheered,
                 onPhotoClick = { zoomedPost = comp },
@@ -635,6 +649,12 @@ private fun LocalMissionFeedCard(
                 modifier = Modifier
                   .align(Alignment.CenterVertically)
                   .testTag("feed_post_role_badge_${post.id}"),
+              )
+              ContributionScoreBadge(
+                score = item.authorContributionScore,
+                modifier = Modifier
+                  .align(Alignment.CenterVertically)
+                  .testTag("feed_post_contribution_score_${post.id}"),
               )
             }
 
@@ -892,6 +912,7 @@ private fun CreateLocalMissionFeedDialog(
 private fun SocialFeedPostCard(
   comp: MissionCompletion,
   authorProfile: PlayerProfile?,
+  authorContributionScore: Long,
   isMine: Boolean,
   alreadyCheered: Boolean,
   onPhotoClick: () -> Unit,
@@ -988,6 +1009,12 @@ private fun SocialFeedPostCard(
                 modifier = Modifier
                   .align(Alignment.CenterVertically)
                   .testTag("social_post_role_badge_${comp.id}"),
+              )
+              ContributionScoreBadge(
+                score = authorContributionScore,
+                modifier = Modifier
+                  .align(Alignment.CenterVertically)
+                  .testTag("social_post_contribution_score_${comp.id}"),
               )
             }
             Text(

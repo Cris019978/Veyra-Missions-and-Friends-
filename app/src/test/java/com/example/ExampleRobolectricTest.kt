@@ -159,6 +159,8 @@ class ExampleRobolectricTest {
     composeTestRule.onNodeWithText("Luna").assertIsDisplayed()
     composeTestRule.onNodeWithTag("social_post_role_badge_comp_social_1").assertIsDisplayed()
     composeTestRule.onNodeWithText("Beta Tester").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("social_post_contribution_score_comp_social_1").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Contribución: 1").assertIsDisplayed()
     composeTestRule.onNodeWithText("Árbol centenario")
       .performScrollTo()
       .assertIsDisplayed()
@@ -868,7 +870,10 @@ class ExampleRobolectricTest {
     ).allowMainThreadQueries().build()
 
     try {
-      val feedRepo = com.example.data.local.LocalMissionFeedRepository(db.localMissionPostDao())
+      val feedRepo = com.example.data.local.LocalMissionFeedRepository(
+        dao = db.localMissionPostDao(),
+        contributionDao = db.authorContributionDao(),
+      )
       assertEquals(0, feedRepo.postsFlow.first().size)
 
       // Initial seed inserts 5 localized posts with Creator, Beta Tester, and Explorer roles
@@ -877,6 +882,13 @@ class ExampleRobolectricTest {
       assertEquals(5, seeded.size)
       assertTrue(seeded.any { it.authorRoleTitle == "Creador" })
       assertTrue(seeded.any { it.authorRoleTitle == "Beta Tester" })
+      val initialScores = feedRepo.contributionScoresFlow.first()
+      assertEquals(14L, initialScores["veyra"])
+      assertEquals(8L, initialScores["tester1"])
+
+      // Recording completed/verified missions increments the author's persisted contribution score
+      feedRepo.recordCompletedOrVerifiedMission(authorUserId = "veyra", authorUsername = "veyra")
+      assertEquals(15L, feedRepo.contributionScoresFlow.first()["veyra"])
 
       // Publishing a user mission post triggers reactive Flow update immediately
       val customPost = feedRepo.publishMissionPost(
@@ -921,14 +933,17 @@ class ExampleRobolectricTest {
     val dispatcher = kotlinx.coroutines.test.UnconfinedTestDispatcher()
     Dispatchers.setMain(dispatcher)
     try {
-      val feedRepo = com.example.data.local.LocalMissionFeedRepository(db.localMissionPostDao())
+      val feedRepo = com.example.data.local.LocalMissionFeedRepository(
+        dao = db.localMissionPostDao(),
+        contributionDao = db.authorContributionDao(),
+      )
       val themePrefs = com.example.data.local.LocalThemePreferences(context)
       val localRepo = RadarQuestRepository(db = null)
       val viewModel = com.example.ui.viewmodel.RadarQuestViewModel(
         repository = localRepo,
         localPrefs = themePrefs,
-        currentUserId = "tester1",
-        defaultDisplayName = "Tester Uno",
+        currentUserId = "explorer_contrib",
+        defaultDisplayName = "Explorer Contrib",
         isLocalOfflineMode = true,
         accountRole = "beta_tester",
         accountRoleTitle = "Beta Tester",
@@ -946,9 +961,9 @@ class ExampleRobolectricTest {
         description = "Verifica la fuente histórica del zócalo.",
         category = "explore",
         xpReward = 170L,
-        authorUserId = "tester1",
-        authorDisplayName = "Tester Uno",
-        authorUsername = "tester1",
+        authorUserId = "explorer_contrib",
+        authorDisplayName = "Explorer Contrib",
+        authorUsername = "explorer_contrib",
         authorRole = "beta_tester",
         authorRoleTitle = "Beta Tester",
         latitude = 19.4326,
@@ -969,6 +984,7 @@ class ExampleRobolectricTest {
       }.localMissionFeed.first { it.post.title == "Fuente del Centro" }
       assertTrue(farItem.distanceMeters > 350f)
       assertFalse(farItem.isImmediateProximity)
+      assertEquals(0L, farItem.authorContributionScore)
 
       // Move GPS within ~30m -> updates dynamically to immediate proximity (<= 120m)
       viewModel.onLocationUpdated(
@@ -984,7 +1000,19 @@ class ExampleRobolectricTest {
       assertTrue(closeItem.distanceMeters <= 120f)
       assertTrue(closeItem.isImmediateProximity)
 
-      // Publish directly through ViewModel -> appears dynamically in localMissionFeed
+      // Completing/verifying missions dynamically increments author's Contribution Score in feed (0 -> 1 -> 2)
+      viewModel.confirmMissionWithPhoto(
+        mission = closeItem.post.toRadarMission(),
+        caption = "Foto verificada",
+        photoThumbnailBase64 = "",
+        isPublic = true,
+      )
+      val afterFirstVerify = viewModel.uiState.first { state ->
+        state.localMissionFeed.firstOrNull { it.post.title == "Fuente del Centro" }?.authorContributionScore == 1L
+      }.localMissionFeed.first { it.post.title == "Fuente del Centro" }
+      assertEquals(1L, afterFirstVerify.authorContributionScore)
+
+      // Publish directly through ViewModel and complete a second mission -> score increments to 2
       viewModel.publishLocalFeedMission(
         title = "Mural Nuevo",
         description = "Captura el nuevo mural junto al cruce.",
@@ -997,6 +1025,17 @@ class ExampleRobolectricTest {
       }.localMissionFeed.first { it.post.title == "Mural Nuevo" }
       assertEquals("Beta Tester", afterPublish.post.authorRoleTitle)
       assertTrue(afterPublish.isImmediateProximity)
+      assertEquals(1L, afterPublish.authorContributionScore)
+
+      viewModel.completeMiniGameMission(
+        mission = afterPublish.post.toRadarMission(),
+        caption = "Puzzle resuelto",
+        isPublic = true,
+      )
+      val afterSecondComplete = viewModel.uiState.first { state ->
+        state.localMissionFeed.firstOrNull { it.post.title == "Mural Nuevo" }?.authorContributionScore == 2L
+      }.localMissionFeed.first { it.post.title == "Mural Nuevo" }
+      assertEquals(2L, afterSecondComplete.authorContributionScore)
 
       collectJob.cancel()
     } finally {
@@ -1046,12 +1085,14 @@ class ExampleRobolectricTest {
         distanceMeters = 64f,
         bearingDegrees = 45f,
         isImmediateProximity = true,
+        authorContributionScore = 14L,
       ),
       com.example.data.model.LocalMissionFeedItem(
         post = farPost,
         distanceMeters = 380f,
         bearingDegrees = 180f,
         isImmediateProximity = false,
+        authorContributionScore = 8L,
       ),
     )
 
@@ -1075,7 +1116,7 @@ class ExampleRobolectricTest {
       }
     }
 
-    // Verify immediate proximity card renders mission description, author role, timestamp, and GPS distance
+    // Verify immediate proximity card renders mission description, author role, contribution score, timestamp, and GPS distance
     composeTestRule.onNodeWithTag("local_feed_live_banner").assertIsDisplayed()
     composeTestRule.onNodeWithText("Mirador del Lago").performScrollTo().assertIsDisplayed()
     composeTestRule.onNodeWithText("Toma una foto del reflejo del puente desde el sendero oeste.")
@@ -1085,6 +1126,10 @@ class ExampleRobolectricTest {
       .performScrollTo()
       .assertIsDisplayed()
     composeTestRule.onNodeWithText("Creador").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("feed_post_contribution_score_feed_close_1")
+      .performScrollTo()
+      .assertIsDisplayed()
+    composeTestRule.onNodeWithText("Contribución: 14").assertIsDisplayed()
     composeTestRule.onNodeWithTag("feed_post_timestamp_feed_close_1")
       .performScrollTo()
       .assertIsDisplayed()

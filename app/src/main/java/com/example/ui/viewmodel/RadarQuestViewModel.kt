@@ -53,6 +53,7 @@ data class RadarQuestUiState(
   val leaderboardPlayers: List<PlayerProfile> = emptyList(),
   val missions: List<MissionWithDistance> = emptyList(),
   val localMissionFeed: List<LocalMissionFeedItem> = emptyList(),
+  val authorContributionScores: Map<String, Long> = emptyMap(),
   val activeAcceptedMissionId: String? = null,
   val activeAcceptedMission: MissionWithDistance? = null,
   val waitingMissionQueue: List<String> = emptyList(),
@@ -115,6 +116,7 @@ class RadarQuestViewModel(
   private val _queuedPromptMissionId = MutableStateFlow<String?>(null)
   private val _safePublicAnchors = MutableStateFlow<List<SafePublicSpot>>(emptyList())
   private val _fallbackLocalFeedPosts = MutableStateFlow<List<LocalMissionPost>>(emptyList())
+  private val _fallbackContributionScores = MutableStateFlow<Map<String, Long>>(emptyMap())
   private var hasSeededGpsFeedBatch = false
 
   private var respawnJob: Job? = null
@@ -276,23 +278,26 @@ class RadarQuestViewModel(
   }
 
   private val feedPostsFlow = localMissionFeedRepository?.postsFlow ?: _fallbackLocalFeedPosts
+  private val contributionScoresFlow =
+    localMissionFeedRepository?.contributionScoresFlow ?: _fallbackContributionScores
 
   private val socialDataFlow = combine(
     publicCompletionsFlow,
     openChallengesFlow,
     myChallengesFlow,
     interactionsFlow,
-    combine(localPrefs.prefsFlow, feedPostsFlow) { localTheme, feedPosts ->
-      localTheme to feedPosts
+    combine(localPrefs.prefsFlow, feedPostsFlow, contributionScoresFlow) { localTheme, feedPosts, contribScores ->
+      Triple(localTheme, feedPosts, contribScores)
     },
-  ) { publicComps, openChals, myChals, inters, themeAndFeed ->
+  ) { publicComps, openChals, myChals, inters, themeFeedContrib ->
     SocialBundle(
       publicCompletions = publicComps,
       openChallenges = openChals,
       myChallenges = myChals,
       interactions = inters,
-      localTheme = themeAndFeed.first,
-      localFeedPosts = themeAndFeed.second,
+      localTheme = themeFeedContrib.first,
+      localFeedPosts = themeFeedContrib.second,
+      persistedContributionScores = themeFeedContrib.third,
     )
   }
 
@@ -419,16 +424,64 @@ class RadarQuestViewModel(
       safeAnchors = workflow.safeAnchors,
     )
 
+    val resolvedScores = buildMap<String, Long> {
+      social.persistedContributionScores.forEach { (rawKey, score) ->
+        val key = rawKey.trim().removePrefix("@").lowercase()
+        if (key.isNotBlank()) {
+          put(key, maxOf(get(key) ?: 0L, score))
+        }
+      }
+      social.publicCompletions.groupingBy { it.userId.trim().lowercase() }
+        .eachCount()
+        .forEach { (uid, count) ->
+          if (uid.isNotBlank()) {
+            put(uid, maxOf(get(uid) ?: 0L, count.toLong()))
+          }
+        }
+      core.onlinePlayers.forEach { player ->
+        val uidKey = player.userId.trim().lowercase()
+        val unameKey = player.username.trim().removePrefix("@").lowercase()
+        val count = player.missionsCompleted.coerceAtLeast(0L)
+        if (uidKey.isNotBlank()) put(uidKey, maxOf(get(uidKey) ?: 0L, count))
+        if (unameKey.isNotBlank()) put(unameKey, maxOf(get(unameKey) ?: 0L, count))
+      }
+      core.profile?.let { prof ->
+        val uidKey = prof.userId.trim().lowercase()
+        val unameKey = prof.username.trim().removePrefix("@").lowercase()
+        val currentUidKey = currentUserId.trim().lowercase()
+        val myCount = maxOf(
+          prof.missionsCompleted,
+          core.myCompletions.size.toLong(),
+          get(uidKey) ?: 0L,
+          get(unameKey) ?: 0L,
+          get(currentUidKey) ?: 0L,
+        )
+        if (uidKey.isNotBlank()) put(uidKey, myCount)
+        if (unameKey.isNotBlank()) put(unameKey, myCount)
+        if (currentUidKey.isNotBlank()) put(currentUidKey, myCount)
+      }
+    }
+
     val localFeedItems = social.localFeedPosts.map { post ->
       val feedBaseLat = if (hasValidRef) refLat else anchor.first
       val feedBaseLon = if (hasValidRef) refLon else anchor.second
       val dist = GeoUtils.distanceMeters(feedBaseLat, feedBaseLon, post.latitude, post.longitude)
       val bearing = GeoUtils.bearingDegrees(feedBaseLat, feedBaseLon, post.latitude, post.longitude)
+      val authorKey = LocalMissionFeedRepository.normalizeAuthorKey(
+        authorUsername = post.authorUsername,
+        authorUserId = post.authorUserId,
+      )
+      val authorIdKey = post.authorUserId.trim().removePrefix("@").lowercase()
+      val authorScore = maxOf(
+        resolvedScores[authorKey] ?: 0L,
+        resolvedScores[authorIdKey] ?: 0L,
+      )
       LocalMissionFeedItem(
         post = post,
         distanceMeters = dist,
         bearingDegrees = bearing,
         isImmediateProximity = dist <= GeoUtils.PROXIMITY_RADIUS_METERS,
+        authorContributionScore = authorScore,
       )
     }
       .filter { it.distanceMeters <= radiusMeters.coerceAtLeast(600f) || !it.post.isSystemGenerated }
@@ -542,6 +595,7 @@ class RadarQuestViewModel(
       leaderboardPlayers = core.onlinePlayers.sortedByDescending { it.xp },
       missions = missionsWithDist,
       localMissionFeed = localFeedItems,
+      authorContributionScores = resolvedScores,
       activeAcceptedMissionId = workflow.activeAcceptedId,
       activeAcceptedMission = activeAccepted,
       waitingMissionQueue = workflow.waitingQueue,
@@ -1282,6 +1336,22 @@ class RadarQuestViewModel(
       )
       if (res.isSuccess) {
         repository.awardPlayerStats(addXp = mission.xpReward, addMissionsCompleted = 1L)
+        val authorUsername = prof?.username.orEmpty()
+        if (localMissionFeedRepository != null) {
+          localMissionFeedRepository.recordCompletedOrVerifiedMission(
+            authorUserId = currentUserId,
+            authorUsername = authorUsername,
+            delta = 1L,
+          )
+        } else {
+          val key = LocalMissionFeedRepository.normalizeAuthorKey(
+            authorUsername = authorUsername,
+            authorUserId = currentUserId,
+          )
+          val updatedMap = _fallbackContributionScores.value.toMutableMap()
+          updatedMap[key] = (updatedMap[key] ?: 0L) + 1L
+          _fallbackContributionScores.value = updatedMap
+        }
         uiState.value.myChallenges
           .filter { it.status == "active" && it.missionId == mission.id }
           .forEach { challenge ->
@@ -1329,6 +1399,7 @@ class RadarQuestViewModel(
     val interactions: List<PlayerInteraction>,
     val localTheme: ThemePrefsSnapshot,
     val localFeedPosts: List<LocalMissionPost>,
+    val persistedContributionScores: Map<String, Long>,
   )
 
   private data class LocalControlBundle(

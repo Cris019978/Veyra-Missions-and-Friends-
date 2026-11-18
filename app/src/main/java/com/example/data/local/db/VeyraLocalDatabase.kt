@@ -6,12 +6,16 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-  entities = [LocalMissionPostEntity::class],
-  version = 1,
+  entities = [
+    LocalMissionPostEntity::class,
+    AuthorContributionEntity::class,
+  ],
+  version = 2,
   exportSchema = false,
 )
 abstract class VeyraLocalDatabase : RoomDatabase() {
   abstract fun localMissionPostDao(): LocalMissionPostDao
+  abstract fun authorContributionDao(): AuthorContributionDao
 
   companion object {
     @Volatile
@@ -23,7 +27,10 @@ abstract class VeyraLocalDatabase : RoomDatabase() {
           context.applicationContext,
           VeyraLocalDatabase::class.java,
           "veyra_local_missions.db",
-        ).build().also { INSTANCE = it }
+        )
+          .fallbackToDestructiveMigration(dropAllTables = true)
+          .build()
+          .also { INSTANCE = it }
       }
     }
   }

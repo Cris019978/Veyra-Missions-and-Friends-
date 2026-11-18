@@ -219,4 +219,5 @@ data class LocalMissionFeedItem(
   val distanceMeters: Float,
   val bearingDegrees: Float,
   val isImmediateProximity: Boolean,
+  val authorContributionScore: Long = 0L,
 )

@@ -1,23 +1,41 @@
 package com.example.data.local
 
+import com.example.data.local.db.AuthorContributionDao
+import com.example.data.local.db.AuthorContributionEntity
 import com.example.data.local.db.LocalMissionPostDao
 import com.example.data.local.db.LocalMissionPostEntity
 import com.example.data.model.LocalMissionPost
 import com.example.data.remote.SafePublicSpot
 import com.example.util.GeoUtils
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import java.util.UUID
 import kotlin.random.Random
 
 /**
- * Repository backing the real-time local mission feed using Room SQLite storage.
+ * Repository backing the real-time local mission feed and author contribution scores using Room SQLite storage.
  */
 class LocalMissionFeedRepository(
   private val dao: LocalMissionPostDao,
+  private val contributionDao: AuthorContributionDao? = null,
 ) {
   val postsFlow: Flow<List<LocalMissionPost>> = dao.observeAllPosts().map { entities ->
     entities.map { it.toDomain() }
+  }
+
+  val contributionScoresFlow: Flow<Map<String, Long>> =
+    contributionDao?.observeAllContributions()?.map { entries ->
+      entries.associate { it.authorKey.lowercase() to it.completedOrVerifiedCount }
+    } ?: flowOf(emptyMap())
+
+  suspend fun recordCompletedOrVerifiedMission(
+    authorUserId: String,
+    authorUsername: String = "",
+    delta: Long = 1L,
+  ): Long {
+    val key = normalizeAuthorKey(authorUsername = authorUsername, authorUserId = authorUserId)
+    return contributionDao?.incrementContribution(authorKey = key, delta = delta) ?: 0L
   }
 
   suspend fun publishMissionPost(
@@ -65,8 +83,17 @@ class LocalMissionFeedRepository(
     baseLon: Double,
     safeAnchors: List<SafePublicSpot> = emptyList(),
   ) {
-    if (dao.countPosts() > 0) return
     val now = System.currentTimeMillis()
+    contributionDao?.insertIfAbsent(
+      SEED_TEMPLATES.map { tmpl ->
+        AuthorContributionEntity(
+          authorKey = tmpl.authorUsername.lowercase(),
+          completedOrVerifiedCount = tmpl.initialContributionScore,
+          updatedAtMillis = now,
+        )
+      }
+    )
+    if (dao.countPosts() > 0) return
     val batch = buildProximityBatch(
       baseLat = baseLat,
       baseLon = baseLon,
@@ -154,10 +181,17 @@ class LocalMissionFeedRepository(
     val authorRole: String,
     val authorRoleTitle: String,
     val placeLabel: String,
+    val initialContributionScore: Long,
   )
 
-  private companion object {
-    val SEED_TEMPLATES = listOf(
+  companion object {
+    fun normalizeAuthorKey(authorUsername: String, authorUserId: String): String {
+      val cleanUsername = authorUsername.trim().removePrefix("@").lowercase()
+      val cleanId = authorUserId.trim().removePrefix("@").lowercase()
+      return cleanUsername.ifBlank { cleanId.ifBlank { "explorador" } }
+    }
+
+    private val SEED_TEMPLATES = listOf(
       SeedTemplate(
         title = "Baliza Inicial de Lanzamiento",
         description = "Encuentra un punto abierto cerca de tu radar, toma una foto rápida del horizonte urbano y suma XP extra.",
@@ -168,6 +202,7 @@ class LocalMissionFeedRepository(
         authorRole = LocalAuthManager.ROLE_CREATOR,
         authorRoleTitle = LocalAuthManager.TITLE_CREATOR,
         placeLabel = "Plaza pública cercana",
+        initialContributionScore = 14L,
       ),
       SeedTemplate(
         title = "Ruta Beta: Reflejos y Copas",
@@ -179,6 +214,7 @@ class LocalMissionFeedRepository(
         authorRole = LocalAuthManager.ROLE_BETA_TESTER,
         authorRoleTitle = LocalAuthManager.TITLE_BETA_TESTER,
         placeLabel = "Corredor verde público",
+        initialContributionScore = 8L,
       ),
       SeedTemplate(
         title = "Cazador de Murales Locales",
@@ -190,6 +226,7 @@ class LocalMissionFeedRepository(
         authorRole = LocalAuthManager.ROLE_BETA_TESTER,
         authorRoleTitle = LocalAuthManager.TITLE_BETA_TESTER,
         placeLabel = "Paseo cultural",
+        initialContributionScore = 6L,
       ),
       SeedTemplate(
         title = "Chequeo Relámpago de Caminata",
@@ -201,6 +238,7 @@ class LocalMissionFeedRepository(
         authorRole = LocalAuthManager.ROLE_EXPLORER,
         authorRoleTitle = LocalAuthManager.TITLE_EXPLORER,
         placeLabel = "Sendero peatonal",
+        initialContributionScore = 4L,
       ),
       SeedTemplate(
         title = "Desafío Simetría Urbana",
@@ -212,6 +250,7 @@ class LocalMissionFeedRepository(
         authorRole = LocalAuthManager.ROLE_CREATOR,
         authorRoleTitle = LocalAuthManager.TITLE_CREATOR,
         placeLabel = "Explanada urbana",
+        initialContributionScore = 11L,
       ),
     )
   }

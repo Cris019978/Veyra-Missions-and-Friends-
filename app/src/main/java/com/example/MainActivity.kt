@@ -134,8 +134,10 @@ fun AppNavigation() {
         factory = viewModelFactory {
           initializer {
             val app = checkNotNull(this[APPLICATION_KEY])
+            val localDb = VeyraLocalDatabase.getInstance(app)
             val feedRepo = LocalMissionFeedRepository(
-              VeyraLocalDatabase.getInstance(app).localMissionPostDao()
+              dao = localDb.localMissionPostDao(),
+              contributionDao = localDb.authorContributionDao(),
             )
             RadarQuestViewModel(
               repository = RadarQuestRepository(

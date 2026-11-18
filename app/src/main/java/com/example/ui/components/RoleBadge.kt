@@ -88,3 +88,63 @@ fun RoleTitleBadge(
     }
   }
 }
+
+@Composable
+fun ContributionScoreBadge(
+  score: Long,
+  modifier: Modifier = Modifier,
+) {
+  val safeScore = score.coerceAtLeast(0L)
+  val containerColor: Color
+  val contentColor: Color
+  val borderColor: Color
+  when {
+    safeScore >= 10L -> {
+      containerColor = Color(0xFF28200D)
+      contentColor = Color(0xFFFFD166)
+      borderColor = Color(0xFFFFB703).copy(alpha = 0.50f)
+    }
+    safeScore >= 5L -> {
+      containerColor = Color(0xFF0A2923)
+      contentColor = Color(0xFF4CEAC8)
+      borderColor = Color(0xFF00BFA5).copy(alpha = 0.50f)
+    }
+    safeScore >= 1L -> {
+      containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+      contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+      borderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.40f)
+    }
+    else -> {
+      containerColor = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.75f)
+      contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+      borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+    }
+  }
+
+  Surface(
+    color = containerColor,
+    contentColor = contentColor,
+    shape = RoundedCornerShape(50),
+    border = BorderStroke(1.dp, borderColor),
+    modifier = modifier,
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+      Icon(
+        imageVector = Icons.Rounded.AutoAwesome,
+        contentDescription = "Score de contribución: $safeScore misiones completadas o verificadas",
+        tint = contentColor,
+        modifier = Modifier.size(12.dp),
+      )
+      Text(
+        text = "Contribución: $safeScore",
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = contentColor,
+      )
+    }
+  }
+}
