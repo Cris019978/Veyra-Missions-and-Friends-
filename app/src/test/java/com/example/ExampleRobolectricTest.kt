@@ -1,6 +1,11 @@
 package com.example
 
+import android.content.ClipboardManager
 import android.content.Context
+import android.location.Location
+import android.location.LocationManager
+import android.widget.Button
+import android.widget.TextView
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -12,29 +17,39 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.location.LocationTracker
 import com.example.data.model.Mission
 import com.example.data.model.MissionCompletion
 import com.example.data.model.MissionWithDistance
 import com.example.data.model.NearbyMissionPopup
 import com.example.data.model.UserSettings
 import com.example.data.remote.OsmSafePlaceFinder
+import com.example.data.repository.RadarQuestRepository
 import com.example.ui.components.ExpandedRadarMapDialog
 import com.example.ui.components.FloatingBottomNavBar
 import com.example.ui.components.NearbyMissionPopupOverlay
 import com.example.ui.components.QueuedMissionPromptDialog
 import com.example.ui.components.TilePuzzleGameDialog
 import com.example.ui.components.WireConnectGameDialog
+import com.example.ui.crash.CrashReportActivity
 import com.example.ui.screens.CustomizeStyleScreen
 import com.example.ui.screens.RadarHomeScreen
 import com.example.ui.screens.SocialFeedScreen
 import com.example.ui.theme.RadarQuestTheme
 import com.example.ui.viewmodel.RadarQuestUiState
+import com.example.util.SafeRuntimeBootstrap
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -469,5 +484,145 @@ class ExampleRobolectricTest {
     assertTrue(shuffled)
     composeTestRule.onNodeWithTag("close_expanded_map_button").performClick()
     assertTrue(closed)
+  }
+
+  @Test
+  fun `safeRuntimeBootstrap initializes osmdroid into private cache and handles missing Firebase safely`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    assertTrue(SafeRuntimeBootstrap.initOsmdroidSafely(context))
+    val osmdroidBase = org.osmdroid.config.Configuration.getInstance().osmdroidBasePath
+    assertNotNull(osmdroidBase)
+    assertTrue(osmdroidBase.absolutePath.startsWith(context.cacheDir.absolutePath))
+
+    val firebaseState = SafeRuntimeBootstrap.tryInitFirebase(context, "")
+    assertFalse(firebaseState.isAvailable)
+  }
+
+  @Test
+  fun `radarQuestRepository operates cleanly in local exploration mode without Firebase`() = runBlocking {
+    val repo = RadarQuestRepository(db = null, auth = null)
+    assertFalse(repo.isCloudAvailable)
+
+    val saveProfileRes = repo.ensureOrUpdatePlayerProfile(
+      username = "explorador_local",
+      callsign = "VeyraLocal",
+      avatarIcon = "explore",
+      avatarColorHex = "#00BFA5",
+      statusMessage = "Probando modo local",
+      seekingHelp = false,
+      isOnline = true,
+      latitude = 19.4326,
+      longitude = -99.1332,
+    )
+    assertTrue(saveProfileRes.isSuccess)
+    assertEquals("VeyraLocal", repo.observeMyProfile(RadarQuestRepository.LOCAL_USER_ID).first()?.callsign)
+
+    val saveSettingsRes = repo.saveUserSettings(UserSettings(paletteKey = "emerald", onboardingCompleted = true))
+    assertTrue(saveSettingsRes.isSuccess)
+    assertEquals("emerald", repo.observeUserSettings(RadarQuestRepository.LOCAL_USER_ID).first()?.paletteKey)
+
+    val createRes = repo.createMission(
+      creatorName = "VeyraLocal",
+      title = "Fuente del parque",
+      description = "Captura la fuente central",
+      category = "explore",
+      xpReward = 120L,
+      latitude = 19.4330,
+      longitude = -99.1330,
+    )
+    assertTrue(createRes.isSuccess)
+    assertEquals(1, repo.observeActiveMissions(RadarQuestRepository.LOCAL_USER_ID).first().size)
+
+    val compRes = repo.submitMissionCompletion(
+      userName = "VeyraLocal",
+      missionId = createRes.getOrThrow(),
+      missionTitle = "Fuente del parque",
+      category = "explore",
+      xpEarned = 120L,
+      caption = "Completada sin nube",
+      photoThumbnailBase64 = "",
+      latitude = 19.4330,
+      longitude = -99.1330,
+      isPublic = true,
+    )
+    assertTrue(compRes.isSuccess)
+    repo.awardPlayerStats(addXp = 120L, addMissionsCompleted = 1L)
+    assertEquals(120L, repo.observeMyProfile(RadarQuestRepository.LOCAL_USER_ID).first()?.xp)
+  }
+
+  @Test
+  fun `locationTracker falls back automatically to native LocationManager when Play Services unavailable`() = runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    val shadowLm = Shadows.shadowOf(lm)
+    val gpsLoc = Location(LocationManager.GPS_PROVIDER).apply {
+      latitude = 19.4326
+      longitude = -99.1332
+      accuracy = 8f
+      time = System.currentTimeMillis()
+    }
+    shadowLm.setLastKnownLocation(LocationManager.GPS_PROVIDER, gpsLoc)
+
+    val tracker = LocationTracker(
+      context = context,
+      playServicesAvailabilityChecker = { false },
+    )
+    val point = tracker.observeLocationUpdates().first()
+    assertEquals(19.4326, point.latitude, 0.0001)
+    assertEquals(-99.1332, point.longitude, 0.0001)
+  }
+
+  @Test
+  fun `crashReportActivity shows scrollable trace and supports copy and retry actions`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val report = SafeRuntimeBootstrap.formatCrashReport(
+      threadName = "main",
+      throwable = IllegalStateException("Simulated Firebase init error"),
+    )
+    val intent = CrashReportActivity.createIntent(context, "main", report)
+    val controller = Robolectric.buildActivity(CrashReportActivity::class.java, intent).setup()
+    val activity = controller.get()
+
+    val traceView = activity.findViewById<TextView>(CrashReportActivity.TRACE_TEXT_VIEW_ID)
+    val copyBtn = activity.findViewById<Button>(CrashReportActivity.COPY_BUTTON_ID)
+    val retryBtn = activity.findViewById<Button>(CrashReportActivity.RETRY_BUTTON_ID)
+
+    assertTrue(traceView.text.toString().contains("Simulated Firebase init error"))
+    assertEquals("Copiar", copyBtn.text.toString())
+    assertEquals("Reintentar", retryBtn.text.toString())
+
+    copyBtn.performClick()
+    val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    assertTrue(
+      clipboard.primaryClip?.getItemAt(0)?.text?.toString()?.contains("Simulated Firebase init error") == true
+    )
+
+    retryBtn.performClick()
+    assertTrue(activity.isFinishing)
+  }
+
+  @Test
+  fun `radar home screen shows local offline mode banner when running without Firebase`() {
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        RadarHomeScreen(
+          uiState = RadarQuestUiState(isLocalOfflineMode = true),
+          onRequestLocationPermission = {},
+          onOpenNotifications = {},
+          onRefresh = {},
+          onToggleBroadcast = {},
+          onToggleSeekingHelp = {},
+          onCycleRadius = {},
+          onHelpPlayer = {},
+          onSendPulse = {},
+          onCompeteDuel = { _, _ -> },
+          onPlayCoop = { _, _ -> },
+          onCreateMission = { _, _, _, _, _, _ -> },
+          onConfirmMissionPhoto = { _, _, _, _ -> },
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("local_offline_mode_banner").assertIsDisplayed()
   }
 }

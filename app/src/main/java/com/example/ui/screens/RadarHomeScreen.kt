@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.Cable
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.Explore
@@ -316,6 +317,40 @@ fun RadarHomeScreen(
                   imageVector = if (uiState.isBroadcastingRadar) Icons.Rounded.Sensors else Icons.Rounded.SensorsOff,
                   contentDescription = "Alternar señal de radar",
                   tint = if (uiState.isBroadcastingRadar) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                )
+              }
+            }
+          }
+        }
+
+        // 1b. Subtle Local Mode Indicator when Firebase / Google Services are unavailable
+        if (uiState.isLocalOfflineMode) {
+          item(key = "local_offline_banner") {
+            Surface(
+              color = MaterialTheme.colorScheme.surfaceContainerHigh,
+              shape = CircleShape,
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .testTag("local_offline_mode_banner"),
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Rounded.CloudOff,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(18.dp),
+                )
+                Text(
+                  text = "Modo exploración local (sin nube) • Mapa OSM y misiones activos",
+                  style = MaterialTheme.typography.labelMedium,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
                 )
               }
             }

@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.pager.HorizontalPager
@@ -80,12 +79,10 @@ import com.example.ui.screens.SocialArenaScreen
 import com.example.ui.screens.SocialFeedScreen
 import com.example.ui.theme.RadarQuestTheme
 import com.example.ui.viewmodel.RadarQuestViewModel
+import com.example.util.SafeRuntimeBootstrap
 import com.example.util.VeyraNotificationManager
-import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
-import com.google.firebase.auth.auth
-import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -95,6 +92,11 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
+    // 1. Register global UncaughtExceptionHandler before super.onCreate / setContent
+    SafeRuntimeBootstrap.installGlobalExceptionHandler(applicationContext)
+    // 2. Initialize osmdroid safely into internal cacheDir without external storage permissions
+    SafeRuntimeBootstrap.initOsmdroidSafely(applicationContext)
+
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
     setContent {
@@ -104,44 +106,64 @@ class MainActivity : ComponentActivity() {
 }
 
 internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
-  val listener = FirebaseAuth.AuthStateListener { auth ->
-    trySend(auth.currentUser)
+  val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
+    trySend(firebaseAuth.currentUser)
   }
   addAuthStateListener(listener)
   awaitClose { removeAuthStateListener(listener) }
 }
 
 @Composable
-fun AppNavigation(auth: FirebaseAuth = Firebase.auth) {
+fun AppNavigation() {
   val context = LocalContext.current
   val localPrefs = remember(context) { LocalThemePreferences(context.applicationContext) }
   val notificationManager = remember(context) { VeyraNotificationManager(context.applicationContext) }
   val localThemeSnapshot by localPrefs.prefsFlow.collectAsStateWithLifecycle(initialValue = ThemePrefsSnapshot())
-  val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
+
+  val firebaseState = remember(context) {
+    val dbId = runCatching { context.getString(R.string.firestore_database_id) }.getOrDefault("")
+    SafeRuntimeBootstrap.tryInitFirebase(context.applicationContext, dbId)
+  }
+
+  var forceLocalExploration by remember(firebaseState.isAvailable) {
+    mutableStateOf(!firebaseState.isAvailable)
+  }
+
+  val firebaseAuth = firebaseState.auth
+  val currentUser by if (firebaseState.isAvailable && firebaseAuth != null && !forceLocalExploration) {
+    remember(firebaseAuth) { firebaseAuth.authStateFlow() }
+      .collectAsStateWithLifecycle(initialValue = runCatching { firebaseAuth.currentUser }.getOrNull())
+  } else {
+    remember { mutableStateOf<FirebaseUser?>(null) }
+  }
+
+  val useCloudMode = firebaseState.isAvailable && firebaseAuth != null && firebaseState.firestore != null && !forceLocalExploration
   val user = currentUser
 
-  if (user == null) {
+  if (useCloudMode && user == null) {
     RadarQuestTheme(
       themeMode = localThemeSnapshot.themeMode,
       paletteKey = localThemeSnapshot.paletteKey,
       cornerStyle = localThemeSnapshot.cornerStyle,
     ) {
-      AuthScreen(onAuthSuccess = { /* Reactive authStateFlow transitions automatically */ })
+      AuthScreen(
+        onAuthSuccess = { /* Reactive authStateFlow transitions automatically */ },
+        onContinueLocalMode = { forceLocalExploration = true },
+      )
     }
-  } else {
+  } else if (useCloudMode && user != null) {
     key(user.uid) {
       val viewModel: RadarQuestViewModel = viewModel(
         key = user.uid,
         factory = viewModelFactory {
           initializer {
             val app = checkNotNull(this[APPLICATION_KEY])
-            val databaseId = app.getString(R.string.firestore_database_id)
-            val db = FirebaseFirestore.getInstance(databaseId)
             RadarQuestViewModel(
-              repository = RadarQuestRepository(db, Firebase.auth),
+              repository = RadarQuestRepository(firebaseState.firestore, firebaseAuth),
               localPrefs = LocalThemePreferences(app),
               currentUserId = user.uid,
               defaultDisplayName = user.displayName ?: "Explorador",
+              isLocalOfflineMode = false,
               onSystemNotify = notificationManager::postNotification,
             )
           }
@@ -151,6 +173,33 @@ fun AppNavigation(auth: FirebaseAuth = Firebase.auth) {
         viewModel = viewModel,
         notificationManager = notificationManager,
         currentUserId = user.uid,
+        firebaseAuth = firebaseAuth,
+      )
+    }
+  } else {
+    val localUid = RadarQuestRepository.LOCAL_USER_ID
+    key(localUid) {
+      val viewModel: RadarQuestViewModel = viewModel(
+        key = localUid,
+        factory = viewModelFactory {
+          initializer {
+            val app = checkNotNull(this[APPLICATION_KEY])
+            RadarQuestViewModel(
+              repository = RadarQuestRepository(db = null, auth = null),
+              localPrefs = LocalThemePreferences(app),
+              currentUserId = localUid,
+              defaultDisplayName = "Explorador",
+              isLocalOfflineMode = true,
+              onSystemNotify = notificationManager::postNotification,
+            )
+          }
+        },
+      )
+      MainAppShell(
+        viewModel = viewModel,
+        notificationManager = notificationManager,
+        currentUserId = localUid,
+        firebaseAuth = null,
       )
     }
   }
@@ -161,12 +210,15 @@ private fun MainAppShell(
   viewModel: RadarQuestViewModel,
   notificationManager: VeyraNotificationManager,
   currentUserId: String,
+  firebaseAuth: FirebaseAuth?,
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
   val uiState by viewModel.uiState.collectAsStateWithLifecycle()
   val snackbarHostState = remember { SnackbarHostState() }
-  val credentialManager = remember(context) { CredentialManager.create(context) }
+  val credentialManager = remember(context) {
+    runCatching { CredentialManager.create(context) }.getOrNull()
+  }
   val locationTracker = remember(context) { LocationTracker(context) }
   val pagerState = rememberPagerState(initialPage = 0, pageCount = { 4 })
   var showStyleInProfile by remember { mutableStateOf(false) }
@@ -423,11 +475,11 @@ private fun MainAppShell(
                     scope.launch {
                       withContext(NonCancellable) {
                         try {
-                          credentialManager.clearCredentialState(ClearCredentialStateRequest())
+                          credentialManager?.clearCredentialState(ClearCredentialStateRequest())
                         } catch (e: Exception) {
                           Log.w("Auth", "Failed to clear credential state: ${e.message}")
                         } finally {
-                          Firebase.auth.signOut()
+                          runCatching { firebaseAuth?.signOut() }
                         }
                       }
                     }
@@ -477,7 +529,6 @@ private fun MainAppShell(
             }
           }
 
-          // Floating swipe-dismissible in-app nearby mission suggestion pop-up
           NearbyMissionPopupOverlay(
             popups = uiState.nearbyMissionPopups,
             disableAnimations = disableAnimations,
@@ -485,7 +536,6 @@ private fun MainAppShell(
             modifier = Modifier.align(Alignment.TopCenter),
           )
 
-          // Floating rounded Material You bottom navigation bar (hidden when Gesture Navigation is enabled)
           if (!isExpandedWidth) {
             if (disableAnimations) {
               if (!gestureNavEnabled) {

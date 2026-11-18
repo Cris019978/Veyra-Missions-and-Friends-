@@ -66,6 +66,7 @@ data class RadarQuestUiState(
   val isRefreshing: Boolean = false,
   val isSubmitting: Boolean = false,
   val isLoading: Boolean = true,
+  val isLocalOfflineMode: Boolean = false,
   val errorMessage: String? = null,
 )
 
@@ -75,6 +76,7 @@ class RadarQuestViewModel(
   private val localPrefs: LocalThemePreferences,
   private val currentUserId: String,
   private val defaultDisplayName: String,
+  private val isLocalOfflineMode: Boolean = !repository.isCloudAvailable,
   private val onSystemNotify: (id: Int, title: String, message: String, isProximity: Boolean) -> Unit = { _, _, _, _ -> },
 ) : ViewModel() {
 
@@ -510,12 +512,13 @@ class RadarQuestViewModel(
       isRefreshing = local.isRefreshing,
       isSubmitting = local.isSubmitting,
       isLoading = false,
+      isLocalOfflineMode = isLocalOfflineMode,
       errorMessage = gate.errorMessage,
     )
   }.stateIn(
     scope = viewModelScope,
     started = SharingStarted.WhileSubscribed(5000L),
-    initialValue = RadarQuestUiState(),
+    initialValue = RadarQuestUiState(isLocalOfflineMode = isLocalOfflineMode),
   )
 
   init {

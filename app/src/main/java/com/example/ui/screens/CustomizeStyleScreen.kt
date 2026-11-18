@@ -636,18 +636,35 @@ fun CustomizeStyleScreen(
         }
       }
 
-      // 5. Sign Out
+      // 5. Sign Out / Local Mode Info
       item {
-        OutlinedButton(
-          onClick = onSignOut,
-          modifier = Modifier
-            .fillMaxWidth()
-            .height(50.dp)
-            .testTag("sign_out_button"),
-        ) {
-          Icon(Icons.AutoMirrored.Rounded.Logout, contentDescription = null)
-          Spacer(modifier = Modifier.width(8.dp))
-          Text(stringResource(id = R.string.sign_out))
+        if (uiState.isLocalOfflineMode) {
+          Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shape = MaterialTheme.shapes.large,
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("local_mode_account_card"),
+          ) {
+            Text(
+              text = "Sesión local activa (sin servicios en la nube). Tus ajustes y estilos se guardan en este dispositivo.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.padding(14.dp),
+            )
+          }
+        } else {
+          OutlinedButton(
+            onClick = onSignOut,
+            modifier = Modifier
+              .fillMaxWidth()
+              .height(50.dp)
+              .testTag("sign_out_button"),
+          ) {
+            Icon(Icons.AutoMirrored.Rounded.Logout, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(stringResource(id = R.string.sign_out))
+          }
         }
       }
     }

@@ -8,6 +8,7 @@ import com.example.data.model.PlayerProfile
 import com.example.data.model.UserSettings
 import com.example.data.remote.OperationType
 import com.example.data.remote.handleFirestoreError
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
@@ -16,18 +17,39 @@ import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.util.UUID
 
+/**
+ * Dual-mode repository:
+ * - When [db] and [auth] are non-null, reads and writes directly against Firebase Firestore.
+ * - When [db] or [auth] is null (e.g. google-services.json absent or Google Services unavailable),
+ *   transparently operates in local exploration mode backed by in-memory reactive flows without
+ *   requiring authentication or throwing Firebase exceptions.
+ */
 class RadarQuestRepository(
-  private val db: FirebaseFirestore,
-  private val auth: FirebaseAuth = FirebaseAuth.getInstance(),
+  private val db: FirebaseFirestore? = null,
+  private val auth: FirebaseAuth? = null,
 ) {
 
+  val isCloudAvailable: Boolean
+    get() = db != null && auth != null
+
+  private val localSettingsFlow = MutableStateFlow<UserSettings?>(null)
+  private val localProfileFlow = MutableStateFlow<PlayerProfile?>(null)
+  private val localMissionsFlow = MutableStateFlow<List<Mission>>(emptyList())
+  private val localMyCompletionsFlow = MutableStateFlow<List<MissionCompletion>>(emptyList())
+  private val localPublicCompletionsFlow = MutableStateFlow<List<MissionCompletion>>(emptyList())
+  private val localOpenChallengesFlow = MutableStateFlow<List<Challenge>>(emptyList())
+  private val localMyChallengesFlow = MutableStateFlow<List<Challenge>>(emptyList())
+  private val localInteractionsFlow = MutableStateFlow<List<PlayerInteraction>>(emptyList())
+
   private fun requireUserId(): String =
-    auth.currentUser?.uid
+    auth?.currentUser?.uid
       ?: throw IllegalStateException("El usuario debe iniciar sesión con Google.")
 
   private fun <T> Flow<T>.logFirestoreErrors(op: OperationType, path: String, uid: String): Flow<T> =
@@ -38,7 +60,7 @@ class RadarQuestRepository(
           .firstOrNull()
       if (firestoreError == null && error is CancellationException) throw error
       val exceptionToLog = firestoreError ?: (error as? Exception)
-      if (exceptionToLog != null && auth.currentUser?.uid == uid) {
+      if (exceptionToLog != null && auth?.currentUser?.uid == uid) {
         handleFirestoreError(exceptionToLog, op, path)
       }
       throw error
@@ -46,8 +68,12 @@ class RadarQuestRepository(
 
   // --- User Settings ---
   fun observeUserSettings(uid: String): Flow<UserSettings?> {
+    val firestore = db
+    if (firestore == null || auth == null) {
+      return localSettingsFlow
+    }
     val path = "users/$uid"
-    return db.collection("users").document(uid)
+    return firestore.collection("users").document(uid)
       .snapshots()
       .map { snap ->
         if (snap.exists()) {
@@ -60,33 +86,47 @@ class RadarQuestRepository(
   }
 
   suspend fun saveUserSettings(settings: UserSettings): Result<Unit> {
+    val safePlayStyle = if (settings.playStyle in listOf("helper", "competitor", "explorer", "balanced")) {
+      settings.playStyle
+    } else {
+      "balanced"
+    }
+    val safeCategories = settings.favoriteCategories
+      .filter { it in VALID_CATEGORIES }
+      .distinct()
+      .take(6)
+    val safePrivacy = if (settings.privacyComfort in listOf("radius", "close_only", "ghost")) {
+      settings.privacyComfort
+    } else {
+      "radius"
+    }
+    val safePace = if (settings.missionPace in listOf("casual", "daily", "intense")) {
+      settings.missionPace
+    } else {
+      "casual"
+    }
+    val safeAnimTier = if (settings.animationTier in listOf("low", "medium", "high")) {
+      settings.animationTier
+    } else {
+      "high"
+    }
+
+    val firestore = db
+    if (firestore == null || auth == null) {
+      localSettingsFlow.value = settings.copy(
+        userId = settings.userId.ifBlank { LOCAL_USER_ID },
+        playStyle = safePlayStyle,
+        favoriteCategories = safeCategories,
+        privacyComfort = safePrivacy,
+        missionPace = safePace,
+        animationTier = safeAnimTier,
+      )
+      return Result.success(Unit)
+    }
+
     return runCatching {
       val uid = requireUserId()
-      val safePlayStyle = if (settings.playStyle in listOf("helper", "competitor", "explorer", "balanced")) {
-        settings.playStyle
-      } else {
-        "balanced"
-      }
-      val safeCategories = settings.favoriteCategories
-        .filter { it in VALID_CATEGORIES }
-        .distinct()
-        .take(6)
-      val safePrivacy = if (settings.privacyComfort in listOf("radius", "close_only", "ghost")) {
-        settings.privacyComfort
-      } else {
-        "radius"
-      }
-      val safePace = if (settings.missionPace in listOf("casual", "daily", "intense")) {
-        settings.missionPace
-      } else {
-        "casual"
-      }
-      val safeAnimTier = if (settings.animationTier in listOf("low", "medium", "high")) {
-        settings.animationTier
-      } else {
-        "high"
-      }
-      val docRef = db.collection("users").document(uid)
+      val docRef = firestore.collection("users").document(uid)
       val existing = docRef.get().await()
       if (existing.exists()) {
         val updates = mapOf(
@@ -136,8 +176,12 @@ class RadarQuestRepository(
 
   // --- Players & Real-Time Location ---
   fun observeMyProfile(uid: String): Flow<PlayerProfile?> {
+    val firestore = db
+    if (firestore == null || auth == null) {
+      return localProfileFlow
+    }
     val path = "players/$uid"
-    return db.collection("players").document(uid)
+    return firestore.collection("players").document(uid)
       .snapshots()
       .map { snap ->
         if (snap.exists()) {
@@ -150,8 +194,12 @@ class RadarQuestRepository(
   }
 
   fun observeOnlinePlayers(uid: String): Flow<List<PlayerProfile>> {
+    val firestore = db
+    if (firestore == null || auth == null) {
+      return localProfileFlow.map { prof -> listOfNotNull(prof) }
+    }
     val path = "players"
-    return db.collection("players")
+    return firestore.collection("players")
       .whereEqualTo("isOnline", true)
       .snapshots()
       .map { snap ->
@@ -174,13 +222,41 @@ class RadarQuestRepository(
     latitude: Double,
     longitude: Double,
   ): Result<Unit> {
+    val safeUsername = username.trim().replace(Regex("[^a-zA-Z0-9_]"), "").take(24)
+    val safeCallsign = callsign.trim().ifBlank { "Explorador" }.take(32).padEnd(2, 'X')
+    val safeStatus = statusMessage.trim().take(140)
+    val safePreset = if (bannerPreset in listOf("topo", "sunset", "cosmos", "emerald", "custom")) bannerPreset else "topo"
+
+    val firestore = db
+    if (firestore == null || auth == null) {
+      val current = localProfileFlow.value
+      localProfileFlow.value = PlayerProfile(
+        id = current?.id ?: LOCAL_USER_ID,
+        userId = current?.userId ?: LOCAL_USER_ID,
+        username = safeUsername,
+        callsign = safeCallsign,
+        avatarIcon = avatarIcon.take(32),
+        avatarColorHex = avatarColorHex.take(12),
+        avatarPhotoBase64 = avatarPhotoBase64.take(80000),
+        bannerPhotoBase64 = bannerPhotoBase64.take(80000),
+        bannerPreset = safePreset,
+        statusMessage = safeStatus,
+        seekingHelp = seekingHelp,
+        isOnline = isOnline,
+        latitude = latitude.coerceIn(-90.0, 90.0),
+        longitude = longitude.coerceIn(-180.0, 180.0),
+        xp = current?.xp ?: 0L,
+        level = current?.level ?: 1L,
+        missionsCompleted = current?.missionsCompleted ?: 0L,
+        helpsGiven = current?.helpsGiven ?: 0L,
+        duelsWon = current?.duelsWon ?: 0L,
+      )
+      return Result.success(Unit)
+    }
+
     return runCatching {
       val uid = requireUserId()
-      val safeUsername = username.trim().replace(Regex("[^a-zA-Z0-9_]"), "").take(24)
-      val safeCallsign = callsign.trim().ifBlank { "Explorador" }.take(32).padEnd(2, 'X')
-      val safeStatus = statusMessage.trim().take(140)
-      val safePreset = if (bannerPreset in listOf("topo", "sunset", "cosmos", "emerald", "custom")) bannerPreset else "topo"
-      val docRef = db.collection("players").document(uid)
+      val docRef = firestore.collection("players").document(uid)
       val existing = docRef.get().await()
       if (existing.exists()) {
         val updates = mapOf(
@@ -232,9 +308,24 @@ class RadarQuestRepository(
   }
 
   suspend fun updateLiveLocation(latitude: Double, longitude: Double, isOnline: Boolean): Result<Unit> {
+    val firestore = db
+    if (firestore == null || auth == null) {
+      val current = localProfileFlow.value ?: PlayerProfile(
+        id = LOCAL_USER_ID,
+        userId = LOCAL_USER_ID,
+        callsign = "Explorador",
+      )
+      localProfileFlow.value = current.copy(
+        latitude = latitude.coerceIn(-90.0, 90.0),
+        longitude = longitude.coerceIn(-180.0, 180.0),
+        isOnline = isOnline,
+      )
+      return Result.success(Unit)
+    }
+
     return runCatching {
       val uid = requireUserId()
-      val docRef = db.collection("players").document(uid)
+      val docRef = firestore.collection("players").document(uid)
       val existing = docRef.get().await()
       if (existing.exists()) {
         docRef.update(
@@ -259,9 +350,28 @@ class RadarQuestRepository(
     addHelpsGiven: Long = 0L,
     addDuelsWon: Long = 0L,
   ): Result<Unit> {
+    val firestore = db
+    if (firestore == null || auth == null) {
+      val current = localProfileFlow.value ?: PlayerProfile(
+        id = LOCAL_USER_ID,
+        userId = LOCAL_USER_ID,
+        callsign = "Explorador",
+      )
+      val newXp = (current.xp + addXp).coerceAtLeast(0L)
+      val newLevel = (newXp / 250L) + 1L
+      localProfileFlow.value = current.copy(
+        xp = newXp,
+        level = newLevel,
+        missionsCompleted = current.missionsCompleted + addMissionsCompleted,
+        helpsGiven = current.helpsGiven + addHelpsGiven,
+        duelsWon = current.duelsWon + addDuelsWon,
+      )
+      return Result.success(Unit)
+    }
+
     return runCatching {
       val uid = requireUserId()
-      val docRef = db.collection("players").document(uid)
+      val docRef = firestore.collection("players").document(uid)
       val snap = docRef.get().await()
       val currentXp = snap.getLong("xp") ?: 0L
       val newXp = (currentXp + addXp).coerceAtLeast(0L)
@@ -288,8 +398,12 @@ class RadarQuestRepository(
 
   // --- Real-Life Missions ---
   fun observeActiveMissions(uid: String): Flow<List<Mission>> {
+    val firestore = db
+    if (firestore == null || auth == null) {
+      return localMissionsFlow
+    }
     val path = "missions"
-    return db.collection("missions")
+    return firestore.collection("missions")
       .whereEqualTo("isActive", true)
       .snapshots()
       .map { snap ->
@@ -299,9 +413,13 @@ class RadarQuestRepository(
   }
 
   suspend fun fetchActiveMissionsOnce(): Result<List<Mission>> {
+    val firestore = db
+    if (firestore == null || auth == null) {
+      return Result.success(localMissionsFlow.value)
+    }
     return runCatching {
       requireUserId()
-      val snap = db.collection("missions")
+      val snap = firestore.collection("missions")
         .whereEqualTo("isActive", true)
         .get()
         .await()
@@ -325,15 +443,40 @@ class RadarQuestRepository(
     timeLimitSeconds: Int = 0,
     placeLabel: String = "Zona pública segura",
   ): Result<String> {
+    val id = "m_" + UUID.randomUUID().toString().replace("-", "").take(16)
+    val safeCategory = if (category in VALID_CATEGORIES) category else "explore"
+    val safeType = if (missionType in listOf("photo", "wires", "puzzle", "memory")) missionType else "photo"
+    val safeIcon = iconKey.trim().ifBlank { "explore" }.take(32)
+    val safeTimeLimit = timeLimitSeconds.coerceIn(0, 600)
+    val safePlace = placeLabel.trim().ifBlank { "Zona pública segura" }.take(100)
+
+    val firestore = db
+    if (firestore == null || auth == null) {
+      val localMission = Mission(
+        id = id,
+        creatorId = LOCAL_USER_ID,
+        creatorName = creatorName.trim().ifBlank { "Explorador" }.take(40),
+        title = title.trim().take(80),
+        description = description.trim().take(280),
+        category = safeCategory,
+        missionType = safeType,
+        iconKey = safeIcon,
+        timeLimitSeconds = safeTimeLimit,
+        placeLabel = safePlace,
+        xpReward = xpReward.coerceIn(25L, 1000L),
+        latitude = latitude.coerceIn(-90.0, 90.0),
+        longitude = longitude.coerceIn(-180.0, 180.0),
+        isActive = true,
+        createdAt = Timestamp.now(),
+        updatedAt = Timestamp.now(),
+      )
+      localMissionsFlow.value = listOf(localMission) + localMissionsFlow.value
+      return Result.success(id)
+    }
+
     return runCatching {
       val uid = requireUserId()
-      val id = "m_" + UUID.randomUUID().toString().replace("-", "").take(16)
-      val docRef = db.collection("missions").document(id)
-      val safeCategory = if (category in VALID_CATEGORIES) category else "explore"
-      val safeType = if (missionType in listOf("photo", "wires", "puzzle", "memory")) missionType else "photo"
-      val safeIcon = iconKey.trim().ifBlank { "explore" }.take(32)
-      val safeTimeLimit = timeLimitSeconds.coerceIn(0, 600)
-      val safePlace = placeLabel.trim().ifBlank { "Zona pública segura" }.take(100)
+      val docRef = firestore.collection("missions").document(id)
       val payload = mapOf(
         "creatorId" to uid,
         "creatorName" to creatorName.trim().ifBlank { "Explorador" }.take(40),
@@ -361,8 +504,12 @@ class RadarQuestRepository(
 
   // --- Photo-Confirmed Mission Completions ---
   fun observeMyCompletions(uid: String): Flow<List<MissionCompletion>> {
+    val firestore = db
+    if (firestore == null || auth == null) {
+      return localMyCompletionsFlow
+    }
     val path = "mission_completions"
-    return db.collection("mission_completions")
+    return firestore.collection("mission_completions")
       .whereEqualTo("userId", uid)
       .snapshots()
       .map { snap ->
@@ -372,8 +519,12 @@ class RadarQuestRepository(
   }
 
   fun observePublicCompletions(uid: String): Flow<List<MissionCompletion>> {
+    val firestore = db
+    if (firestore == null || auth == null) {
+      return localPublicCompletionsFlow
+    }
     val path = "mission_completions"
-    return db.collection("mission_completions")
+    return firestore.collection("mission_completions")
       .whereEqualTo("isPublic", true)
       .snapshots()
       .map { snap ->
@@ -394,11 +545,36 @@ class RadarQuestRepository(
     longitude: Double,
     isPublic: Boolean = true,
   ): Result<String> {
+    val id = "c_" + UUID.randomUUID().toString().replace("-", "").take(16)
+    val safeCategory = if (category in VALID_CATEGORIES) category else "explore"
+
+    val firestore = db
+    if (firestore == null || auth == null) {
+      val completion = MissionCompletion(
+        id = id,
+        userId = LOCAL_USER_ID,
+        userName = userName.trim().ifBlank { "Explorador" }.take(40),
+        missionId = missionId.take(128),
+        missionTitle = missionTitle.trim().take(80),
+        category = safeCategory,
+        xpEarned = xpEarned.coerceIn(10L, 2000L),
+        caption = caption.trim().take(200),
+        photoThumbnail = photoThumbnailBase64.take(80000),
+        latitude = latitude.coerceIn(-90.0, 90.0),
+        longitude = longitude.coerceIn(-180.0, 180.0),
+        isPublic = isPublic,
+        createdAt = Timestamp.now(),
+      )
+      localMyCompletionsFlow.value = listOf(completion) + localMyCompletionsFlow.value
+      if (isPublic) {
+        localPublicCompletionsFlow.value = listOf(completion) + localPublicCompletionsFlow.value
+      }
+      return Result.success(id)
+    }
+
     return runCatching {
       val uid = requireUserId()
-      val id = "c_" + UUID.randomUUID().toString().replace("-", "").take(16)
-      val docRef = db.collection("mission_completions").document(id)
-      val safeCategory = if (category in VALID_CATEGORIES) category else "explore"
+      val docRef = firestore.collection("mission_completions").document(id)
       val payload = mapOf(
         "userId" to uid,
         "userName" to userName.trim().ifBlank { "Explorador" }.take(40),
@@ -424,8 +600,12 @@ class RadarQuestRepository(
 
   // --- Challenges (Compete & Play) ---
   fun observeOpenChallenges(uid: String): Flow<List<Challenge>> {
+    val firestore = db
+    if (firestore == null || auth == null) {
+      return localOpenChallengesFlow
+    }
     val path = "challenges"
-    return db.collection("challenges")
+    return firestore.collection("challenges")
       .whereEqualTo("status", "open")
       .snapshots()
       .map { snap ->
@@ -435,8 +615,12 @@ class RadarQuestRepository(
   }
 
   fun observeMyChallenges(uid: String): Flow<List<Challenge>> {
+    val firestore = db
+    if (firestore == null || auth == null) {
+      return localMyChallengesFlow
+    }
     val path = "challenges"
-    return db.collection("challenges")
+    return firestore.collection("challenges")
       .whereArrayContains("participantIds", uid)
       .snapshots()
       .map { snap ->
@@ -452,10 +636,32 @@ class RadarQuestRepository(
     missionId: String,
     xpStake: Long,
   ): Result<String> {
+    val id = "ch_" + UUID.randomUUID().toString().replace("-", "").take(16)
+    val firestore = db
+    if (firestore == null || auth == null) {
+      val localChallenge = Challenge(
+        id = id,
+        creatorId = LOCAL_USER_ID,
+        creatorName = creatorName.trim().ifBlank { "Explorador" }.take(40),
+        mode = mode,
+        title = title.trim().take(80),
+        missionId = missionId.take(128),
+        xpStake = xpStake.coerceIn(25L, 1000L),
+        status = "open",
+        participantIds = listOf(LOCAL_USER_ID),
+        creatorProgress = 0L,
+        opponentProgress = 0L,
+        createdAt = Timestamp.now(),
+        updatedAt = Timestamp.now(),
+      )
+      localMyChallengesFlow.value = listOf(localChallenge) + localMyChallengesFlow.value
+      localOpenChallengesFlow.value = listOf(localChallenge) + localOpenChallengesFlow.value
+      return Result.success(id)
+    }
+
     return runCatching {
       val uid = requireUserId()
-      val id = "ch_" + UUID.randomUUID().toString().replace("-", "").take(16)
-      val docRef = db.collection("challenges").document(id)
+      val docRef = firestore.collection("challenges").document(id)
       val payload = mapOf(
         "creatorId" to uid,
         "creatorName" to creatorName.trim().ifBlank { "Explorador" }.take(40),
@@ -479,9 +685,23 @@ class RadarQuestRepository(
   }
 
   suspend fun joinChallenge(challenge: Challenge, opponentName: String): Result<Unit> {
+    val firestore = db
+    if (firestore == null || auth == null) {
+      val updated = challenge.copy(
+        participantIds = listOf(challenge.creatorId, LOCAL_USER_ID),
+        opponentId = LOCAL_USER_ID,
+        opponentName = opponentName.trim().ifBlank { "Rival" }.take(40),
+        status = "active",
+        updatedAt = Timestamp.now(),
+      )
+      localMyChallengesFlow.value = listOf(updated) + localMyChallengesFlow.value.filterNot { it.id == challenge.id }
+      localOpenChallengesFlow.value = localOpenChallengesFlow.value.filterNot { it.id == challenge.id }
+      return Result.success(Unit)
+    }
+
     return runCatching {
       val uid = requireUserId()
-      val docRef = db.collection("challenges").document(challenge.id)
+      val docRef = firestore.collection("challenges").document(challenge.id)
       docRef.update(
         mapOf(
           "participantIds" to listOf(challenge.creatorId, uid),
@@ -502,6 +722,29 @@ class RadarQuestRepository(
     challenge: Challenge,
     newProgress: Long,
   ): Result<Unit> {
+    val firestore = db
+    if (firestore == null || auth == null) {
+      val clamped = newProgress.coerceIn(0L, 100L)
+      val isCreator = LOCAL_USER_ID == challenge.creatorId
+      val newCreatorProg = if (isCreator) clamped else challenge.creatorProgress
+      val newOpponentProg = if (!isCreator) clamped else challenge.opponentProgress
+      val completed =
+        if (challenge.mode == "coop") {
+          newCreatorProg >= 100L && newOpponentProg >= 100L
+        } else {
+          clamped >= 100L
+        }
+      val updated = challenge.copy(
+        creatorProgress = newCreatorProg,
+        opponentProgress = newOpponentProg,
+        status = if (completed) "completed" else "active",
+        winnerId = if (completed) LOCAL_USER_ID else challenge.winnerId,
+        updatedAt = Timestamp.now(),
+      )
+      localMyChallengesFlow.value = localMyChallengesFlow.value.map { if (it.id == challenge.id) updated else it }
+      return Result.success(Unit)
+    }
+
     return runCatching {
       val uid = requireUserId()
       val clamped = newProgress.coerceIn(0L, 100L)
@@ -523,7 +766,7 @@ class RadarQuestRepository(
       if (completed) {
         updates["winnerId"] = uid
       }
-      db.collection("challenges").document(challenge.id).update(updates).await()
+      firestore.collection("challenges").document(challenge.id).update(updates).await()
       Unit
     }.onFailure { e ->
       if (e is CancellationException) throw e
@@ -533,8 +776,12 @@ class RadarQuestRepository(
 
   // --- Interactions (Help, Radar Pulse, Cheer) ---
   fun observeMyInteractions(uid: String): Flow<List<PlayerInteraction>> {
+    val firestore = db
+    if (firestore == null || auth == null) {
+      return localInteractionsFlow
+    }
     val path = "interactions"
-    return db.collection("interactions")
+    return firestore.collection("interactions")
       .whereArrayContains("participantIds", uid)
       .snapshots()
       .map { snap ->
@@ -551,10 +798,28 @@ class RadarQuestRepository(
     message: String,
     xpBonus: Long,
   ): Result<String> {
+    val id = "in_" + UUID.randomUUID().toString().replace("-", "").take(16)
+    val firestore = db
+    if (firestore == null || auth == null) {
+      val localInteraction = PlayerInteraction(
+        id = id,
+        fromUserId = LOCAL_USER_ID,
+        fromUserName = fromUserName.trim().ifBlank { "Explorador" }.take(40),
+        toUserId = toUserId.take(128),
+        toUserName = toUserName.trim().ifBlank { "Jugador" }.take(40),
+        type = type,
+        message = message.trim().take(160),
+        xpBonus = xpBonus.coerceIn(0L, 200L),
+        participantIds = listOf(LOCAL_USER_ID, toUserId),
+        createdAt = Timestamp.now(),
+      )
+      localInteractionsFlow.value = listOf(localInteraction) + localInteractionsFlow.value
+      return Result.success(id)
+    }
+
     return runCatching {
       val uid = requireUserId()
       require(uid != toUserId) { "No puedes enviarte una interacción a ti mismo." }
-      val id = "in_" + UUID.randomUUID().toString().replace("-", "").take(16)
       val payload = mapOf(
         "fromUserId" to uid,
         "fromUserName" to fromUserName.trim().ifBlank { "Explorador" }.take(40),
@@ -566,7 +831,7 @@ class RadarQuestRepository(
         "participantIds" to listOf(uid, toUserId),
         "createdAt" to FieldValue.serverTimestamp(),
       )
-      db.collection("interactions").document(id).set(payload).await()
+      firestore.collection("interactions").document(id).set(payload).await()
       id
     }.onFailure { e ->
       if (e is CancellationException) throw e
@@ -574,7 +839,8 @@ class RadarQuestRepository(
     }
   }
 
-  private companion object {
-    val VALID_CATEGORIES = setOf("explore", "eco", "social", "challenge", "fitness", "creative", "puzzle")
+  companion object {
+    const val LOCAL_USER_ID = "local_explorer"
+    private val VALID_CATEGORIES = setOf("explore", "eco", "social", "challenge", "fitness", "creative", "puzzle")
   }
 }

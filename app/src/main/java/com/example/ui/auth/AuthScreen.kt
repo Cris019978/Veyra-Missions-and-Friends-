@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -20,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Radar
@@ -29,11 +31,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,19 +49,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.R
-import com.google.firebase.Firebase
-import com.google.firebase.auth.auth
 
 @Composable
 fun AuthScreen(
   onAuthSuccess: () -> Unit,
+  onContinueLocalMode: (() -> Unit)? = null,
 ) {
-  LaunchedEffect(Unit) {
-    if (runCatching { Firebase.auth.currentUser != null }.getOrDefault(false)) {
-      onAuthSuccess()
-    }
-  }
-
   Scaffold { innerPadding ->
     Box(
       modifier = Modifier
@@ -190,20 +185,40 @@ fun AuthScreen(
           )
         }
 
-        Button(
+        if (onContinueLocalMode != null) {
+          Button(
+            onClick = onContinueLocalMode,
+            shape = MaterialTheme.shapes.large,
+            contentPadding = ButtonDefaults.ContentPadding,
+            modifier = Modifier
+              .fillMaxWidth()
+              .height(54.dp)
+              .testTag("continue_local_mode_button"),
+          ) {
+            Icon(Icons.Rounded.Explore, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+              text = "Explorar en modo local",
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold,
+            )
+          }
+        }
+
+        OutlinedButton(
           onClick = { },
           enabled = false,
           shape = MaterialTheme.shapes.large,
           contentPadding = ButtonDefaults.ContentPadding,
           modifier = Modifier
             .fillMaxWidth()
-            .height(56.dp)
+            .height(50.dp)
             .testTag("google_sign_in_button"),
         ) {
           Text(
             text = stringResource(id = R.string.auth_sign_in_google),
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
           )
         }
       }
