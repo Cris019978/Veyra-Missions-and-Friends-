@@ -22,6 +22,19 @@ sealed class LocalAuthResult {
   data class Error(val message: String) : LocalAuthResult()
 }
 
+enum class SecretCodeSection(val title: String) {
+  BETA_TESTERS("Beta Testers"),
+  SPECIAL_TITLES("Títulos Especiales"),
+}
+
+data class SecretCodeEntry(
+  val code: String,
+  val role: String,
+  val roleTitle: String,
+  val section: SecretCodeSection,
+  val description: String,
+)
+
 /**
  * 100% local, zero-dependency identity verification using Android SharedPreferences + SHA-256 PIN hashing.
  */
@@ -239,11 +252,79 @@ class LocalAuthManager(context: Context) {
     const val ROLE_CREATOR = "creator"
     const val ROLE_BETA_TESTER = "beta_tester"
     const val ROLE_PALMGYM = "palmgym_cr"
+    const val ROLE_CURIOUS_EXPLORER = "curious_explorer"
+    const val ROLE_NIGHT_RANGER = "night_ranger"
+    const val ROLE_VANGUARD = "vanguard"
 
-    const val TITLE_EXPLORER = "Explorador"
+    const val TITLE_EXPLORER = "Explorer"
     const val TITLE_CREATOR = "Creador"
     const val TITLE_BETA_TESTER = "Beta Tester"
     const val TITLE_PALMGYM = "Palmgym_CR"
+    const val TITLE_CURIOUS_EXPLORER = "Explorador Trifuerza"
+    const val TITLE_NIGHT_RANGER = "Centinela Aurora"
+    const val TITLE_VANGUARD = "Vanguardia 1.0"
+
+    const val MSG_BETA_TESTER_UNLOCKED = "Felicidades, Eres un beta tester"
+    const val MSG_CURIOUS_EXPLORER_UNLOCKED = "Felicidades eres un Explorador curioso"
+
+    val SECRET_CODE_CATALOG: List<SecretCodeEntry> = listOf(
+      SecretCodeEntry(
+        code = "VEYRA-BETA",
+        role = ROLE_BETA_TESTER,
+        roleTitle = TITLE_BETA_TESTER,
+        section = SecretCodeSection.BETA_TESTERS,
+        description = "Acceso clásico de pruebas tempranas",
+      ),
+      SecretCodeEntry(
+        code = "BETA2025",
+        role = ROLE_BETA_TESTER,
+        roleTitle = TITLE_BETA_TESTER,
+        section = SecretCodeSection.BETA_TESTERS,
+        description = "Insignia de fundadores Beta 2025",
+      ),
+      SecretCodeEntry(
+        code = "VEYRA2026",
+        role = ROLE_BETA_TESTER,
+        roleTitle = TITLE_BETA_TESTER,
+        section = SecretCodeSection.BETA_TESTERS,
+        description = "Cohorte de pruebas Veyra 2026",
+      ),
+      SecretCodeEntry(
+        code = "BETA_VEYRA",
+        role = ROLE_BETA_TESTER,
+        roleTitle = TITLE_BETA_TESTER,
+        section = SecretCodeSection.BETA_TESTERS,
+        description = "Código directo Beta Tester Veyra",
+      ),
+      SecretCodeEntry(
+        code = "PALMGYM-CR",
+        role = ROLE_PALMGYM,
+        roleTitle = TITLE_PALMGYM,
+        section = SecretCodeSection.SPECIAL_TITLES,
+        description = "Título oficial del club Palmgym",
+      ),
+      SecretCodeEntry(
+        code = "TRIFORCE-7",
+        role = ROLE_CURIOUS_EXPLORER,
+        roleTitle = TITLE_CURIOUS_EXPLORER,
+        section = SecretCodeSection.SPECIAL_TITLES,
+        description = "Desbloqueado por el secreto triangular",
+      ),
+      SecretCodeEntry(
+        code = "AURORA-XP",
+        role = ROLE_NIGHT_RANGER,
+        roleTitle = TITLE_NIGHT_RANGER,
+        section = SecretCodeSection.SPECIAL_TITLES,
+        description = "Rastreador de rutas ocultas",
+      ),
+      SecretCodeEntry(
+        code = "VANGUARD-1",
+        role = ROLE_VANGUARD,
+        roleTitle = TITLE_VANGUARD,
+        section = SecretCodeSection.SPECIAL_TITLES,
+        description = "Pionero de la edición 1.0-Alpha",
+      ),
+    )
 
     // Admin / Creator handles (strip @, lowercase)
     val CREATOR_USERNAMES = setOf("veyra", "admin_veyra", "cesquivel")
@@ -253,21 +334,38 @@ class LocalAuthManager(context: Context) {
 
     // Predefined Beta Tester usernames & invite codes
     val BETA_TESTER_USERNAMES = setOf("tester1", "tester2", "beta_tester", "veyra_beta")
-    val BETA_INVITE_CODES = setOf("VEYRA-BETA", "BETA2025", "VEYRA2026")
+    val BETA_INVITE_CODES = SECRET_CODE_CATALOG
+      .filter { it.section == SecretCodeSection.BETA_TESTERS }
+      .map { it.code }
+      .toSet()
 
     private val USERNAME_REGEX = Regex("^[a-z0-9_]{3,24}$")
 
     fun normalizeUsername(raw: String): String =
       raw.trim().removePrefix("@").lowercase()
 
+    fun findSecretCodeEntry(inviteCode: String): SecretCodeEntry? {
+      val cleanCode = inviteCode.trim().uppercase()
+      if (cleanCode.isBlank()) return null
+      return SECRET_CODE_CATALOG.firstOrNull { it.code == cleanCode }
+    }
+
+    fun celebrationMessageForCode(inviteCode: String): String? {
+      val entry = findSecretCodeEntry(inviteCode) ?: return null
+      return when (entry.section) {
+        SecretCodeSection.BETA_TESTERS -> MSG_BETA_TESTER_UNLOCKED
+        SecretCodeSection.SPECIAL_TITLES -> MSG_CURIOUS_EXPLORER_UNLOCKED
+      }
+    }
+
     fun resolveRoleAndTitle(normalizedUsername: String, inviteCode: String = ""): Pair<String, String> {
       val cleanUsername = normalizeUsername(normalizedUsername)
-      val cleanCode = inviteCode.trim().uppercase()
+      val matchedCode = findSecretCodeEntry(inviteCode)
       return when {
         cleanUsername in CREATOR_USERNAMES -> ROLE_CREATOR to TITLE_CREATOR
         cleanUsername in PALMGYM_USERNAMES -> ROLE_PALMGYM to TITLE_PALMGYM
-        cleanUsername in BETA_TESTER_USERNAMES || cleanCode in BETA_INVITE_CODES ->
-          ROLE_BETA_TESTER to TITLE_BETA_TESTER
+        cleanUsername in BETA_TESTER_USERNAMES -> ROLE_BETA_TESTER to TITLE_BETA_TESTER
+        matchedCode != null -> matchedCode.role to matchedCode.roleTitle
         else -> ROLE_EXPLORER to TITLE_EXPLORER
       }
     }

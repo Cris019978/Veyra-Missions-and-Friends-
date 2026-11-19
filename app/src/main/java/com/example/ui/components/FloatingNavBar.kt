@@ -22,10 +22,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.LocalFireDepartment
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Radar
 import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.Groups
+import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material3.Icon
@@ -96,13 +98,20 @@ fun FloatingBottomNavBar(
       unselectedIcon = Icons.Outlined.Groups,
       testTag = "nav_tab_social",
     ),
+    FloatingNavDestination(
+      index = 4,
+      label = stringResource(id = R.string.nav_streak),
+      selectedIcon = Icons.Rounded.LocalFireDepartment,
+      unselectedIcon = Icons.Outlined.LocalFireDepartment,
+      testTag = "nav_tab_streak",
+    ),
   )
 
   Box(
     modifier = modifier
       .fillMaxWidth()
       .windowInsetsPadding(WindowInsets.navigationBars)
-      .padding(horizontal = 16.dp, vertical = 12.dp),
+      .padding(horizontal = 12.dp, vertical = 12.dp),
     contentAlignment = Alignment.Center,
   ) {
     Surface(
@@ -111,7 +120,7 @@ fun FloatingBottomNavBar(
       tonalElevation = 8.dp,
       shadowElevation = 12.dp,
       modifier = Modifier
-        .widthIn(max = 520.dp)
+        .widthIn(max = 560.dp)
         .fillMaxWidth()
         .border(
           width = 1.dp,
@@ -123,7 +132,7 @@ fun FloatingBottomNavBar(
       Row(
         modifier = Modifier
           .fillMaxWidth()
-          .padding(horizontal = 8.dp, vertical = 6.dp),
+          .padding(horizontal = 6.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically,
       ) {
@@ -164,7 +173,7 @@ fun FloatingBottomNavBar(
               modifier = Modifier
                 .clip(CircleShape)
                 .background(pillColor)
-                .padding(horizontal = 16.dp, vertical = 6.dp),
+                .padding(horizontal = 10.dp, vertical = 6.dp),
               contentAlignment = Alignment.Center,
             ) {
               Icon(

@@ -704,7 +704,7 @@ class ExampleRobolectricTest {
     assertTrue(regUser is com.example.data.local.LocalAuthResult.Success)
     val userSession = (regUser as com.example.data.local.LocalAuthResult.Success).session
     assertEquals("explorer", userSession.role)
-    assertEquals("Explorador", userSession.roleTitle)
+    assertEquals("Explorer", userSession.roleTitle)
     assertFalse(userSession.pinHash == "9876")
     assertEquals(64, userSession.pinHash.length)
 
@@ -1574,5 +1574,312 @@ class ExampleRobolectricTest {
     } finally {
       Dispatchers.resetMain()
     }
+  }
+
+  @Test
+  fun `dailyStreakTracker tracks consecutive days preserves best streak and resets after missed day`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    var fakeNow = java.util.Calendar.getInstance().apply {
+      set(2026, java.util.Calendar.NOVEMBER, 10, 12, 0, 0)
+      set(java.util.Calendar.MILLISECOND, 0)
+    }.timeInMillis
+
+    val tracker = com.example.data.local.DailyStreakTracker(
+      context = context,
+      userId = "streak_unit_user",
+      nowMillisProvider = { fakeNow },
+    )
+    tracker.clearForTest()
+
+    val day1First = tracker.recordMissionCompleted()
+    assertEquals(1, day1First.currentStreakDays)
+    assertEquals(1, day1First.bestStreakDays)
+    assertTrue(day1First.completedToday)
+    assertEquals(1, day1First.missionsCompletedToday)
+    assertEquals("1.0x", day1First.xpBoostLabel)
+    assertEquals(7, day1First.recentSevenDays.size)
+
+    // Completing another mission on Day 1 keeps streak at 1 day and increments today's count
+    val day1Second = tracker.recordMissionCompleted()
+    assertEquals(1, day1Second.currentStreakDays)
+    assertEquals(2, day1Second.missionsCompletedToday)
+
+    // Advance to Day 2
+    fakeNow += 24 * 60 * 60 * 1000L
+    val day2 = tracker.recordMissionCompleted()
+    assertEquals(2, day2.currentStreakDays)
+    assertEquals(2, day2.bestStreakDays)
+    assertEquals(1, day2.missionsCompletedToday)
+
+    // Advance to Day 3 -> unlocks 1.2x boost and advances next milestone to 7
+    fakeNow += 24 * 60 * 60 * 1000L
+    val day3 = tracker.recordMissionCompleted()
+    assertEquals(3, day3.currentStreakDays)
+    assertEquals(3, day3.bestStreakDays)
+    assertEquals("1.2x", day3.xpBoostLabel)
+    assertEquals(7, day3.nextMilestoneDays)
+
+    // Skip Day 4 and check on Day 5 -> current streak broken (0), best streak preserved (3)
+    fakeNow += 2 * 24 * 60 * 60 * 1000L
+    val day5Refreshed = tracker.refresh()
+    assertEquals(0, day5Refreshed.currentStreakDays)
+    assertEquals(3, day5Refreshed.bestStreakDays)
+    assertFalse(day5Refreshed.completedToday)
+
+    // Completing a mission on Day 5 starts a fresh 1-day streak while keeping bestStreakDays = 3
+    val day5Completed = tracker.recordMissionCompleted()
+    assertEquals(1, day5Completed.currentStreakDays)
+    assertEquals(3, day5Completed.bestStreakDays)
+    assertEquals(4, day5Completed.totalActiveDays)
+  }
+
+  @Test
+  fun `floatingBottomNavBar places Racha tab at the end index 4`() {
+    var selected = -1
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        FloatingBottomNavBar(
+          selectedTab = 0,
+          disableAnimations = true,
+          onSelectTab = { selected = it },
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("nav_tab_streak").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Racha").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("nav_tab_streak").performClick()
+    assertEquals(4, selected)
+  }
+
+  @Test
+  fun `streakScreen renders streak metrics 7-day strip and social cheer actions`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val tracker = com.example.data.local.DailyStreakTracker(context, "streak_screen_test")
+    tracker.clearForTest()
+    val streakState = tracker.recordMissionCompleted()
+
+    val peer = com.example.data.model.PlayerProfile(
+      userId = "peer_alex",
+      username = "alex",
+      callsign = "Alex",
+      xp = 420L,
+      level = 3L,
+      missionsCompleted = 6L,
+      role = "explorer",
+      roleTitle = "Explorador",
+    )
+
+    var cheeredPeerId = ""
+    var radarClicked = false
+
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        com.example.ui.screens.StreakScreen(
+          uiState = RadarQuestUiState(
+            dailyStreak = streakState,
+            leaderboardPlayers = listOf(peer),
+            settings = UserSettings(animationTier = "low"),
+          ),
+          currentUserId = "me_user",
+          onGoToRadar = { radarClicked = true },
+          onCheerPlayer = { cheeredPeerId = it.userId },
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("streak_hero_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("streak_current_days_text").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("streak_best_stat_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("streak_week_strip").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("streak_cheer_player_peer_alex")
+      .performScrollTo()
+      .performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("peer_alex", cheeredPeerId)
+
+    composeTestRule.onNodeWithTag("streak_primary_cta_button")
+      .performScrollTo()
+      .performClick()
+    composeTestRule.waitForIdle()
+    assertFalse(radarClicked) // Already completed today -> CTA points to Red Social
+  }
+
+  @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+  @Test
+  fun `radarQuestViewModel increments dailyStreak when mission is confirmed`() = runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val dispatcher = kotlinx.coroutines.test.UnconfinedTestDispatcher()
+    Dispatchers.setMain(dispatcher)
+    try {
+      val streakTracker = com.example.data.local.DailyStreakTracker(context, "vm_streak_user")
+      streakTracker.clearForTest()
+      val vm = com.example.ui.viewmodel.RadarQuestViewModel(
+        repository = RadarQuestRepository(db = null),
+        localPrefs = com.example.data.local.LocalThemePreferences(context),
+        currentUserId = "vm_streak_user",
+        defaultDisplayName = "StreakUser",
+        dailyStreakTracker = streakTracker,
+      )
+      val collectJob = kotlinx.coroutines.CoroutineScope(dispatcher).launch {
+        vm.uiState.collect {}
+      }
+
+      vm.confirmMissionWithPhoto(
+        mission = Mission(
+          id = "streak_m_1",
+          title = "Mirador Central",
+          category = "explore",
+          xpReward = 150L,
+        ),
+        caption = "Foto diaria",
+        photoThumbnailBase64 = "",
+        isPublic = false,
+      )
+      val updated = vm.uiState.first { it.dailyStreak.currentStreakDays == 1 }
+      assertEquals(1, updated.dailyStreak.currentStreakDays)
+      assertEquals(1, updated.dailyStreak.missionsCompletedToday)
+      assertTrue(updated.dailyStreak.completedToday)
+
+      collectJob.cancel()
+      androidx.lifecycle.ViewModelStore().apply { put("vm", vm) }.clear()
+    } finally {
+      Dispatchers.resetMain()
+    }
+  }
+
+  @Test
+  fun `authScreen defaults new user without code to Explorer without celebration and uses neutral code placeholder`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val authManager = com.example.data.local.LocalAuthManager(context)
+    authManager.clearAllAccountsForTest()
+    var celebrationTriggered = false
+
+    composeTestRule.setContent {
+      RadarQuestTheme(themeMode = "dark") {
+        com.example.ui.auth.AuthScreen(
+          onLogin = { u, p -> authManager.login(u, p) },
+          onRegister = { u, p, code -> authManager.registerAccount(u, p, code) },
+          onRegistrationCelebration = { _, _ -> celebrationTriggered = true },
+        )
+      }
+    }
+
+    // Triforce easter egg is NOT visible in Login mode
+    composeTestRule.onNodeWithTag("auth_triforce_easter_egg").assertDoesNotExist()
+
+    // Switch to Crear Cuenta -> Triforce becomes visible
+    composeTestRule.onNodeWithTag("auth_mode_register_tab").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("auth_triforce_easter_egg").performScrollTo().assertIsDisplayed()
+
+    // Open code input -> focus it and verify neutral placeholder, no leaked code hints
+    composeTestRule.onNodeWithTag("toggle_invite_code_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("auth_invite_code_input").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("Ingresa tu código").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Ej. VEYRA-BETA").assertDoesNotExist()
+
+    // Register without any code -> Explorer title & zero celebration
+    composeTestRule.onNodeWithTag("auth_username_input").performScrollTo().performTextInput("nuevo_user")
+    composeTestRule.onNodeWithTag("auth_pin_input").performScrollTo().performTextInput("1234")
+    composeTestRule.onNodeWithTag("veyra_submit_auth_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+
+    val session = authManager.getCurrentSession()
+    assertNotNull(session)
+    assertEquals("Explorer", session?.roleTitle)
+    assertFalse(celebrationTriggered)
+    composeTestRule.onNodeWithTag("registration_celebration_banner").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("confetti_celebration_overlay").assertDoesNotExist()
+  }
+
+  @Test
+  fun `triforce easter egg requires 5 rapid taps within 1_5s and opens sectioned catalog with conditional celebrations`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val authManager = com.example.data.local.LocalAuthManager(context)
+    authManager.clearAllAccountsForTest()
+
+    var fakeNow = 10_000L
+    val recordedCelebrations = mutableListOf<Pair<String, String>>()
+
+    composeTestRule.setContent {
+      RadarQuestTheme(themeMode = "dark") {
+        com.example.ui.auth.AuthScreen(
+          onLogin = { u, p -> authManager.login(u, p) },
+          onRegister = { u, p, code -> authManager.registerAccount(u, p, code) },
+          onRegistrationCelebration = { msg, title -> recordedCelebrations.add(msg to title) },
+          nowMillisProvider = { fakeNow },
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("auth_mode_register_tab").performClick()
+    composeTestRule.waitForIdle()
+
+    val triforce = composeTestRule.onNodeWithTag("auth_triforce_easter_egg").performScrollTo()
+    // 3 rapid taps, then pause > 1.5s -> resets count so 2 more taps do NOT open the dialog
+    repeat(3) {
+      fakeNow += 200L
+      triforce.performClick()
+    }
+    fakeNow += 1600L // > 1.5s gap resets streak!
+    repeat(2) {
+      fakeNow += 200L
+      triforce.performClick()
+    }
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("triforce_secret_codes_dialog").assertDoesNotExist()
+
+    // 4 more rapid taps (total 5 since the reset tap) -> opens the secret menu
+    repeat(4) {
+      fakeNow += 200L
+      triforce.performClick()
+    }
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("triforce_secret_codes_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Beta Testers").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Títulos Especiales").assertIsDisplayed()
+
+    // Select a Beta Testers code -> VEYRA-BETA and complete registration
+    composeTestRule.onNodeWithTag("secret_code_option_VEYRA-BETA").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("triforce_secret_codes_dialog").assertDoesNotExist()
+
+    composeTestRule.onNodeWithTag("auth_username_input").performScrollTo().performTextReplacement("beta_curioso")
+    composeTestRule.onNodeWithTag("auth_pin_input").performScrollTo().performTextReplacement("4321")
+    composeTestRule.mainClock.autoAdvance = false
+    composeTestRule.onNodeWithTag("veyra_submit_auth_button").performScrollTo().performClick()
+    composeTestRule.mainClock.advanceTimeBy(400L)
+
+    assertEquals(1, recordedCelebrations.size)
+    assertEquals("Felicidades, Eres un beta tester", recordedCelebrations[0].first)
+    assertEquals("Beta Tester", authManager.getCurrentSession()?.roleTitle)
+    composeTestRule.onNodeWithTag("registration_celebration_banner").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Felicidades, Eres un beta tester").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("confetti_celebration_overlay").assertIsDisplayed()
+    composeTestRule.mainClock.autoAdvance = true
+    composeTestRule.waitForIdle()
+
+    // Now test Special Titles section -> TRIFORCE-7 yields "Felicidades eres un Explorador curioso"
+    authManager.logout()
+    repeat(5) {
+      fakeNow += 200L
+      composeTestRule.onNodeWithTag("auth_triforce_easter_egg").performScrollTo().performClick()
+    }
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("secret_code_option_TRIFORCE-7").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("auth_username_input").performScrollTo().performTextReplacement("zelda_explorer")
+    composeTestRule.onNodeWithTag("auth_pin_input").performScrollTo().performTextReplacement("5678")
+    composeTestRule.onNodeWithTag("veyra_submit_auth_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+
+    assertEquals(2, recordedCelebrations.size)
+    assertEquals("Felicidades eres un Explorador curioso", recordedCelebrations[1].first)
+    assertEquals("Explorador Trifuerza", authManager.getCurrentSession()?.roleTitle)
+    composeTestRule.onNodeWithText("Felicidades eres un Explorador curioso").assertIsDisplayed()
   }
 }

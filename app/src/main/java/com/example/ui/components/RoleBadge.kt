@@ -8,8 +8,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.ChangeHistory
 import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.FitnessCenter
+import androidx.compose.material.icons.rounded.MilitaryTech
+import androidx.compose.material.icons.rounded.NightsStay
 import androidx.compose.material.icons.rounded.Science
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -35,6 +38,9 @@ fun RoleTitleBadge(
       LocalAuthManager.ROLE_CREATOR -> LocalAuthManager.TITLE_CREATOR
       LocalAuthManager.ROLE_PALMGYM -> LocalAuthManager.TITLE_PALMGYM
       LocalAuthManager.ROLE_BETA_TESTER -> LocalAuthManager.TITLE_BETA_TESTER
+      LocalAuthManager.ROLE_CURIOUS_EXPLORER -> LocalAuthManager.TITLE_CURIOUS_EXPLORER
+      LocalAuthManager.ROLE_NIGHT_RANGER -> LocalAuthManager.TITLE_NIGHT_RANGER
+      LocalAuthManager.ROLE_VANGUARD -> LocalAuthManager.TITLE_VANGUARD
       else -> LocalAuthManager.TITLE_EXPLORER
     }
   }
@@ -54,6 +60,24 @@ fun RoleTitleBadge(
       contentColor = Color(0xFF5EEAD4)
       borderColor = Color(0xFF34D399).copy(alpha = 0.55f)
       Icons.Rounded.FitnessCenter
+    }
+    LocalAuthManager.ROLE_CURIOUS_EXPLORER -> {
+      containerColor = Color(0xFF2A2108)
+      contentColor = Color(0xFFFDE047)
+      borderColor = Color(0xFFFACC15).copy(alpha = 0.55f)
+      Icons.Rounded.ChangeHistory
+    }
+    LocalAuthManager.ROLE_NIGHT_RANGER -> {
+      containerColor = Color(0xFF1D1836)
+      contentColor = Color(0xFFC4B5FD)
+      borderColor = Color(0xFFA78BFA).copy(alpha = 0.55f)
+      Icons.Rounded.NightsStay
+    }
+    LocalAuthManager.ROLE_VANGUARD -> {
+      containerColor = Color(0xFF0C2638)
+      contentColor = Color(0xFF7DD3FC)
+      borderColor = Color(0xFF38BDF8).copy(alpha = 0.55f)
+      Icons.Rounded.MilitaryTech
     }
     LocalAuthManager.ROLE_BETA_TESTER -> {
       containerColor = Color(0xFF092A26)

@@ -17,6 +17,7 @@
     <string name="nav_profile">Perfil</string>
     <string name="nav_social_feed">Red Social</string>
     <string name="nav_social">Arena</string>
+    <string name="nav_streak">Racha</string>
     <string name="nav_style">Estilo</string>
     <string name="profile_title">Tu Perfil</string>
     <string name="profile_create_subtitle">Crea tu nombre de usuario, banner y foto con tu estilo Material You</string>

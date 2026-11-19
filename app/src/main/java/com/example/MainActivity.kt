@@ -26,10 +26,12 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.LocalFireDepartment
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Radar
 import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.Groups
+import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material3.CircularProgressIndicator
@@ -60,6 +62,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.data.local.DailyStreakTracker
 import com.example.data.local.LocalAccountStore
 import com.example.data.local.LocalAuthManager
 import com.example.data.local.LocalMissionFeedRepository
@@ -70,6 +73,7 @@ import com.example.data.location.LocationTracker
 import com.example.data.repository.RadarQuestRepository
 import com.example.service.ProximityGuidanceService
 import com.example.ui.auth.AuthScreen
+import com.example.ui.auth.RegistrationCelebrationHost
 import com.example.ui.components.ConfettiCelebrationOverlay
 import com.example.ui.components.FloatingBottomNavBar
 import com.example.ui.components.NearbyMissionPopupOverlay
@@ -81,6 +85,7 @@ import com.example.ui.screens.ProfileScreen
 import com.example.ui.screens.RadarHomeScreen
 import com.example.ui.screens.SocialArenaScreen
 import com.example.ui.screens.SocialFeedScreen
+import com.example.ui.screens.StreakScreen
 import com.example.ui.theme.RadarQuestTheme
 import com.example.ui.viewmodel.RadarQuestViewModel
 import com.example.util.HapticFeedbackHelper
@@ -116,7 +121,12 @@ fun AppNavigation() {
   val localThemeSnapshot by localPrefs.prefsFlow.collectAsStateWithLifecycle(initialValue = ThemePrefsSnapshot())
   val authSession by authManager.sessionFlow.collectAsStateWithLifecycle()
 
+  var registrationCelebrationKey by remember { mutableLongStateOf(0L) }
+  var registrationCelebrationMsg by remember { mutableStateOf<String?>(null) }
+  var registrationCelebrationTitle by remember { mutableStateOf("") }
+
   val handleSignOut: () -> Unit = {
+    registrationCelebrationMsg = null
     navScope.launch {
       withContext(NonCancellable) {
         ProximityGuidanceService.stop(context.applicationContext)
@@ -127,66 +137,83 @@ fun AppNavigation() {
     }
   }
 
-  val activeSession = authSession
-  if (activeSession != null && activeSession.isLoggedIn) {
-    val localUid = activeSession.username
-    val sessionKey = "local_${localUid}"
-    key(sessionKey) {
-      val viewModel: RadarQuestViewModel = viewModel(
-        key = sessionKey,
-        factory = viewModelFactory {
-          initializer {
-            val app = checkNotNull(this[APPLICATION_KEY])
-            val localDb = VeyraLocalDatabase.getInstance(app)
-            val feedRepo = LocalMissionFeedRepository(
-              dao = localDb.localMissionPostDao(),
-              contributionDao = localDb.authorContributionDao(),
-            )
-            RadarQuestViewModel(
-              repository = RadarQuestRepository(
-                db = null,
-                localUserId = localUid,
-                localAccountStore = LocalAccountStore(app),
-              ),
-              localPrefs = LocalThemePreferences(app),
-              currentUserId = localUid,
-              defaultDisplayName = localUid,
-              isLocalOfflineMode = true,
-              savedAccountEmail = localUid,
-              accountRole = activeSession.role,
-              accountRoleTitle = activeSession.roleTitle,
-              initialAccountXp = activeSession.xp,
-              initialAccountLevel = activeSession.level,
-              localMissionFeedRepository = feedRepo,
-              onSyncSessionRole = { role, roleTitle -> authManager.updateActiveRole(role, roleTitle) },
-              onSystemNotify = notificationManager::postNotification,
-            )
-          }
-        },
-      )
-      MainAppShell(
-        viewModel = viewModel,
-        notificationManager = notificationManager,
-        currentUserId = localUid,
-        onSyncSessionStats = { xp, level ->
-          authManager.updateActiveStats(xp, level)
-        },
-        onSignOutRequested = handleSignOut,
-      )
+  Box(modifier = Modifier.fillMaxSize()) {
+    val activeSession = authSession
+    if (activeSession != null && activeSession.isLoggedIn) {
+      val localUid = activeSession.username
+      val sessionKey = "local_${localUid}"
+      key(sessionKey) {
+        val viewModel: RadarQuestViewModel = viewModel(
+          key = sessionKey,
+          factory = viewModelFactory {
+            initializer {
+              val app = checkNotNull(this[APPLICATION_KEY])
+              val localDb = VeyraLocalDatabase.getInstance(app)
+              val feedRepo = LocalMissionFeedRepository(
+                dao = localDb.localMissionPostDao(),
+                contributionDao = localDb.authorContributionDao(),
+              )
+              val streakTracker = DailyStreakTracker(app, localUid)
+              RadarQuestViewModel(
+                repository = RadarQuestRepository(
+                  db = null,
+                  localUserId = localUid,
+                  localAccountStore = LocalAccountStore(app),
+                ),
+                localPrefs = LocalThemePreferences(app),
+                currentUserId = localUid,
+                defaultDisplayName = localUid,
+                isLocalOfflineMode = true,
+                savedAccountEmail = localUid,
+                accountRole = activeSession.role,
+                accountRoleTitle = activeSession.roleTitle,
+                initialAccountXp = activeSession.xp,
+                initialAccountLevel = activeSession.level,
+                localMissionFeedRepository = feedRepo,
+                onSyncSessionRole = { role, roleTitle -> authManager.updateActiveRole(role, roleTitle) },
+                onSystemNotify = notificationManager::postNotification,
+                dailyStreakTracker = streakTracker,
+              )
+            }
+          },
+        )
+        MainAppShell(
+          viewModel = viewModel,
+          notificationManager = notificationManager,
+          currentUserId = localUid,
+          onSyncSessionStats = { xp, level ->
+            authManager.updateActiveStats(xp, level)
+          },
+          onSignOutRequested = handleSignOut,
+        )
+      }
+    } else {
+      RadarQuestTheme(
+        themeMode = "dark",
+        paletteKey = localThemeSnapshot.paletteKey,
+        cornerStyle = localThemeSnapshot.cornerStyle,
+      ) {
+        AuthScreen(
+          onLogin = { username, pin -> authManager.login(username, pin) },
+          onRegister = { username, pin, inviteCode ->
+            authManager.registerAccount(username, pin, inviteCode)
+          },
+          onRegistrationCelebration = { message, roleTitle ->
+            registrationCelebrationKey += 1L
+            registrationCelebrationMsg = message
+            registrationCelebrationTitle = roleTitle
+          },
+          renderCelebrationOverlay = false,
+        )
+      }
     }
-  } else {
-    RadarQuestTheme(
-      themeMode = "dark",
-      paletteKey = localThemeSnapshot.paletteKey,
-      cornerStyle = localThemeSnapshot.cornerStyle,
-    ) {
-      AuthScreen(
-        onLogin = { username, pin -> authManager.login(username, pin) },
-        onRegister = { username, pin, inviteCode ->
-          authManager.registerAccount(username, pin, inviteCode)
-        },
-      )
-    }
+
+    RegistrationCelebrationHost(
+      triggerKey = registrationCelebrationKey,
+      message = registrationCelebrationMsg,
+      roleTitle = registrationCelebrationTitle,
+      onDismiss = { registrationCelebrationMsg = null },
+    )
   }
 }
 
@@ -203,7 +230,7 @@ private fun MainAppShell(
   val uiState by viewModel.uiState.collectAsStateWithLifecycle()
   val snackbarHostState = remember { SnackbarHostState() }
   val locationTracker = remember(context) { LocationTracker(context) }
-  val pagerState = rememberPagerState(initialPage = 0, pageCount = { 4 })
+  val pagerState = rememberPagerState(initialPage = 0, pageCount = { 5 })
   var showStyleInProfile by remember { mutableStateOf(false) }
   var showNotificationsSheet by remember { mutableStateOf(false) }
   var radarModalDialogOpen by remember { mutableStateOf(false) }
@@ -371,6 +398,21 @@ private fun MainAppShell(
               icon = { Icon(if (pagerState.currentPage == 3) Icons.Rounded.Groups else Icons.Outlined.Groups, null) },
               label = { Text(stringResource(id = R.string.nav_social)) },
             )
+            NavigationRailItem(
+              selected = pagerState.currentPage == 4,
+              onClick = { selectTab(4) },
+              icon = {
+                Icon(
+                  if (pagerState.currentPage == 4) {
+                    Icons.Rounded.LocalFireDepartment
+                  } else {
+                    Icons.Outlined.LocalFireDepartment
+                  },
+                  null,
+                )
+              },
+              label = { Text(stringResource(id = R.string.nav_streak)) },
+            )
           }
         }
 
@@ -536,6 +578,16 @@ private fun MainAppShell(
                 },
                 onJoinChallenge = { viewModel.joinChallenge(it) },
                 onAdvanceChallenge = { viewModel.completeChallengeStep(it) },
+              )
+
+              4 -> StreakScreen(
+                uiState = uiState,
+                currentUserId = currentUserId,
+                onRefresh = { viewModel.refreshAll() },
+                onGoToRadar = { selectTab(0) },
+                onGoToSocialFeed = { selectTab(2) },
+                onCheerPlayer = { player -> viewModel.sendHelpToPlayer(player) },
+                onPulsePlayer = { player -> viewModel.sendPlayPulse(player) },
               )
             }
           }

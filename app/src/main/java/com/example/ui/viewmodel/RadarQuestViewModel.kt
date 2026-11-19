@@ -3,6 +3,8 @@ package com.example.ui.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.local.DailyStreakState
+import com.example.data.local.DailyStreakTracker
 import com.example.data.local.LocalAuthManager
 import com.example.data.local.LocalMissionFeedRepository
 import com.example.data.local.LocalThemePreferences
@@ -53,6 +55,7 @@ data class RadarQuestUiState(
   val leaderboardPlayers: List<PlayerProfile> = emptyList(),
   val missions: List<MissionWithDistance> = emptyList(),
   val localMissionFeed: List<LocalMissionFeedItem> = emptyList(),
+  val dailyStreak: DailyStreakState = DailyStreakState(),
   val authorContributionScores: Map<String, Long> = emptyMap(),
   val verifiedFeedPostIds: Set<String> = emptySet(),
   val celebrationEventId: Long = 0L,
@@ -94,6 +97,7 @@ class RadarQuestViewModel(
   private val localMissionFeedRepository: LocalMissionFeedRepository? = null,
   private val onSyncSessionRole: (role: String, roleTitle: String) -> Unit = { _, _ -> },
   private val onSystemNotify: (id: Int, title: String, message: String, isProximity: Boolean) -> Unit = { _, _, _, _ -> },
+  private val dailyStreakTracker: DailyStreakTracker? = null,
 ) : ViewModel() {
 
   private val _currentLocation = MutableStateFlow<LiveLocationPoint?>(null)
@@ -122,6 +126,7 @@ class RadarQuestViewModel(
   private val _fallbackContributionScores = MutableStateFlow<Map<String, Long>>(emptyMap())
   private val _celebrationEventId = MutableStateFlow(0L)
   private val _verifiedFeedPostIds = MutableStateFlow<Set<String>>(emptySet())
+  private val _fallbackStreakState = MutableStateFlow(DailyStreakState())
   private var isHeavyUiPaused = false
   private var pendingPausedLocation: LiveLocationPoint? = null
   private var hasSeededGpsFeedBatch = false
@@ -295,14 +300,15 @@ class RadarQuestViewModel(
   private val feedPostsFlow = localMissionFeedRepository?.postsFlow ?: _fallbackLocalFeedPosts
   private val contributionScoresFlow =
     localMissionFeedRepository?.contributionScoresFlow ?: _fallbackContributionScores
+  private val dailyStreakFlow = dailyStreakTracker?.streakFlow ?: _fallbackStreakState
 
   private val socialDataFlow = combine(
     publicCompletionsFlow,
     openChallengesFlow,
     myChallengesFlow,
     interactionsFlow,
-    combine(localPrefs.prefsFlow, feedPostsFlow, contributionScoresFlow) { localTheme, feedPosts, contribScores ->
-      Triple(localTheme, feedPosts, contribScores)
+    combine(localPrefs.prefsFlow, feedPostsFlow, contributionScoresFlow, dailyStreakFlow) { localTheme, feedPosts, contribScores, streak ->
+      ThemeFeedStreakQuad(localTheme, feedPosts, contribScores, streak)
     },
   ) { publicComps, openChals, myChals, inters, themeFeedContrib ->
     SocialBundle(
@@ -310,9 +316,10 @@ class RadarQuestViewModel(
       openChallenges = openChals,
       myChallenges = myChals,
       interactions = inters,
-      localTheme = themeFeedContrib.first,
-      localFeedPosts = themeFeedContrib.second,
-      persistedContributionScores = themeFeedContrib.third,
+      localTheme = themeFeedContrib.localTheme,
+      localFeedPosts = themeFeedContrib.feedPosts,
+      persistedContributionScores = themeFeedContrib.contribScores,
+      dailyStreak = themeFeedContrib.dailyStreak,
     )
   }
 
@@ -710,6 +717,7 @@ class RadarQuestViewModel(
       leaderboardPlayers = core.onlinePlayers.sortedByDescending { it.xp },
       missions = missionsWithDist,
       localMissionFeed = localFeedItems,
+      dailyStreak = social.dailyStreak,
       authorContributionScores = resolvedScores,
       verifiedFeedPostIds = gate.verifiedFeedPostIds,
       celebrationEventId = gate.celebrationEventId,
@@ -1027,6 +1035,7 @@ class RadarQuestViewModel(
       _isRefreshing.value = true
       _errorMessage.value = null
       _dismissedPopupMissionIds.value = emptySet()
+      dailyStreakTracker?.refresh()
       val loc = _currentLocation.value
       val prof = uiState.value.myProfile
       val lat = loc?.latitude ?: prof?.latitude ?: 0.0
@@ -1518,8 +1527,13 @@ class RadarQuestViewModel(
             repository.updateChallengeProgress(challenge, 100L)
           }
         handlePostCompletionQueue(mission.id)
+        val updatedStreak = dailyStreakTracker?.recordMissionCompleted()
         _celebrationEventId.value += 1L
-        _snackbarMessage.value = "¡Misión completada! +${mission.xpReward} XP"
+        _snackbarMessage.value = if (updatedStreak != null) {
+          "¡Misión completada! +${mission.xpReward} XP • Racha: ${updatedStreak.currentStreakDays}d"
+        } else {
+          "¡Misión completada! +${mission.xpReward} XP"
+        }
       } else {
         _snackbarMessage.value = "Error al guardar la confirmación"
       }
@@ -1570,8 +1584,13 @@ class RadarQuestViewModel(
           _fallbackContributionScores.value = updatedMap
         }
         _verifiedFeedPostIds.value = _verifiedFeedPostIds.value + post.id
+        val updatedStreak = dailyStreakTracker?.recordMissionCompleted()
         _celebrationEventId.value += 1L
-        _snackbarMessage.value = "¡Misión verificada! +${post.xpReward} XP"
+        _snackbarMessage.value = if (updatedStreak != null) {
+          "¡Misión verificada! +${post.xpReward} XP • Racha: ${updatedStreak.currentStreakDays}d"
+        } else {
+          "¡Misión verificada! +${post.xpReward} XP"
+        }
       }
       _isSubmitting.value = false
     }
@@ -1603,6 +1622,13 @@ class RadarQuestViewModel(
     val myCompletions: List<MissionCompletion>,
   )
 
+  private data class ThemeFeedStreakQuad(
+    val localTheme: ThemePrefsSnapshot,
+    val feedPosts: List<LocalMissionPost>,
+    val contribScores: Map<String, Long>,
+    val dailyStreak: DailyStreakState,
+  )
+
   private data class SocialBundle(
     val publicCompletions: List<MissionCompletion>,
     val openChallenges: List<Challenge>,
@@ -1611,6 +1637,7 @@ class RadarQuestViewModel(
     val localTheme: ThemePrefsSnapshot,
     val localFeedPosts: List<LocalMissionPost>,
     val persistedContributionScores: Map<String, Long>,
+    val dailyStreak: DailyStreakState,
   )
 
   private data class LocalControlBundle(
