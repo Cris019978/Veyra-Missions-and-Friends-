@@ -37,9 +37,9 @@ class VeyraNotificationManager(private val context: Context) {
       val proximityChannel = NotificationChannel(
         CHANNEL_PROXIMITY,
         "Proximidad de misiones",
-        NotificationManager.IMPORTANCE_HIGH,
+        NotificationManager.IMPORTANCE_DEFAULT,
       ).apply {
-        description = "Avisos cuando te acercas al punto de una misión activa en el mapa."
+        description = "Avisos discretos cuando te acercas al punto de una misión cercana o activa."
       }
 
       val guidanceChannel = NotificationChannel(
@@ -66,6 +66,8 @@ class VeyraNotificationManager(private val context: Context) {
     }
   }
 
+  private var lastProximityPostMs: Long = 0L
+
   fun postNotification(
     id: Int,
     title: String,
@@ -74,18 +76,27 @@ class VeyraNotificationManager(private val context: Context) {
   ) {
     if (!hasPermission()) return
 
+    val now = System.currentTimeMillis()
+    if (isProximity) {
+      if (lastProximityPostMs > 0L && now - lastProximityPostMs < PROXIMITY_MIN_COOLDOWN_MS) {
+        return
+      }
+      lastProximityPostMs = now
+    }
+
+    val effectiveId = if (isProximity) PROXIMITY_ALERT_NOTIFICATION_ID else id
     val intent = Intent(context, MainActivity::class.java).apply {
       flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
     }
     val pendingIntent = PendingIntent.getActivity(
       context,
-      id,
+      effectiveId,
       intent,
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
     val channelId = if (isProximity) CHANNEL_PROXIMITY else CHANNEL_SOCIAL
-    val priority = if (isProximity) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_DEFAULT
+    val priority = NotificationCompat.PRIORITY_DEFAULT
 
     val notification = NotificationCompat.Builder(context, channelId)
       .setSmallIcon(R.drawable.ic_launcher_foreground)
@@ -93,12 +104,13 @@ class VeyraNotificationManager(private val context: Context) {
       .setContentText(message)
       .setStyle(NotificationCompat.BigTextStyle().bigText(message))
       .setPriority(priority)
+      .setOnlyAlertOnce(isProximity)
       .setAutoCancel(true)
       .setContentIntent(pendingIntent)
       .build()
 
     try {
-      NotificationManagerCompat.from(context).notify(id, notification)
+      NotificationManagerCompat.from(context).notify(effectiveId, notification)
     } catch (_: SecurityException) {
       // Ignore if permission was revoked concurrently
     }
@@ -160,5 +172,7 @@ class VeyraNotificationManager(private val context: Context) {
     const val CHANNEL_PROXIMITY = "veyra_proximity"
     const val CHANNEL_GUIDANCE = "veyra_guidance"
     const val GUIDANCE_NOTIFICATION_ID = 4401
+    const val PROXIMITY_ALERT_NOTIFICATION_ID = 4402
+    private const val PROXIMITY_MIN_COOLDOWN_MS = 45_000L
   }
 }

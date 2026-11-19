@@ -140,6 +140,8 @@ class RadarQuestViewModel(
   private val seenChallengeStates = mutableMapOf<String, String>()
   private val notifiedProximityMissionIds = mutableSetOf<String>()
   private val notifiedCloseSpotIds = mutableSetOf<String>()
+  private var hasSeededInitialProximityBaseline = false
+  private var lastProximitySystemNotifyMs = 0L
 
   private fun unwrapError(error: Throwable, contextLabel: String): String {
     val firestoreError = generateSequence(error) { it.cause }
@@ -157,6 +159,8 @@ class RadarQuestViewModel(
     message: String,
     type: String,
     isProximity: Boolean = false,
+    sendSystemAlert: Boolean = true,
+    notificationsAllowed: Boolean = uiState.value.settings.notificationsEnabled,
   ) {
     val currentList = _notifications.value
     if (currentList.any { it.id == id }) return
@@ -169,7 +173,7 @@ class RadarQuestViewModel(
       isRead = false,
     )
     _notifications.value = (listOf(item) + currentList).take(30)
-    if (uiState.value.settings.notificationsEnabled) {
+    if (sendSystemAlert && notificationsAllowed) {
       onSystemNotify(id.hashCode(), title, message, isProximity)
     }
   }
@@ -583,40 +587,104 @@ class RadarQuestViewModel(
       missionsWithDist.firstOrNull { it.mission.id == id }
     }
 
-    // Trigger proximity (120m) and close-spot directional guidance (<= 35m) alerts
-    if (hasValidRef && local.hasPermission) {
-      missionsWithDist.forEach { item ->
-        if (!item.isCompletedByMe && item.distanceMeters <= GeoUtils.CLOSE_GUIDANCE_RADIUS_METERS) {
-          val isActive = item.mission.id == workflow.activeAcceptedId
-          if ((isActive || item.isWithinProximity) && notifiedCloseSpotIds.add(item.mission.id)) {
-            val arrow = GeoUtils.compassArrowForBearing(item.bearingDegrees)
-            val dir = GeoUtils.cardinalDirectionEs(item.bearingDegrees)
-            pushNotification(
-              id = "close_${item.mission.id}",
-              title = "¡Punto final a ${GeoUtils.formatDistance(item.distanceMeters)}!",
-              message = "Sigue $arrow rumbo al $dir para completar '${item.mission.title}'.",
-              type = "proximity",
-              isProximity = true,
-            )
+    // Anti-spam proximity notifications:
+    // 1. Absorb already-nearby missions silently on startup (only 1 quiet in-app summary, 0 Android push spam).
+    // 2. After startup, enforce a 90s cooldown and notify at most 1 newly unlocked nearby mission per batch.
+    // 3. Close-spot (<= 35m) directional alert fires only for the actively accepted mission.
+    if (hasValidRef && local.hasPermission && missionsWithDist.isNotEmpty()) {
+      val nearbyUnlocked = missionsWithDist.filter { it.isWithinProximity && !it.isCompletedByMe }
+      if (!hasSeededInitialProximityBaseline) {
+        hasSeededInitialProximityBaseline = true
+        nearbyUnlocked.forEach { item ->
+          notifiedProximityMissionIds.add(item.mission.id)
+          if (item.mission.id == workflow.activeAcceptedId && item.distanceMeters <= GeoUtils.CLOSE_GUIDANCE_RADIUS_METERS) {
+            notifiedCloseSpotIds.add(item.mission.id)
           }
-        } else if (item.isWithinProximity && !item.isCompletedByMe && notifiedProximityMissionIds.add(item.mission.id)) {
+        }
+        if (nearbyUnlocked.isNotEmpty()) {
+          val closest = nearbyUnlocked.minByOrNull { it.distanceMeters }!!
+          val summaryTitle = if (nearbyUnlocked.size == 1) {
+            "Misión cercana disponible"
+          } else {
+            "${nearbyUnlocked.size} misiones cerca de tu radar"
+          }
+          val summaryMsg = if (nearbyUnlocked.size == 1) {
+            "Estás a ${GeoUtils.formatDistance(closest.distanceMeters)} de '${closest.mission.title}'."
+          } else {
+            "La más cercana es '${closest.mission.title}' a ${GeoUtils.formatDistance(closest.distanceMeters)}."
+          }
           pushNotification(
-            id = "prox_${item.mission.id}",
-            title = "¡Misión desbloqueada cerca de ti!",
-            message = "Estás a ${GeoUtils.formatDistance(item.distanceMeters)} de '${item.mission.title}'. Ya puedes completarla.",
+            id = "initial_nearby_summary",
+            title = summaryTitle,
+            message = summaryMsg,
             type = "proximity",
             isProximity = true,
+            sendSystemAlert = false,
+            notificationsAllowed = effectiveSettings.notificationsEnabled,
           )
+        }
+      } else {
+        val nowMs = System.currentTimeMillis()
+        val canSendSystemProximity =
+          lastProximitySystemNotifyMs == 0L || (nowMs - lastProximitySystemNotifyMs) >= PROXIMITY_SYSTEM_COOLDOWN_MS
+
+        if (
+          activeAccepted != null &&
+          !activeAccepted.isCompletedByMe &&
+          activeAccepted.distanceMeters <= GeoUtils.CLOSE_GUIDANCE_RADIUS_METERS &&
+          notifiedCloseSpotIds.add(activeAccepted.mission.id)
+        ) {
+          val arrow = GeoUtils.compassArrowForBearing(activeAccepted.bearingDegrees)
+          val dir = GeoUtils.cardinalDirectionEs(activeAccepted.bearingDegrees)
+          if (canSendSystemProximity && effectiveSettings.notificationsEnabled) {
+            lastProximitySystemNotifyMs = nowMs
+          }
+          pushNotification(
+            id = "close_${activeAccepted.mission.id}",
+            title = "¡Punto final a ${GeoUtils.formatDistance(activeAccepted.distanceMeters)}!",
+            message = "Sigue $arrow rumbo al $dir para completar '${activeAccepted.mission.title}'.",
+            type = "proximity",
+            isProximity = true,
+            sendSystemAlert = canSendSystemProximity,
+            notificationsAllowed = effectiveSettings.notificationsEnabled,
+          )
+        } else {
+          val newlyEntered = nearbyUnlocked.filter { notifiedProximityMissionIds.add(it.mission.id) }
+          val closestNew = newlyEntered.minByOrNull { it.distanceMeters }
+          if (closestNew != null && canSendSystemProximity) {
+            if (effectiveSettings.notificationsEnabled) {
+              lastProximitySystemNotifyMs = nowMs
+            }
+            val title = if (newlyEntered.size > 1) {
+              "${newlyEntered.size} nuevas misiones cerca"
+            } else {
+              "Misión desbloqueada cerca de ti"
+            }
+            val msg = if (newlyEntered.size > 1) {
+              "'${closestNew.mission.title}' (${GeoUtils.formatDistance(closestNew.distanceMeters)}) y ${newlyEntered.size - 1} más ya están en rango."
+            } else {
+              "Estás a ${GeoUtils.formatDistance(closestNew.distanceMeters)} de '${closestNew.mission.title}'."
+            }
+            pushNotification(
+              id = "prox_${closestNew.mission.id}",
+              title = title,
+              message = msg,
+              type = "proximity",
+              isProximity = true,
+              sendSystemAlert = true,
+              notificationsAllowed = effectiveSettings.notificationsEnabled,
+            )
+          }
         }
       }
     }
 
     val unreadCount = gate.notifications.count { !it.isRead }
-    val maxSuggestDist = effectiveSettings.searchRadiusMeters.toFloat().coerceAtMost(1200f)
+    val maxSuggestDist = effectiveSettings.searchRadiusMeters.toFloat().coerceAtMost(450f)
     val popupSuggestions = if (effectiveSettings.notificationsEnabled && !shouldShowOnboarding) {
       missionsWithDist
         .filter { !it.isCompletedByMe && it.distanceMeters <= maxSuggestDist && it.mission.id !in local.dismissedPopupIds }
-        .take(3)
+        .take(1)
         .map { item ->
           NearbyMissionPopup(
             missionId = item.mission.id,
@@ -832,6 +900,7 @@ class RadarQuestViewModel(
     _rejectedMissionIds.value = emptySet()
     notifiedProximityMissionIds.clear()
     notifiedCloseSpotIds.clear()
+    hasSeededInitialProximityBaseline = false
     _missionSeed.value = System.currentTimeMillis()
     _snackbarMessage.value = "Misiones reubicadas en zonas públicas aleatorias"
   }
@@ -1578,5 +1647,6 @@ class RadarQuestViewModel(
 
   private companion object {
     const val TAG = "RadarQuestVM"
+    const val PROXIMITY_SYSTEM_COOLDOWN_MS = 90_000L
   }
 }

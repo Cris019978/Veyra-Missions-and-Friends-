@@ -1038,6 +1038,7 @@ class ExampleRobolectricTest {
       assertEquals(2L, afterSecondComplete.authorContributionScore)
 
       collectJob.cancel()
+      androidx.lifecycle.ViewModelStore().apply { put("vm", viewModel) }.clear()
     } finally {
       Dispatchers.resetMain()
       db.close()
@@ -1523,6 +1524,53 @@ class ExampleRobolectricTest {
       assertEquals("Palmgym_CR", savedProfile?.roleTitle)
       assertEquals("palmgym_cr", syncedRole)
       assertEquals("Palmgym_CR", syncedTitle)
+      androidx.lifecycle.ViewModelStore().apply { put("vm", vm) }.clear()
+    } finally {
+      Dispatchers.resetMain()
+    }
+  }
+
+  @Test
+  fun `radarQuestViewModel suppresses system proximity notification spam at app startup`() = runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val dispatcher = kotlinx.coroutines.test.UnconfinedTestDispatcher()
+    Dispatchers.setMain(dispatcher)
+    try {
+      val repo = RadarQuestRepository(db = null)
+      val systemAlerts = mutableListOf<Triple<Int, String, Boolean>>()
+
+      val vm = com.example.ui.viewmodel.RadarQuestViewModel(
+        repository = repo,
+        localPrefs = com.example.data.local.LocalThemePreferences(context),
+        currentUserId = "anti_spam_user",
+        defaultDisplayName = "AntiSpam",
+        onSystemNotify = { id, title, _, isProx ->
+          systemAlerts.add(Triple(id, title, isProx))
+        },
+      )
+
+      val collectJob = kotlinx.coroutines.CoroutineScope(dispatcher).launch {
+        vm.uiState.collect {}
+      }
+
+      vm.setLocationPermission(true)
+      vm.onLocationUpdated(
+        com.example.data.location.LiveLocationPoint(
+          latitude = 19.4326,
+          longitude = -99.1332,
+          accuracyMeters = 5f,
+        )
+      )
+      kotlinx.coroutines.delay(150)
+
+      // Initial startup baseline must emit ZERO system proximity notifications,
+      // and at most 1 in-app summary notification + at most 1 nearby popup card.
+      assertTrue(systemAlerts.none { it.third })
+      assertTrue(vm.uiState.value.notifications.size <= 1)
+      assertTrue(vm.uiState.value.nearbyMissionPopups.size <= 1)
+
+      collectJob.cancel()
+      androidx.lifecycle.ViewModelStore().apply { put("vm", vm) }.clear()
     } finally {
       Dispatchers.resetMain()
     }
