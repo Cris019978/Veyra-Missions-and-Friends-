@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.Science
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -32,6 +33,7 @@ fun RoleTitleBadge(
   val label = roleTitle.ifBlank {
     when (normalizedRole) {
       LocalAuthManager.ROLE_CREATOR -> LocalAuthManager.TITLE_CREATOR
+      LocalAuthManager.ROLE_PALMGYM -> LocalAuthManager.TITLE_PALMGYM
       LocalAuthManager.ROLE_BETA_TESTER -> LocalAuthManager.TITLE_BETA_TESTER
       else -> LocalAuthManager.TITLE_EXPLORER
     }
@@ -46,6 +48,12 @@ fun RoleTitleBadge(
       contentColor = Color(0xFFFFD166)
       borderColor = Color(0xFFFFB703).copy(alpha = 0.55f)
       Icons.Rounded.AutoAwesome
+    }
+    LocalAuthManager.ROLE_PALMGYM -> {
+      containerColor = Color(0xFF0E2A1F)
+      contentColor = Color(0xFF5EEAD4)
+      borderColor = Color(0xFF34D399).copy(alpha = 0.55f)
+      Icons.Rounded.FitnessCenter
     }
     LocalAuthManager.ROLE_BETA_TESTER -> {
       containerColor = Color(0xFF092A26)

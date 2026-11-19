@@ -71,6 +71,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.data.local.LocalAuthManager
 import com.example.ui.components.RoleTitleBadge
 import com.example.ui.theme.PaletteOption
 import com.example.ui.viewmodel.RadarQuestUiState
@@ -415,9 +416,26 @@ fun ProfileScreen(
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
               )
             }
+            val cleanInputUsername = LocalAuthManager.normalizeUsername(username)
+            val cleanSavedUsername = LocalAuthManager.normalizeUsername(profile?.username.orEmpty())
+            val (displayRole, displayRoleTitle) = remember(
+              cleanInputUsername,
+              cleanSavedUsername,
+              profile?.role,
+              profile?.roleTitle,
+            ) {
+              val resolved = LocalAuthManager.resolveRoleAndTitle(cleanInputUsername)
+              when {
+                resolved.first != LocalAuthManager.ROLE_EXPLORER -> resolved
+                cleanInputUsername != cleanSavedUsername && profile?.role == LocalAuthManager.ROLE_PALMGYM ->
+                  LocalAuthManager.ROLE_EXPLORER to LocalAuthManager.TITLE_EXPLORER
+                else -> (profile?.role ?: LocalAuthManager.ROLE_EXPLORER) to
+                  (profile?.roleTitle ?: LocalAuthManager.TITLE_EXPLORER)
+              }
+            }
             RoleTitleBadge(
-              role = profile?.role ?: "explorer",
-              roleTitle = profile?.roleTitle ?: "Explorador",
+              role = displayRole,
+              roleTitle = displayRoleTitle,
               modifier = Modifier.testTag("profile_role_badge"),
             )
           }
@@ -482,8 +500,12 @@ fun ProfileScreen(
               placeholder = { Text("tu_nombre_pro") },
               supportingText = {
                 Text(
-                  if (!isUsernameValid) "Mínimo 3 caracteres (letras, números o _)"
-                  else "Tu identificador único en Veyra (${username.length}/24)"
+                  when {
+                    !isUsernameValid -> "Mínimo 3 caracteres (letras, números o _)"
+                    LocalAuthManager.normalizeUsername(username) in LocalAuthManager.PALMGYM_USERNAMES ->
+                      "Título especial desbloqueado: ${LocalAuthManager.TITLE_PALMGYM}"
+                    else -> "Tu identificador único en Veyra (${username.length}/24)"
+                  }
                 )
               },
               isError = !isUsernameValid,

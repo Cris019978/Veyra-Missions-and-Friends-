@@ -92,6 +92,7 @@ class RadarQuestViewModel(
   private val initialAccountXp: Long = 0L,
   private val initialAccountLevel: Long = 1L,
   private val localMissionFeedRepository: LocalMissionFeedRepository? = null,
+  private val onSyncSessionRole: (role: String, roleTitle: String) -> Unit = { _, _ -> },
   private val onSystemNotify: (id: Int, title: String, message: String, isProximity: Boolean) -> Unit = { _, _, _, _ -> },
 ) : ViewModel() {
 
@@ -714,23 +715,29 @@ class RadarQuestViewModel(
             initialXp = initialAccountXp,
             initialLevel = initialAccountLevel,
           )
-        } else if (prof.role != accountRole || prof.roleTitle != accountRoleTitle) {
-          repository.ensureOrUpdatePlayerProfile(
-            username = prof.username,
-            callsign = prof.callsign,
-            avatarIcon = prof.avatarIcon,
-            avatarColorHex = prof.avatarColorHex,
-            avatarPhotoBase64 = prof.avatarPhotoBase64,
-            bannerPhotoBase64 = prof.bannerPhotoBase64,
-            bannerPreset = prof.bannerPreset,
-            statusMessage = prof.statusMessage,
-            seekingHelp = prof.seekingHelp,
-            isOnline = prof.isOnline,
-            latitude = prof.latitude,
-            longitude = prof.longitude,
-            role = accountRole,
-            roleTitle = accountRoleTitle,
-          )
+        } else {
+          val (handleRole, handleTitle) = LocalAuthManager.resolveRoleAndTitle(prof.username)
+          val targetRole = if (handleRole != LocalAuthManager.ROLE_EXPLORER) handleRole else accountRole
+          val targetTitle = if (handleRole != LocalAuthManager.ROLE_EXPLORER) handleTitle else accountRoleTitle
+          if (prof.role != targetRole || prof.roleTitle != targetTitle) {
+            repository.ensureOrUpdatePlayerProfile(
+              username = prof.username,
+              callsign = prof.callsign,
+              avatarIcon = prof.avatarIcon,
+              avatarColorHex = prof.avatarColorHex,
+              avatarPhotoBase64 = prof.avatarPhotoBase64,
+              bannerPhotoBase64 = prof.bannerPhotoBase64,
+              bannerPreset = prof.bannerPreset,
+              statusMessage = prof.statusMessage,
+              seekingHelp = prof.seekingHelp,
+              isOnline = prof.isOnline,
+              latitude = prof.latitude,
+              longitude = prof.longitude,
+              role = targetRole,
+              roleTitle = targetTitle,
+            )
+            onSyncSessionRole(targetRole, targetTitle)
+          }
         }
         return@collect
       }
@@ -1090,6 +1097,23 @@ class RadarQuestViewModel(
     viewModelScope.launch {
       val loc = _currentLocation.value
       val prof = uiState.value.myProfile
+      val (resolvedUserRole, resolvedUserTitle) = LocalAuthManager.resolveRoleAndTitle(username)
+      val targetRole: String
+      val targetRoleTitle: String
+      when {
+        resolvedUserRole != LocalAuthManager.ROLE_EXPLORER -> {
+          targetRole = resolvedUserRole
+          targetRoleTitle = resolvedUserTitle
+        }
+        prof?.role == LocalAuthManager.ROLE_PALMGYM -> {
+          targetRole = if (accountRole == LocalAuthManager.ROLE_PALMGYM) LocalAuthManager.ROLE_EXPLORER else accountRole
+          targetRoleTitle = if (accountRole == LocalAuthManager.ROLE_PALMGYM) LocalAuthManager.TITLE_EXPLORER else accountRoleTitle
+        }
+        else -> {
+          targetRole = prof?.role?.ifBlank { null } ?: accountRole
+          targetRoleTitle = prof?.roleTitle?.ifBlank { null } ?: accountRoleTitle
+        }
+      }
       val res = repository.ensureOrUpdatePlayerProfile(
         username = username,
         callsign = callsign,
@@ -1103,9 +1127,12 @@ class RadarQuestViewModel(
         isOnline = _isBroadcastingRadar.value,
         latitude = loc?.latitude ?: prof?.latitude ?: 0.0,
         longitude = loc?.longitude ?: prof?.longitude ?: 0.0,
-        role = prof?.role ?: accountRole,
-        roleTitle = prof?.roleTitle ?: accountRoleTitle,
+        role = targetRole,
+        roleTitle = targetRoleTitle,
       )
+      if (res.isSuccess) {
+        onSyncSessionRole(targetRole, targetRoleTitle)
+      }
       _snackbarMessage.value = if (res.isSuccess) "Perfil guardado" else "Error al guardar perfil"
     }
   }

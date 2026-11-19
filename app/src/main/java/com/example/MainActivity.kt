@@ -158,6 +158,7 @@ fun AppNavigation() {
               initialAccountXp = activeSession.xp,
               initialAccountLevel = activeSession.level,
               localMissionFeedRepository = feedRepo,
+              onSyncSessionRole = { role, roleTitle -> authManager.updateActiveRole(role, roleTitle) },
               onSystemNotify = notificationManager::postNotification,
             )
           }

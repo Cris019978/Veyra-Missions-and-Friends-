@@ -1441,4 +1441,90 @@ class ExampleRobolectricTest {
     composeTestRule.waitForIdle()
     assertTrue(shadowVibrator.isVibrating)
   }
+
+  @Test
+  fun `palmgym username assigns Palmgym_CR title in LocalAuthManager and ProfileScreen`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val authManager = com.example.data.local.LocalAuthManager(context)
+    authManager.clearAllAccountsForTest()
+
+    val regPalm = authManager.registerAccount("@palmgym", "1234")
+    assertTrue(regPalm is com.example.data.local.LocalAuthResult.Success)
+    val session = (regPalm as com.example.data.local.LocalAuthResult.Success).session
+    assertEquals("palmgym_cr", session.role)
+    assertEquals("Palmgym_CR", session.roleTitle)
+
+    var savedUsername = ""
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        com.example.ui.screens.ProfileScreen(
+          uiState = RadarQuestUiState(
+            myProfile = com.example.data.model.PlayerProfile(
+              userId = "user1",
+              username = "explorador1",
+              callsign = "Explorer",
+              role = "explorer",
+              roleTitle = "Explorador",
+            ),
+            isLoading = false,
+          ),
+          onSaveProfile = { username, _, _, _, _, _, _, _, _ -> savedUsername = username },
+          onQuickSelectPalette = {},
+          onOpenStyleCustomization = {},
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("profile_username_input").performScrollTo().performTextReplacement("palmgym")
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("profile_role_badge").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithText("Palmgym_CR").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("save_custom_profile_button").performScrollTo().performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("palmgym", savedUsername)
+  }
+
+  @Test
+  fun `radarQuestViewModel persists Palmgym_CR title when updating profile username to palmgym`() = runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val dispatcher = kotlinx.coroutines.test.UnconfinedTestDispatcher()
+    Dispatchers.setMain(dispatcher)
+    try {
+      val store = LocalAccountStore(context)
+      store.clearSavedAccount(markExplicitlySignedOut = false)
+      val repo = RadarQuestRepository(db = null, localAccountStore = store)
+      var syncedRole = ""
+      var syncedTitle = ""
+
+      val vm = com.example.ui.viewmodel.RadarQuestViewModel(
+        repository = repo,
+        localPrefs = com.example.data.local.LocalThemePreferences(context),
+        currentUserId = RadarQuestRepository.LOCAL_USER_ID,
+        defaultDisplayName = "Explorador",
+        onSyncSessionRole = { r, t ->
+          syncedRole = r
+          syncedTitle = t
+        },
+      )
+
+      vm.updatePlayerProfile(
+        username = "palmgym",
+        callsign = "PalmGym",
+        avatarIcon = "explore",
+        avatarColorHex = "#00BFA5",
+        statusMessage = "Entrenando",
+        seekingHelp = false,
+      )
+      kotlinx.coroutines.delay(100)
+
+      val savedProfile = repo.observeMyProfile(RadarQuestRepository.LOCAL_USER_ID).first()
+      assertEquals("palmgym", savedProfile?.username)
+      assertEquals("palmgym_cr", savedProfile?.role)
+      assertEquals("Palmgym_CR", savedProfile?.roleTitle)
+      assertEquals("palmgym_cr", syncedRole)
+      assertEquals("Palmgym_CR", syncedTitle)
+    } finally {
+      Dispatchers.resetMain()
+    }
+  }
 }

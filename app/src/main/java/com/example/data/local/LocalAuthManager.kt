@@ -127,8 +127,17 @@ class LocalAuthManager(context: Context) {
     }
 
     val (defaultRole, defaultTitle) = resolveRoleAndTitle(username, "")
-    val role = prefs.getString(userRoleKey(username), defaultRole) ?: defaultRole
-    val roleTitle = prefs.getString(userTitleKey(username), defaultTitle) ?: defaultTitle
+    val (role, roleTitle) = if (defaultRole != ROLE_EXPLORER) {
+      prefs.edit()
+        .putString(userRoleKey(username), defaultRole)
+        .putString(userTitleKey(username), defaultTitle)
+        .apply()
+      defaultRole to defaultTitle
+    } else {
+      val storedRole = prefs.getString(userRoleKey(username), defaultRole) ?: defaultRole
+      val storedTitle = prefs.getString(userTitleKey(username), defaultTitle) ?: defaultTitle
+      storedRole to storedTitle
+    }
     val xp = prefs.getLong(userXpKey(username), 0L)
     val level = prefs.getLong(userLevelKey(username), 1L)
 
@@ -166,6 +175,19 @@ class LocalAuthManager(context: Context) {
       .putLong(userLevelKey(current.username), safeLevel)
       .apply()
     _sessionFlow.value = current.copy(xp = safeXp, level = safeLevel)
+  }
+
+  fun updateActiveRole(role: String, roleTitle: String) {
+    val current = readActiveSession() ?: return
+    val safeRole = role.ifBlank { ROLE_EXPLORER }
+    val safeTitle = roleTitle.ifBlank { TITLE_EXPLORER }
+    prefs.edit()
+      .putString(KEY_ACTIVE_ROLE, safeRole)
+      .putString(KEY_ACTIVE_ROLE_TITLE, safeTitle)
+      .putString(userRoleKey(current.username), safeRole)
+      .putString(userTitleKey(current.username), safeTitle)
+      .apply()
+    _sessionFlow.value = current.copy(role = safeRole, roleTitle = safeTitle)
   }
 
   fun logout() {
@@ -216,13 +238,18 @@ class LocalAuthManager(context: Context) {
     const val ROLE_EXPLORER = "explorer"
     const val ROLE_CREATOR = "creator"
     const val ROLE_BETA_TESTER = "beta_tester"
+    const val ROLE_PALMGYM = "palmgym_cr"
 
     const val TITLE_EXPLORER = "Explorador"
     const val TITLE_CREATOR = "Creador"
     const val TITLE_BETA_TESTER = "Beta Tester"
+    const val TITLE_PALMGYM = "Palmgym_CR"
 
     // Admin / Creator handles (strip @, lowercase)
     val CREATOR_USERNAMES = setOf("veyra", "admin_veyra", "cesquivel")
+
+    // Partner / Special club handles
+    val PALMGYM_USERNAMES = setOf("palmgym")
 
     // Predefined Beta Tester usernames & invite codes
     val BETA_TESTER_USERNAMES = setOf("tester1", "tester2", "beta_tester", "veyra_beta")
@@ -234,10 +261,12 @@ class LocalAuthManager(context: Context) {
       raw.trim().removePrefix("@").lowercase()
 
     fun resolveRoleAndTitle(normalizedUsername: String, inviteCode: String = ""): Pair<String, String> {
+      val cleanUsername = normalizeUsername(normalizedUsername)
       val cleanCode = inviteCode.trim().uppercase()
       return when {
-        normalizedUsername in CREATOR_USERNAMES -> ROLE_CREATOR to TITLE_CREATOR
-        normalizedUsername in BETA_TESTER_USERNAMES || cleanCode in BETA_INVITE_CODES ->
+        cleanUsername in CREATOR_USERNAMES -> ROLE_CREATOR to TITLE_CREATOR
+        cleanUsername in PALMGYM_USERNAMES -> ROLE_PALMGYM to TITLE_PALMGYM
+        cleanUsername in BETA_TESTER_USERNAMES || cleanCode in BETA_INVITE_CODES ->
           ROLE_BETA_TESTER to TITLE_BETA_TESTER
         else -> ROLE_EXPLORER to TITLE_EXPLORER
       }
