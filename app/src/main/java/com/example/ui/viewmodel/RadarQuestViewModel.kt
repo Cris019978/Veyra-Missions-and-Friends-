@@ -54,6 +54,8 @@ data class RadarQuestUiState(
   val missions: List<MissionWithDistance> = emptyList(),
   val localMissionFeed: List<LocalMissionFeedItem> = emptyList(),
   val authorContributionScores: Map<String, Long> = emptyMap(),
+  val verifiedFeedPostIds: Set<String> = emptySet(),
+  val celebrationEventId: Long = 0L,
   val activeAcceptedMissionId: String? = null,
   val activeAcceptedMission: MissionWithDistance? = null,
   val waitingMissionQueue: List<String> = emptyList(),
@@ -117,7 +119,15 @@ class RadarQuestViewModel(
   private val _safePublicAnchors = MutableStateFlow<List<SafePublicSpot>>(emptyList())
   private val _fallbackLocalFeedPosts = MutableStateFlow<List<LocalMissionPost>>(emptyList())
   private val _fallbackContributionScores = MutableStateFlow<Map<String, Long>>(emptyMap())
+  private val _celebrationEventId = MutableStateFlow(0L)
+  private val _verifiedFeedPostIds = MutableStateFlow<Set<String>>(emptySet())
+  private var isHeavyUiPaused = false
+  private var pendingPausedLocation: LiveLocationPoint? = null
   private var hasSeededGpsFeedBatch = false
+  private var cachedRandomKey: Any? = null
+  private var cachedRandomMissions: List<Mission> = emptyList()
+  private var cachedMissionsSortKey: Any? = null
+  private var cachedSortedMissions: List<MissionWithDistance> = emptyList()
 
   private var respawnJob: Job? = null
   private var placesFetchJob: Job? = null
@@ -353,8 +363,19 @@ class RadarQuestViewModel(
     _forceShowOnboarding,
     _notifications,
     _errorMessage,
-  ) { resolved, localDone, forceShow, notifs, err ->
-    OnboardingGateBundle(resolved, localDone, forceShow, notifs, err)
+    _celebrationEventId,
+    _verifiedFeedPostIds,
+  ) { values ->
+    @Suppress("UNCHECKED_CAST")
+    OnboardingGateBundle(
+      resolved = values[0] as Boolean,
+      localDone = values[1] as Boolean,
+      forceShow = values[2] as Boolean,
+      notifications = values[3] as List<AppNotificationItem>,
+      errorMessage = values[4] as String?,
+      celebrationEventId = values[5] as Long,
+      verifiedFeedPostIds = values[6] as Set<String>,
+    )
   }
 
   val uiState: StateFlow<RadarQuestUiState> = combine(
@@ -416,13 +437,21 @@ class RadarQuestViewModel(
       .sortedBy { it.distanceMeters }
 
     val completedMissionIds = core.myCompletions.map { it.missionId }.toSet()
-    val randomGeneratedMissions = GeoUtils.generateRandomMissions(
-      baseLat = anchor.first,
-      baseLon = anchor.second,
-      seed = workflow.missionSeed,
-      maxRadiusMeters = radiusMeters,
-      safeAnchors = workflow.safeAnchors,
-    )
+    val randomKey = listOf(anchor.first, anchor.second, workflow.missionSeed, radiusMeters, workflow.safeAnchors)
+    val randomGeneratedMissions = if (cachedRandomKey == randomKey) {
+      cachedRandomMissions
+    } else {
+      GeoUtils.generateRandomMissions(
+        baseLat = anchor.first,
+        baseLon = anchor.second,
+        seed = workflow.missionSeed,
+        maxRadiusMeters = radiusMeters,
+        safeAnchors = workflow.safeAnchors,
+      ).also {
+        cachedRandomKey = randomKey
+        cachedRandomMissions = it
+      }
+    }
 
     val resolvedScores = buildMap<String, Long> {
       social.persistedContributionScores.forEach { (rawKey, score) ->
@@ -501,33 +530,50 @@ class RadarQuestViewModel(
       .filterNot { it.id in workflow.rejectedIds }
 
     val favCats = effectiveSettings.favoriteCategories.toSet()
-
-    val missionsWithDist = allMissions.map { mission ->
-      val dist = if (hasValidRef) {
-        GeoUtils.distanceMeters(refLat, refLon, mission.latitude, mission.longitude)
-      } else {
-        180f
-      }
-      val bearing = if (hasValidRef) {
-        GeoUtils.bearingDegrees(refLat, refLon, mission.latitude, mission.longitude)
-      } else {
-        45f
-      }
-      val withinProx = hasValidRef && local.hasPermission && dist <= GeoUtils.PROXIMITY_RADIUS_METERS
-      MissionWithDistance(
-        mission = mission,
-        distanceMeters = dist,
-        bearingDegrees = bearing,
-        isCompletedByMe = mission.id in completedMissionIds,
-        isWithinProximity = withinProx,
-      )
-    }.sortedWith(
-      compareByDescending<MissionWithDistance> { it.mission.id == workflow.activeAcceptedId }
-        .thenBy { it.isCompletedByMe }
-        .thenByDescending { it.isWithinProximity }
-        .thenByDescending { it.mission.category in favCats }
-        .thenBy { it.distanceMeters }
+    val sortKey = listOf(
+      refLat,
+      refLon,
+      hasValidRef,
+      local.hasPermission,
+      completedMissionIds,
+      workflow.activeAcceptedId,
+      favCats,
+      allMissions,
     )
+
+    val missionsWithDist = if (cachedMissionsSortKey == sortKey) {
+      cachedSortedMissions
+    } else {
+      allMissions.map { mission ->
+        val dist = if (hasValidRef) {
+          GeoUtils.distanceMeters(refLat, refLon, mission.latitude, mission.longitude)
+        } else {
+          180f
+        }
+        val bearing = if (hasValidRef) {
+          GeoUtils.bearingDegrees(refLat, refLon, mission.latitude, mission.longitude)
+        } else {
+          45f
+        }
+        val withinProx = hasValidRef && local.hasPermission && dist <= GeoUtils.PROXIMITY_RADIUS_METERS
+        MissionWithDistance(
+          mission = mission,
+          distanceMeters = dist,
+          bearingDegrees = bearing,
+          isCompletedByMe = mission.id in completedMissionIds,
+          isWithinProximity = withinProx,
+        )
+      }.sortedWith(
+        compareByDescending<MissionWithDistance> { it.mission.id == workflow.activeAcceptedId }
+          .thenBy { it.isCompletedByMe }
+          .thenByDescending { it.isWithinProximity }
+          .thenByDescending { it.mission.category in favCats }
+          .thenBy { it.distanceMeters }
+      ).also {
+        cachedMissionsSortKey = sortKey
+        cachedSortedMissions = it
+      }
+    }
 
     val activeAccepted = workflow.activeAcceptedId?.let { id ->
       missionsWithDist.firstOrNull { it.mission.id == id }
@@ -596,6 +642,8 @@ class RadarQuestViewModel(
       missions = missionsWithDist,
       localMissionFeed = localFeedItems,
       authorContributionScores = resolvedScores,
+      verifiedFeedPostIds = gate.verifiedFeedPostIds,
+      celebrationEventId = gate.celebrationEventId,
       activeAcceptedMissionId = workflow.activeAcceptedId,
       activeAcceptedMission = activeAccepted,
       waitingMissionQueue = workflow.waitingQueue,
@@ -930,7 +978,23 @@ class RadarQuestViewModel(
     }
   }
 
+  fun setHeavyMapUpdatesPaused(paused: Boolean) {
+    if (isHeavyUiPaused == paused) return
+    isHeavyUiPaused = paused
+    if (!paused) {
+      val deferred = pendingPausedLocation
+      pendingPausedLocation = null
+      if (deferred != null) {
+        onLocationUpdated(deferred)
+      }
+    }
+  }
+
   fun onLocationUpdated(point: LiveLocationPoint) {
+    if (isHeavyUiPaused) {
+      pendingPausedLocation = point
+      return
+    }
     val previous = _currentLocation.value
     _currentLocation.value = point
     refreshSafePublicAnchors(
@@ -1358,9 +1422,60 @@ class RadarQuestViewModel(
             repository.updateChallengeProgress(challenge, 100L)
           }
         handlePostCompletionQueue(mission.id)
+        _celebrationEventId.value += 1L
         _snackbarMessage.value = "¡Misión completada! +${mission.xpReward} XP"
       } else {
         _snackbarMessage.value = "Error al guardar la confirmación"
+      }
+      _isSubmitting.value = false
+    }
+  }
+
+  fun verifyLocalFeedMission(post: LocalMissionPost) {
+    val prof = uiState.value.myProfile
+    val myName = prof?.callsign ?: defaultDisplayName
+    val myRole = prof?.role ?: accountRole
+    val myRoleTitle = prof?.roleTitle ?: accountRoleTitle
+    val loc = _currentLocation.value
+    val lat = loc?.latitude ?: post.latitude
+    val lon = loc?.longitude ?: post.longitude
+    viewModelScope.launch {
+      _isSubmitting.value = true
+      val res = repository.submitMissionCompletion(
+        userName = myName,
+        missionId = post.id,
+        missionTitle = post.title,
+        category = post.category,
+        xpEarned = post.xpReward,
+        caption = "Verificada en el feed local",
+        photoThumbnailBase64 = PhotoUtils.createMiniGameBadgeBase64(post.title, "verify"),
+        latitude = lat,
+        longitude = lon,
+        isPublic = false,
+        authorRole = myRole,
+        authorRoleTitle = myRoleTitle,
+      )
+      if (res.isSuccess) {
+        repository.awardPlayerStats(addXp = post.xpReward, addMissionsCompleted = 1L)
+        val verifierUsername = prof?.username.orEmpty()
+        if (localMissionFeedRepository != null) {
+          localMissionFeedRepository.recordCompletedOrVerifiedMission(
+            authorUserId = currentUserId,
+            authorUsername = verifierUsername,
+            delta = 1L,
+          )
+        } else {
+          val key = LocalMissionFeedRepository.normalizeAuthorKey(
+            authorUsername = verifierUsername,
+            authorUserId = currentUserId,
+          )
+          val updatedMap = _fallbackContributionScores.value.toMutableMap()
+          updatedMap[key] = (updatedMap[key] ?: 0L) + 1L
+          _fallbackContributionScores.value = updatedMap
+        }
+        _verifiedFeedPostIds.value = _verifiedFeedPostIds.value + post.id
+        _celebrationEventId.value += 1L
+        _snackbarMessage.value = "¡Misión verificada! +${post.xpReward} XP"
       }
       _isSubmitting.value = false
     }
@@ -1430,6 +1545,8 @@ class RadarQuestViewModel(
     val forceShow: Boolean,
     val notifications: List<AppNotificationItem>,
     val errorMessage: String?,
+    val celebrationEventId: Long,
+    val verifiedFeedPostIds: Set<String>,
   )
 
   private companion object {

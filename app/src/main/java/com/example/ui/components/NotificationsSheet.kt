@@ -166,7 +166,7 @@ fun NotificationsSheet(
           verticalArrangement = Arrangement.spacedBy(8.dp),
           modifier = Modifier.fillMaxWidth(),
         ) {
-          items(notifications, key = { it.id }) { item ->
+          items(notifications, key = { it.id }, contentType = { "notification_item" }) { item ->
             val icon = when (item.type) {
               "proximity" -> Icons.Rounded.LocationOn
               "help" -> Icons.Rounded.Handshake

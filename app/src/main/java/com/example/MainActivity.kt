@@ -44,6 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -69,6 +70,7 @@ import com.example.data.location.LocationTracker
 import com.example.data.repository.RadarQuestRepository
 import com.example.service.ProximityGuidanceService
 import com.example.ui.auth.AuthScreen
+import com.example.ui.components.ConfettiCelebrationOverlay
 import com.example.ui.components.FloatingBottomNavBar
 import com.example.ui.components.NearbyMissionPopupOverlay
 import com.example.ui.components.NotificationsSheet
@@ -81,6 +83,7 @@ import com.example.ui.screens.SocialArenaScreen
 import com.example.ui.screens.SocialFeedScreen
 import com.example.ui.theme.RadarQuestTheme
 import com.example.ui.viewmodel.RadarQuestViewModel
+import com.example.util.HapticFeedbackHelper
 import com.example.util.SafeRuntimeBootstrap
 import com.example.util.VeyraNotificationManager
 import kotlinx.coroutines.NonCancellable
@@ -202,8 +205,26 @@ private fun MainAppShell(
   val pagerState = rememberPagerState(initialPage = 0, pageCount = { 4 })
   var showStyleInProfile by remember { mutableStateOf(false) }
   var showNotificationsSheet by remember { mutableStateOf(false) }
+  var radarModalDialogOpen by remember { mutableStateOf(false) }
   val disableAnimations = uiState.settings.animationTier == "low"
   val gestureNavEnabled = uiState.settings.gestureNavEnabled
+
+  val anyOverlayModalOpen = radarModalDialogOpen ||
+    showNotificationsSheet ||
+    uiState.showOnboardingQuest ||
+    uiState.queuedPromptMission != null
+
+  LaunchedEffect(anyOverlayModalOpen) {
+    viewModel.setHeavyMapUpdatesPaused(anyOverlayModalOpen)
+  }
+
+  var lastHapticCelebrationId by remember { mutableLongStateOf(uiState.celebrationEventId) }
+  LaunchedEffect(uiState.celebrationEventId) {
+    if (uiState.celebrationEventId > lastHapticCelebrationId) {
+      lastHapticCelebrationId = uiState.celebrationEventId
+      HapticFeedbackHelper.performMissionVerified(context)
+    }
+  }
 
   LaunchedEffect(uiState.myProfile?.xp, uiState.myProfile?.level) {
     val prof = uiState.myProfile
@@ -421,6 +442,8 @@ private fun MainAppShell(
                 onRejectMission = { viewModel.rejectMission(it) },
                 onCancelActiveMission = { viewModel.cancelActiveMission() },
                 onRespawnRandomMissions = { viewModel.respawnRandomMissions() },
+                onDialogVisibilityChanged = { radarModalDialogOpen = it },
+                useExternalConfettiHost = true,
               )
 
               1 -> if (showStyleInProfile) {
@@ -499,6 +522,8 @@ private fun MainAppShell(
                   viewModel.acceptMission(post.id)
                   selectTab(0)
                 },
+                onVerifyFeedMission = { post -> viewModel.verifyLocalFeedMission(post) },
+                useExternalConfettiHost = true,
               )
 
               3 -> SocialArenaScreen(
@@ -546,6 +571,11 @@ private fun MainAppShell(
               }
             }
           }
+          ConfettiCelebrationOverlay(
+            triggerKey = uiState.celebrationEventId,
+            disableAnimations = disableAnimations,
+            modifier = Modifier.fillMaxSize(),
+          )
         }
       }
     }

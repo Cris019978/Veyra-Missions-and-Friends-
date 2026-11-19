@@ -45,6 +45,7 @@ import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Verified
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -73,6 +74,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -84,10 +86,12 @@ import com.example.data.model.LocalMissionPost
 import com.example.data.model.MissionCategory
 import com.example.data.model.MissionCompletion
 import com.example.data.model.PlayerProfile
+import com.example.ui.components.ConfettiCelebrationOverlay
 import com.example.ui.components.ContributionScoreBadge
 import com.example.ui.components.RoleTitleBadge
 import com.example.ui.viewmodel.RadarQuestUiState
 import com.example.util.GeoUtils
+import com.example.util.HapticFeedbackHelper
 import com.example.util.PhotoUtils
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -100,11 +104,16 @@ fun SocialFeedScreen(
   onPublishLocalMission: (title: String, description: String, category: String, xpReward: Long, placeLabel: String) -> Unit = { _, _, _, _, _ -> },
   onGenerateLocalMissions: () -> Unit = {},
   onOpenFeedMissionOnRadar: (LocalMissionPost) -> Unit = {},
+  onVerifyFeedMission: (LocalMissionPost) -> Unit = {},
+  useExternalConfettiHost: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
   var feedScope by remember { mutableStateOf("all") } // all, missions, immediate, photos
+  val context = LocalContext.current
   var selectedCategory by remember { mutableStateOf("all") }
   var cheeredIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+  var localVerifiedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+  var localCelebrationTrigger by remember { mutableLongStateOf(0L) }
   var zoomedPost by remember { mutableStateOf<MissionCompletion?>(null) }
   var showCreateFeedPostDialog by remember { mutableStateOf(false) }
 
@@ -165,7 +174,7 @@ fun SocialFeedScreen(
         verticalArrangement = Arrangement.spacedBy(14.dp),
       ) {
         // Header
-        item {
+        item(key = "social_feed_header") {
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -215,7 +224,7 @@ fun SocialFeedScreen(
         }
 
         // Local Real-Time GPS Proximity Actions Row
-        item {
+        item(key = "local_feed_actions_card") {
           Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
             shape = MaterialTheme.shapes.large,
@@ -286,7 +295,7 @@ fun SocialFeedScreen(
         }
 
         // Feed Scope Selector (All / Live Proximity / Immediate <=120m / Photos)
-        item {
+        item(key = "feed_scope_chips") {
           LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             item(key = "scope_all") {
               FilterChip(
@@ -334,7 +343,7 @@ fun SocialFeedScreen(
         }
 
         // Category Filter Row
-        item {
+        item(key = "feed_category_chips") {
           LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             item(key = "cat_all") {
               FilterChip(
@@ -361,7 +370,7 @@ fun SocialFeedScreen(
         // Section 1: Real-Time Local Proximity Mission Feed
         if (showMissionSection) {
           if (filteredMissionFeed.isNotEmpty()) {
-            item {
+            item(key = "live_mission_feed_header") {
               Text(
                 text = if (feedScope == "immediate") {
                   "Misiones en proximidad inmediata (≤120 m)"
@@ -372,15 +381,29 @@ fun SocialFeedScreen(
                 fontWeight = FontWeight.Bold,
               )
             }
-            items(filteredMissionFeed, key = { "live_${it.post.id}" }) { feedItem ->
+            items(
+              items = filteredMissionFeed,
+              key = { "live_${it.post.id}" },
+              contentType = { "local_mission_feed_card" },
+            ) { feedItem ->
+              val isVerified = feedItem.post.id in uiState.verifiedFeedPostIds || feedItem.post.id in localVerifiedIds
               LocalMissionFeedCard(
                 item = feedItem,
                 isMine = feedItem.post.authorUserId == currentUserId,
+                isVerified = isVerified,
+                onVerifyMission = {
+                  localVerifiedIds = localVerifiedIds + feedItem.post.id
+                  if (!useExternalConfettiHost) {
+                    localCelebrationTrigger += 1L
+                    HapticFeedbackHelper.performMissionVerified(context)
+                  }
+                  onVerifyFeedMission(feedItem.post)
+                },
                 onOpenOnRadar = { onOpenFeedMissionOnRadar(feedItem.post) },
               )
             }
           } else if (feedScope != "all" || filteredPhotoPosts.isEmpty()) {
-            item {
+            item(key = "live_mission_feed_empty") {
               Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
                 shape = MaterialTheme.shapes.large,
@@ -420,14 +443,18 @@ fun SocialFeedScreen(
         // Section 2: Community Photo Proofs
         if (showPhotoSection) {
           if (filteredPhotoPosts.isNotEmpty()) {
-            item {
+            item(key = "photo_feed_header") {
               Text(
                 text = "Fotos confirmadas de la comunidad (${filteredPhotoPosts.size})",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
               )
             }
-            items(filteredPhotoPosts, key = { "photo_${it.id}" }) { comp ->
+            items(
+              items = filteredPhotoPosts,
+              key = { "photo_${it.id}" },
+              contentType = { "social_photo_card" },
+            ) { comp ->
               val authorProfile = playersById[comp.userId]
               val isMine = comp.userId == currentUserId
               val alreadyCheered = comp.id in cheeredIds
@@ -454,7 +481,7 @@ fun SocialFeedScreen(
               )
             }
           } else if (feedScope == "photos") {
-            item {
+            item(key = "photo_feed_empty") {
               Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
                 shape = MaterialTheme.shapes.large,
@@ -496,6 +523,13 @@ fun SocialFeedScreen(
             }
           }
         }
+      }
+
+      if (!useExternalConfettiHost) {
+        ConfettiCelebrationOverlay(
+          triggerKey = localCelebrationTrigger,
+          disableAnimations = uiState.settings.animationTier == "low",
+        )
       }
     }
   }
@@ -567,13 +601,15 @@ fun SocialFeedScreen(
 private fun LocalMissionFeedCard(
   item: LocalMissionFeedItem,
   isMine: Boolean,
+  isVerified: Boolean,
+  onVerifyMission: () -> Unit,
   onOpenOnRadar: () -> Unit,
 ) {
   val post = item.post
-  val cat = MissionCategory.fromKey(post.category)
-  val distanceText = GeoUtils.formatDistance(item.distanceMeters)
-  val arrow = GeoUtils.compassArrowForBearing(item.bearingDegrees)
-  val dir = GeoUtils.cardinalDirectionEs(item.bearingDegrees)
+  val cat = remember(post.category) { MissionCategory.fromKey(post.category) }
+  val distanceText = remember(item.distanceMeters) { GeoUtils.formatDistance(item.distanceMeters) }
+  val arrow = remember(item.bearingDegrees) { GeoUtils.compassArrowForBearing(item.bearingDegrees) }
+  val dir = remember(item.bearingDegrees) { GeoUtils.cardinalDirectionEs(item.bearingDegrees) }
   val relativeTime = remember(post.createdAtMillis) {
     GeoUtils.formatRelativeTimestamp(post.createdAtMillis)
   }
@@ -711,64 +747,89 @@ private fun LocalMissionFeedCard(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
 
-      // Distance / Proximity & Place + Action
+      // Distance / Proximity & Place + Actions
+      Surface(
+        color = if (item.isImmediateProximity) {
+          MaterialTheme.colorScheme.primary
+        } else {
+          MaterialTheme.colorScheme.secondaryContainer
+        },
+        shape = CircleShape,
+        modifier = Modifier.testTag("feed_post_distance_${post.id}"),
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+          Icon(
+            imageVector = if (item.isImmediateProximity) Icons.Rounded.NearMe else Icons.Rounded.LocationOn,
+            contentDescription = "Distancia GPS",
+            tint = if (item.isImmediateProximity) {
+              MaterialTheme.colorScheme.onPrimary
+            } else {
+              MaterialTheme.colorScheme.onSecondaryContainer
+            },
+            modifier = Modifier.size(14.dp),
+          )
+          Text(
+            text = if (item.isImmediateProximity) {
+              "$distanceText • ¡En tu rango!"
+            } else {
+              "$distanceText • $arrow $dir"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = if (item.isImmediateProximity) {
+              MaterialTheme.colorScheme.onPrimary
+            } else {
+              MaterialTheme.colorScheme.onSecondaryContainer
+            },
+          )
+        }
+      }
+
       Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Surface(
-          color = if (item.isImmediateProximity) {
-            MaterialTheme.colorScheme.primary
-          } else {
-            MaterialTheme.colorScheme.secondaryContainer
-          },
-          shape = CircleShape,
-          modifier = Modifier.testTag("feed_post_distance_${post.id}"),
-        ) {
-          Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-          ) {
-            Icon(
-              imageVector = if (item.isImmediateProximity) Icons.Rounded.NearMe else Icons.Rounded.LocationOn,
-              contentDescription = "Distancia GPS",
-              tint = if (item.isImmediateProximity) {
-                MaterialTheme.colorScheme.onPrimary
-              } else {
-                MaterialTheme.colorScheme.onSecondaryContainer
-              },
-              modifier = Modifier.size(14.dp),
-            )
-            Text(
-              text = if (item.isImmediateProximity) {
-                "$distanceText • ¡En tu rango!"
-              } else {
-                "$distanceText • $arrow $dir"
-              },
-              style = MaterialTheme.typography.labelSmall,
-              fontWeight = FontWeight.Bold,
-              color = if (item.isImmediateProximity) {
-                MaterialTheme.colorScheme.onPrimary
-              } else {
-                MaterialTheme.colorScheme.onSecondaryContainer
-              },
-            )
-          }
-        }
-
         OutlinedButton(
           onClick = onOpenOnRadar,
           shape = CircleShape,
-          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
           modifier = Modifier
-            .height(40.dp)
+            .weight(1f)
+            .height(48.dp)
             .testTag("open_feed_mission_radar_${post.id}"),
         ) {
           Icon(Icons.Rounded.Radar, contentDescription = null, modifier = Modifier.size(16.dp))
-          Spacer(modifier = Modifier.width(4.dp))
-          Text("Ver en Radar", style = MaterialTheme.typography.labelMedium)
+          Spacer(modifier = Modifier.width(6.dp))
+          Text("Ver en Radar", style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+
+        Button(
+          onClick = onVerifyMission,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+          modifier = Modifier
+            .weight(1f)
+            .height(48.dp)
+            .testTag("verify_feed_mission_button_${post.id}"),
+        ) {
+          Icon(
+            imageVector = if (isVerified) Icons.Rounded.CheckCircle else Icons.Rounded.Verified,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          Text(
+            text = if (isVerified) "Verificada" else "Verify",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
         }
       }
 
@@ -925,10 +986,14 @@ private fun SocialFeedPostCard(
     val raw = authorProfile?.avatarPhotoBase64.orEmpty()
     if (raw.isNotBlank()) PhotoUtils.decodeBase64Thumbnail(raw)?.asImageBitmap() else null
   }
-  val auraColor = runCatching {
-    Color(android.graphics.Color.parseColor(authorProfile?.avatarColorHex ?: "#00BFA5"))
-  }.getOrElse { MaterialTheme.colorScheme.primary }
-  val cat = MissionCategory.fromKey(comp.category)
+  val primaryFallback = MaterialTheme.colorScheme.primary
+  val auraHex = authorProfile?.avatarColorHex ?: "#00BFA5"
+  val auraColor = remember(auraHex, primaryFallback) {
+    runCatching {
+      Color(android.graphics.Color.parseColor(auraHex))
+    }.getOrElse { primaryFallback }
+  }
+  val cat = remember(comp.category) { MissionCategory.fromKey(comp.category) }
 
   Card(
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),

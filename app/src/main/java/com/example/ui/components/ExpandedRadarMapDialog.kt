@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Paint
 import android.graphics.drawable.BitmapDrawable
 import android.os.Build
+import android.view.View
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -83,6 +84,7 @@ import com.example.data.model.NearbyPlayerItem
 import com.example.data.model.PlayerProfile
 import com.example.data.remote.OsmSafePlaceFinder
 import com.example.util.GeoUtils
+import com.example.util.HapticFeedbackHelper
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
@@ -93,6 +95,63 @@ import org.osmdroid.views.overlay.Polyline
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+
+private data class MapOverlayRenderKey(
+  val userLat: Double,
+  val userLon: Double,
+  val searchRadiusMeters: Long,
+  val activeAcceptedMissionId: String?,
+  val hasLocationPermission: Boolean,
+  val missionsSignature: List<MissionOverlaySig>,
+  val playersSignature: List<PlayerOverlaySig>,
+  val primaryColorArgb: Int,
+  val secondaryColorArgb: Int,
+  val tertiaryColorArgb: Int,
+  val attachedAndReady: Boolean,
+)
+
+private data class MissionOverlaySig(
+  val id: String,
+  val lat: Double,
+  val lon: Double,
+  val completed: Boolean,
+  val withinProximity: Boolean,
+  val timed: Boolean,
+)
+
+private data class PlayerOverlaySig(
+  val userId: String,
+  val lat: Double,
+  val lon: Double,
+  val colorHex: String,
+)
+
+internal fun isOsmMapRepositoryReady(map: MapView?): Boolean {
+  if (map == null || !map.isAttachedToWindow || map.windowToken == null) return false
+  val repo = runCatching { map.repository }.getOrNull() ?: return false
+  return runCatching { repo.defaultPolylineInfoWindow != null }.getOrDefault(false)
+}
+
+internal fun createSafePolygon(map: MapView?): Polygon? {
+  if (!isOsmMapRepositoryReady(map) || map == null) return null
+  return runCatching {
+    Polygon(map).apply { infoWindow = null }
+  }.getOrNull()
+}
+
+internal fun createSafePolyline(map: MapView?): Polyline? {
+  if (!isOsmMapRepositoryReady(map) || map == null) return null
+  return runCatching {
+    Polyline(map).apply { infoWindow = null }
+  }.getOrNull()
+}
+
+internal fun createSafeMarker(map: MapView?): Marker? {
+  if (!isOsmMapRepositoryReady(map) || map == null) return null
+  return runCatching {
+    Marker(map).apply { setInfoWindow(null) }
+  }.getOrNull()
+}
 
 @Composable
 fun ExpandedRadarMapDialog(
@@ -105,6 +164,7 @@ fun ExpandedRadarMapDialog(
   userLon: Double = myProfile?.longitude?.takeIf { it != 0.0 } ?: -99.1332,
   safePublicAnchorsCount: Int = 0,
   activeAcceptedMissionId: String? = null,
+  pauseMapUpdates: Boolean = false,
   onDismiss: () -> Unit,
   onMissionClick: (MissionWithDistance) -> Unit,
   onPlayerClick: (NearbyPlayerItem) -> Unit,
@@ -125,35 +185,73 @@ fun ExpandedRadarMapDialog(
   val surfaceBg = MaterialTheme.colorScheme.surfaceContainerLowest
   val gridColor = MaterialTheme.colorScheme.outlineVariant
 
-  val activeMission = missions.firstOrNull { it.mission.id == activeAcceptedMissionId }
+  val activeMission = remember(missions, activeAcceptedMissionId) {
+    missions.firstOrNull { it.mission.id == activeAcceptedMissionId }
+  }
   val playerGeoPoint = remember(userLat, userLon) { GeoPoint(userLat, userLon) }
 
-  val osmMapView = remember(canUseLiveOsmMap) {
-    if (!canUseLiveOsmMap) {
-      null
-    } else {
-      OsmSafePlaceFinder.configureOsmdroid(context)
-      MapView(context).apply {
-        setTileSource(TileSourceFactory.MAPNIK)
-        setMultiTouchControls(true)
-        zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
-        isTilesScaledToDpi = true
-        minZoomLevel = 4.0
-        maxZoomLevel = 19.5
-        controller.setZoom(15.4)
-        controller.setCenter(GeoPoint(userLat, userLon))
-      }
-    }
+  var osmMapView by remember { mutableStateOf<MapView?>(null) }
+  var isMapAttachedAndReady by remember { mutableStateOf(false) }
+  var lastOverlayRenderKey by remember { mutableStateOf<MapOverlayRenderKey?>(null) }
+  val pinDrawableCache = remember { mutableMapOf<String, BitmapDrawable>() }
+
+  val overlayRenderKey = remember(
+    userLat,
+    userLon,
+    searchRadiusMeters,
+    activeAcceptedMissionId,
+    hasLocationPermission,
+    missions,
+    nearbyPlayers,
+    primaryColor,
+    secondaryColor,
+    tertiaryColor,
+    isMapAttachedAndReady,
+  ) {
+    MapOverlayRenderKey(
+      userLat = userLat,
+      userLon = userLon,
+      searchRadiusMeters = searchRadiusMeters,
+      activeAcceptedMissionId = activeAcceptedMissionId,
+      hasLocationPermission = hasLocationPermission,
+      missionsSignature = missions.map {
+        MissionOverlaySig(
+          id = it.mission.id,
+          lat = it.mission.latitude,
+          lon = it.mission.longitude,
+          completed = it.isCompletedByMe,
+          withinProximity = it.isWithinProximity,
+          timed = it.mission.category == "puzzle" && it.mission.timeLimitSeconds > 0,
+        )
+      },
+      playersSignature = nearbyPlayers.map {
+        PlayerOverlaySig(
+          userId = it.profile.userId,
+          lat = it.profile.latitude,
+          lon = it.profile.longitude,
+          colorHex = it.profile.avatarColorHex,
+        )
+      },
+      primaryColorArgb = primaryColor.toArgb(),
+      secondaryColorArgb = secondaryColor.toArgb(),
+      tertiaryColorArgb = tertiaryColor.toArgb(),
+      attachedAndReady = isMapAttachedAndReady,
+    )
   }
 
-  DisposableEffect(lifecycleOwner, osmMapView) {
+  DisposableEffect(lifecycleOwner, osmMapView, pauseMapUpdates) {
     val map = osmMapView
     if (map == null) {
       onDispose { }
     } else {
+      if (pauseMapUpdates) {
+        map.onPause()
+      } else {
+        map.onResume()
+      }
       val observer = LifecycleEventObserver { _, event ->
         when (event) {
-          Lifecycle.Event.ON_RESUME -> map.onResume()
+          Lifecycle.Event.ON_RESUME -> if (!pauseMapUpdates) map.onResume()
           Lifecycle.Event.ON_PAUSE -> map.onPause()
           else -> Unit
         }
@@ -161,8 +259,7 @@ fun ExpandedRadarMapDialog(
       lifecycleOwner.lifecycle.addObserver(observer)
       onDispose {
         lifecycleOwner.lifecycle.removeObserver(observer)
-        map.onPause()
-        map.onDetach()
+        runCatching { map.onPause() }
       }
     }
   }
@@ -182,21 +279,77 @@ fun ExpandedRadarMapDialog(
           .fillMaxSize()
           .safeDrawingPadding(),
       ) {
-        if (useOsmMap && osmMapView != null) {
+        if (useOsmMap && canUseLiveOsmMap) {
           AndroidView(
-            factory = { osmMapView },
+            factory = { ctx ->
+              OsmSafePlaceFinder.configureOsmdroid(ctx)
+              MapView(ctx).apply {
+                setTileSource(TileSourceFactory.MAPNIK)
+                setMultiTouchControls(!pauseMapUpdates)
+                zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
+                isTilesScaledToDpi = true
+                minZoomLevel = 4.0
+                maxZoomLevel = 19.5
+                controller.setZoom(15.4)
+                controller.setCenter(GeoPoint(userLat, userLon))
+                addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                  override fun onViewAttachedToWindow(v: View) {
+                    v.post {
+                      val mv = v as? MapView ?: return@post
+                      if (mv.isAttachedToWindow && isOsmMapRepositoryReady(mv)) {
+                        isMapAttachedAndReady = true
+                      }
+                    }
+                  }
+
+                  override fun onViewDetachedFromWindow(v: View) {
+                    isMapAttachedAndReady = false
+                    lastOverlayRenderKey = null
+                  }
+                })
+                osmMapView = this
+              }
+            },
+            onRelease = { map ->
+              isMapAttachedAndReady = false
+              lastOverlayRenderKey = null
+              if (osmMapView === map) {
+                osmMapView = null
+              }
+              runCatching {
+                map.overlays.clear()
+                map.onPause()
+                map.onDetach()
+              }
+            },
             update = { map ->
+              map.isEnabled = !pauseMapUpdates
+              map.isClickable = !pauseMapUpdates
+              map.setMultiTouchControls(!pauseMapUpdates)
+              if (pauseMapUpdates) {
+                return@AndroidView
+              }
+              if (!isMapAttachedAndReady || !isOsmMapRepositoryReady(map)) {
+                map.post {
+                  if (map.isAttachedToWindow && isOsmMapRepositoryReady(map) && !isMapAttachedAndReady) {
+                    isMapAttachedAndReady = true
+                  }
+                }
+                return@AndroidView
+              }
+              if (lastOverlayRenderKey == overlayRenderKey) {
+                return@AndroidView
+              }
+
               map.overlays.clear()
 
-              // Outer radar scan radius circle around user's real location
-              val scanCircle = Polygon(map).apply {
+              // Outer radar scan radius circle around user's real location (null-checked)
+              createSafePolygon(map)?.apply {
                 points = Polygon.pointsAsCircle(playerGeoPoint, searchRadiusMeters.toDouble())
                 fillPaint.color = primaryColor.copy(alpha = 0.06f).toArgb()
                 outlinePaint.color = primaryColor.copy(alpha = 0.45f).toArgb()
                 outlinePaint.strokeWidth = 3f
-                infoWindow = null
-              }
-              map.overlays.add(scanCircle)
+              }?.let { map.overlays.add(it) }
 
               // Proximity circles + mission markers
               missions.forEach { item ->
@@ -209,39 +362,45 @@ fun ExpandedRadarMapDialog(
                 }
 
                 val zoneColor = if (isAccepted || item.isWithinProximity) primaryColor else tertiaryColor
-                val proximityZone = Polygon(map).apply {
+                createSafePolygon(map)?.apply {
                   points = Polygon.pointsAsCircle(mPoint, GeoUtils.PROXIMITY_RADIUS_METERS.toDouble())
                   fillPaint.color = zoneColor.copy(alpha = if (isAccepted) 0.18f else 0.10f).toArgb()
                   outlinePaint.color = zoneColor.copy(alpha = if (isAccepted) 0.80f else 0.48f).toArgb()
                   outlinePaint.strokeWidth = if (isAccepted) 3f else 2f
-                  infoWindow = null
-                }
-                map.overlays.add(proximityZone)
+                }?.let { map.overlays.add(it) }
 
-                val marker = Marker(map).apply {
-                  position = mPoint
-                  title = item.mission.title
-                  snippet = "${item.mission.placeLabel} • ${GeoUtils.formatDistance(item.distanceMeters)}"
-                  setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                  icon = createMissionPinDrawable(
+                val timedFlag = item.mission.category == "puzzle" && item.mission.timeLimitSeconds > 0
+                val pinCacheKey = "m_${accentColor.toArgb()}_${isAccepted}_${item.isWithinProximity}_${item.isCompletedByMe}_$timedFlag"
+                val markerIcon = pinDrawableCache.getOrPut(pinCacheKey) {
+                  createMissionPinDrawable(
                     context = context,
                     fillColorArgb = accentColor.toArgb(),
                     isAccepted = isAccepted,
                     isWithinProximity = item.isWithinProximity,
                     isCompleted = item.isCompletedByMe,
-                    isPuzzleTimed = item.mission.category == "puzzle" && item.mission.timeLimitSeconds > 0,
+                    isPuzzleTimed = timedFlag,
                   )
+                }
+
+                createSafeMarker(map)?.apply {
+                  position = mPoint
+                  title = item.mission.title
+                  snippet = "${item.mission.placeLabel} • ${GeoUtils.formatDistance(item.distanceMeters)}"
+                  setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                  icon = markerIcon
                   setOnMarkerClickListener { _, _ ->
-                    onMissionClick(item)
+                    if (!pauseMapUpdates) {
+                      HapticFeedbackHelper.performRadarPinTap(context)
+                      onMissionClick(item)
+                    }
                     true
                   }
-                }
-                map.overlays.add(marker)
+                }?.let { map.overlays.add(it) }
               }
 
               // Route guide polyline to active accepted mission
               if (activeMission != null) {
-                val routeLine = Polyline(map).apply {
+                createSafePolyline(map)?.apply {
                   setPoints(
                     listOf(
                       playerGeoPoint,
@@ -251,9 +410,7 @@ fun ExpandedRadarMapDialog(
                   outlinePaint.color = primaryColor.toArgb()
                   outlinePaint.strokeWidth = 8f
                   outlinePaint.strokeCap = Paint.Cap.ROUND
-                  infoWindow = null
-                }
-                map.overlays.add(routeLine)
+                }?.let { map.overlays.add(it) }
               }
 
               // Nearby players markers
@@ -263,36 +420,58 @@ fun ExpandedRadarMapDialog(
                   val pColor = runCatching {
                     android.graphics.Color.parseColor(playerItem.profile.avatarColorHex)
                   }.getOrElse { primaryColor.toArgb() }
-                  val pMarker = Marker(map).apply {
+                  val playerIcon = pinDrawableCache.getOrPut("p_$pColor") {
+                    createPlayerPinDrawable(context, pColor)
+                  }
+                  createSafeMarker(map)?.apply {
                     position = pPoint
                     title = playerItem.profile.callsign
                     snippet = playerItem.profile.statusMessage
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                    icon = createPlayerPinDrawable(context, pColor)
+                    icon = playerIcon
                     setOnMarkerClickListener { _, _ ->
-                      onPlayerClick(playerItem)
+                      if (!pauseMapUpdates) {
+                        HapticFeedbackHelper.performRadarPinTap(context)
+                        onPlayerClick(playerItem)
+                      }
                       true
                     }
-                  }
-                  map.overlays.add(pMarker)
+                  }?.let { map.overlays.add(it) }
                 }
               }
 
               // User live GPS marker drawn last so it always stays crisp on top
-              val userMarker = Marker(map).apply {
+              val userIcon = pinDrawableCache.getOrPut("u_${primaryColor.toArgb()}") {
+                createUserLocationPinDrawable(context, primaryColor.toArgb())
+              }
+              createSafeMarker(map)?.apply {
                 position = playerGeoPoint
                 title = myProfile?.callsign ?: "Tú"
                 snippet = if (hasLocationPermission) "Tu ubicación GPS actual" else "Ubicación de radar"
                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                icon = createUserLocationPinDrawable(context, primaryColor.toArgb())
-              }
-              map.overlays.add(userMarker)
+                icon = userIcon
+              }?.let { map.overlays.add(it) }
+
+              lastOverlayRenderKey = overlayRenderKey
               map.invalidate()
             },
             modifier = Modifier
               .fillMaxSize()
               .testTag("osm_map_view"),
           )
+          if (pauseMapUpdates) {
+            Box(
+              modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                  awaitPointerEventScope {
+                    while (true) {
+                      awaitPointerEvent()
+                    }
+                  }
+                },
+            )
+          }
         } else {
           // Interactive Vector Radar Map Viewport (toggleable layer / Robolectric fallback)
           BoxWithConstraints(
@@ -465,19 +644,30 @@ fun ExpandedRadarMapDialog(
               val dy = (panOffset.y + distPx * sin(angleRad)).roundToInt()
               val isAccepted = item.mission.id == activeAcceptedMissionId
 
-              val pinColor = if (item.isCompletedByMe) {
-                secondaryColor.copy(alpha = 0.72f)
-              } else {
-                MissionIcons.accentColorForMission(item.mission, primaryColor, tertiaryColor)
+              val pinColor = remember(item.isCompletedByMe, item.mission.category, primaryColor, secondaryColor, tertiaryColor) {
+                if (item.isCompletedByMe) {
+                  secondaryColor.copy(alpha = 0.72f)
+                } else {
+                  MissionIcons.accentColorForMission(item.mission, primaryColor, tertiaryColor)
+                }
               }
-              val pinIcon = MissionIcons.iconForMission(item.mission)
+              val pinIcon = remember(item.mission.iconKey, item.mission.missionType, item.mission.category) {
+                MissionIcons.iconForMission(item.mission)
+              }
+              val pinLabelText = remember(item.mission.title, item.distanceMeters) {
+                "${item.mission.title.take(14)} • ${GeoUtils.formatDistance(item.distanceMeters)}"
+              }
 
               Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
                   .align(Alignment.Center)
                   .offset { IntOffset(dx, dy) }
-                  .clickable { onMissionClick(item) }
+                  .clickable {
+                    HapticFeedbackHelper.performRadarPinTap(context)
+                    onMissionClick(item)
+                  }
+                  .testTag("expanded_vector_mission_pin_${item.mission.id}")
                   .semantics { contentDescription = "Ver misión ${item.mission.title}" },
               ) {
                 Box(contentAlignment = Alignment.TopEnd) {
@@ -522,7 +712,7 @@ fun ExpandedRadarMapDialog(
                   shape = RoundedCornerShape(8.dp),
                 ) {
                   Text(
-                    text = "${item.mission.title.take(14)} • ${GeoUtils.formatDistance(item.distanceMeters)}",
+                    text = pinLabelText,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = if (isAccepted) FontWeight.Bold else FontWeight.Normal,
                     maxLines = 1,
@@ -545,16 +735,21 @@ fun ExpandedRadarMapDialog(
               val dx = (panOffset.x + distPx * cos(angleRad)).roundToInt()
               val dy = (panOffset.y + distPx * sin(angleRad)).roundToInt()
 
-              val playerDotColor = runCatching {
-                Color(android.graphics.Color.parseColor(playerItem.profile.avatarColorHex))
-              }.getOrElse { primaryColor }
+              val playerDotColor = remember(playerItem.profile.avatarColorHex, primaryColor) {
+                runCatching {
+                  Color(android.graphics.Color.parseColor(playerItem.profile.avatarColorHex))
+                }.getOrElse { primaryColor }
+              }
 
               Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
                   .align(Alignment.Center)
                   .offset { IntOffset(dx, dy) }
-                  .clickable { onPlayerClick(playerItem) },
+                  .clickable {
+                    HapticFeedbackHelper.performRadarPinTap(context)
+                    onPlayerClick(playerItem)
+                  },
               ) {
                 Surface(
                   shape = CircleShape,
@@ -664,8 +859,9 @@ fun ExpandedRadarMapDialog(
         ) {
           FilledIconButton(
             onClick = {
-              if (useOsmMap && osmMapView != null) {
-                osmMapView.controller.zoomOut()
+              val map = osmMapView
+              if (useOsmMap && map != null) {
+                map.controller.zoomOut()
               } else {
                 zoomScale = (zoomScale - 0.25f).coerceAtLeast(0.60f)
               }
@@ -675,8 +871,9 @@ fun ExpandedRadarMapDialog(
           }
           FilledIconButton(
             onClick = {
-              if (useOsmMap && osmMapView != null) {
-                osmMapView.controller.zoomIn()
+              val map = osmMapView
+              if (useOsmMap && map != null) {
+                map.controller.zoomIn()
               } else {
                 zoomScale = (zoomScale + 0.25f).coerceAtMost(3.4f)
               }
@@ -686,8 +883,9 @@ fun ExpandedRadarMapDialog(
           }
           FilledIconButton(
             onClick = {
-              if (useOsmMap && osmMapView != null) {
-                osmMapView.controller.animateTo(playerGeoPoint, 15.6, 450L)
+              val map = osmMapView
+              if (useOsmMap && map != null) {
+                map.controller.animateTo(playerGeoPoint, 15.6, 450L)
               } else {
                 panOffset = Offset.Zero
                 zoomScale = 1.15f

@@ -1156,4 +1156,289 @@ class ExampleRobolectricTest {
     assertEquals("Kiosco Históric", publishedTitle)
     assertEquals("Captura el techo del kiosco central.", publishedDesc)
   }
+
+  @Test
+  fun `auth screen exposes scrollable IME container and MainActivity declares adjustResize`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val packageInfo = context.packageManager.getPackageInfo(
+      context.packageName,
+      android.content.pm.PackageManager.GET_ACTIVITIES,
+    )
+    val mainActivityInfo = packageInfo.activities?.firstOrNull { it.name.endsWith(".MainActivity") }
+    assertNotNull(mainActivityInfo)
+    assertEquals(
+      android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE,
+      mainActivityInfo!!.softInputMode and android.view.WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST,
+    )
+
+    composeTestRule.setContent {
+      RadarQuestTheme(themeMode = "dark") {
+        com.example.ui.auth.AuthScreen(
+          onLogin = { _, _ -> com.example.data.local.LocalAuthResult.Error("none") },
+          onRegister = { _, _, _ -> com.example.data.local.LocalAuthResult.Error("none") },
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("auth_scrollable_container").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("auth_username_input").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("auth_pin_input").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("veyra_submit_auth_button").assertIsDisplayed()
+  }
+
+  @Test
+  fun `expandedRadarMapDialog null-checks detached MapView repository when building overlays`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    SafeRuntimeBootstrap.initOsmdroidSafely(context)
+    val detachedMap = org.osmdroid.views.MapView(context)
+    // A MapView not attached to a window must never attempt Polygon/BasicInfoWindow repository access
+    assertFalse(com.example.ui.components.isOsmMapRepositoryReady(null))
+    assertFalse(com.example.ui.components.isOsmMapRepositoryReady(detachedMap))
+    assertNull(com.example.ui.components.createSafePolygon(null))
+    assertNull(com.example.ui.components.createSafePolygon(detachedMap))
+    assertNull(com.example.ui.components.createSafePolyline(detachedMap))
+    assertNull(com.example.ui.components.createSafeMarker(detachedMap))
+    detachedMap.onDetach()
+    assertNull(com.example.ui.components.createSafePolygon(detachedMap))
+  }
+
+  @Test
+  fun `socialFeedScreen Verify button triggers confetti particle celebration overlay`() {
+    val now = System.currentTimeMillis()
+    val closePost = com.example.data.model.LocalMissionPost(
+      id = "feed_verify_1",
+      title = "Fuente Histórica",
+      description = "Verifica la fuente del parque norte.",
+      category = "explore",
+      xpReward = 180L,
+      authorUserId = "veyra",
+      authorDisplayName = "Veyra HQ",
+      authorUsername = "veyra",
+      authorRole = "creator",
+      authorRoleTitle = "Creador",
+      latitude = 19.4326,
+      longitude = -99.1332,
+      placeLabel = "Parque Norte",
+      createdAtMillis = now - 60_000L,
+    )
+    var verifiedId = ""
+
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        SocialFeedScreen(
+          uiState = RadarQuestUiState(
+            localMissionFeed = listOf(
+              com.example.data.model.LocalMissionFeedItem(
+                post = closePost,
+                distanceMeters = 48f,
+                bearingDegrees = 15f,
+                isImmediateProximity = true,
+                authorContributionScore = 10L,
+              )
+            ),
+            settings = UserSettings(animationTier = "low"),
+            currentLocation = com.example.data.location.LiveLocationPoint(19.4326, -99.1332, 4f),
+          ),
+          currentUserId = "me_user",
+          onCheerCompletion = {},
+          onVerifyFeedMission = { verifiedId = it.id },
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("confetti_celebration_overlay").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("verify_feed_mission_button_feed_verify_1")
+      .performScrollTo()
+      .performClick()
+    composeTestRule.waitForIdle()
+
+    assertEquals("feed_verify_1", verifiedId)
+    composeTestRule.onNodeWithTag("confetti_celebration_overlay").assertIsDisplayed()
+  }
+
+  @Test
+  fun `radarHomeScreen preserves immutable selectedMission detail sheet even if background list changes`() {
+    val targetMission = MissionWithDistance(
+      mission = Mission(
+        id = "immutable_detail_m1",
+        title = "Obelisco del Lago",
+        description = "Visita el obelisco público del lago.",
+        category = "explore",
+        missionType = "photo",
+        iconKey = "explore",
+        xpReward = 150L,
+        placeLabel = "Paseo del Lago",
+      ),
+      distanceMeters = 90f,
+      bearingDegrees = 45f,
+      isCompletedByMe = false,
+      isWithinProximity = true,
+    )
+    val missionsState = androidx.compose.runtime.mutableStateOf(listOf(targetMission))
+    var dialogOpenReported = false
+
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        RadarHomeScreen(
+          uiState = RadarQuestUiState(
+            missions = missionsState.value,
+            hasLocationPermission = true,
+          ),
+          onRequestLocationPermission = {},
+          onOpenNotifications = {},
+          onRefresh = {},
+          onToggleBroadcast = {},
+          onToggleSeekingHelp = {},
+          onCycleRadius = {},
+          onHelpPlayer = {},
+          onSendPulse = {},
+          onCompeteDuel = { _, _ -> },
+          onPlayCoop = { _, _ -> },
+          onCreateMission = { _, _, _, _, _, _ -> },
+          onConfirmMissionPhoto = { _, _, _, _ -> },
+          onDialogVisibilityChanged = { dialogOpenReported = it },
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("radar_mission_pin_immutable_detail_m1").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("mission_detail_sheet").assertIsDisplayed()
+    assertTrue(dialogOpenReported)
+
+    // Mutate/clear background mission list while sheet is open -> immutable selectedMission stays visible
+    missionsState.value = emptyList()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("mission_detail_sheet").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Obelisco del Lago").assertIsDisplayed()
+  }
+
+  @Test
+  fun `hapticFeedbackHelper uses VibrationEffect for radar pin tap and mission verification and VIBRATE permission is declared`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val packageInfo = context.packageManager.getPackageInfo(
+      context.packageName,
+      android.content.pm.PackageManager.GET_PERMISSIONS,
+    )
+    val requestedPermissions = packageInfo.requestedPermissions?.toSet() ?: emptySet()
+    assertTrue(android.Manifest.permission.VIBRATE in requestedPermissions)
+
+    val vibrator = com.example.util.HapticFeedbackHelper.resolveVibrator(context)
+    assertNotNull(vibrator)
+    val shadowVibrator = org.robolectric.Shadows.shadowOf(vibrator)
+    shadowVibrator.setHasVibrator(true)
+    vibrator!!.cancel()
+    assertFalse(shadowVibrator.isVibrating)
+
+    com.example.util.HapticFeedbackHelper.performRadarPinTap(context)
+    assertTrue(shadowVibrator.isVibrating)
+
+    vibrator.cancel()
+    assertFalse(shadowVibrator.isVibrating)
+
+    com.example.util.HapticFeedbackHelper.performMissionVerified(context)
+    assertTrue(shadowVibrator.isVibrating)
+  }
+
+  @Test
+  fun `tapping radar mission pin and Verify button trigger tactile haptic feedback`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val vibrator = com.example.util.HapticFeedbackHelper.resolveVibrator(context)
+    assertNotNull(vibrator)
+    val shadowVibrator = org.robolectric.Shadows.shadowOf(vibrator)
+    shadowVibrator.setHasVibrator(true)
+
+    val radarMission = MissionWithDistance(
+      mission = Mission(
+        id = "haptic_pin_m1",
+        title = "Baliza Táctil",
+        description = "Toca el pin en el radar.",
+        category = "explore",
+        missionType = "photo",
+        iconKey = "explore",
+        xpReward = 120L,
+        placeLabel = "Plaza Central",
+      ),
+      distanceMeters = 80f,
+      bearingDegrees = 45f,
+      isCompletedByMe = false,
+      isWithinProximity = true,
+    )
+    val now = System.currentTimeMillis()
+    val feedPost = com.example.data.model.LocalMissionPost(
+      id = "haptic_verify_1",
+      title = "Torre Táctil",
+      description = "Verifica la torre para sentir la vibración.",
+      category = "explore",
+      xpReward = 160L,
+      authorUserId = "veyra",
+      authorDisplayName = "Veyra HQ",
+      authorUsername = "veyra",
+      authorRole = "creator",
+      authorRoleTitle = "Creador",
+      latitude = 19.4326,
+      longitude = -99.1332,
+      placeLabel = "Centro",
+      createdAtMillis = now - 30_000L,
+    )
+
+    val showFeed = androidx.compose.runtime.mutableStateOf(false)
+    var tappedMissionId = ""
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        if (!showFeed.value) {
+          com.example.ui.components.RoundRadarMap(
+            myProfile = null,
+            nearbyPlayers = emptyList(),
+            missions = listOf(radarMission),
+            searchRadiusMeters = 500L,
+            radarStyle = "classic",
+            animationTier = "low",
+            isBroadcasting = true,
+            hasLocationPermission = true,
+            onPlayerClick = {},
+            onMissionClick = { tappedMissionId = it.mission.id },
+            onCycleRadius = {},
+            onExpandMap = {},
+          )
+        } else {
+          SocialFeedScreen(
+            uiState = RadarQuestUiState(
+              localMissionFeed = listOf(
+                com.example.data.model.LocalMissionFeedItem(
+                  post = feedPost,
+                  distanceMeters = 50f,
+                  bearingDegrees = 0f,
+                  isImmediateProximity = true,
+                  authorContributionScore = 5L,
+                )
+              ),
+              settings = UserSettings(animationTier = "low"),
+              currentLocation = com.example.data.location.LiveLocationPoint(19.4326, -99.1332, 4f),
+            ),
+            currentUserId = "other",
+            onCheerCompletion = {},
+            onVerifyFeedMission = {},
+          )
+        }
+      }
+    }
+
+    vibrator!!.cancel()
+    assertFalse(shadowVibrator.isVibrating)
+    composeTestRule.onNodeWithTag("radar_mission_pin_haptic_pin_m1").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("haptic_pin_m1", tappedMissionId)
+    assertTrue(shadowVibrator.isVibrating)
+
+    vibrator.cancel()
+    assertFalse(shadowVibrator.isVibrating)
+    showFeed.value = true
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("verify_feed_mission_button_haptic_verify_1")
+      .performScrollTo()
+      .performClick()
+    composeTestRule.waitForIdle()
+    assertTrue(shadowVibrator.isVibrating)
+  }
 }

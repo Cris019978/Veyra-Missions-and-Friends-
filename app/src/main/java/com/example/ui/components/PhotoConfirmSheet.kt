@@ -355,7 +355,7 @@ fun PhotoConfirmSheet(
         ) {
           Icon(imageVector = Icons.Rounded.CheckCircle, contentDescription = null)
           Spacer(modifier = Modifier.size(8.dp))
-          Text(if (isSubmitting) "Enviando..." else "Confirmar y ganar +${mission.xpReward} XP")
+          Text(if (isSubmitting) "Verificando..." else "Verificar y ganar +${mission.xpReward} XP")
         }
       }
     }

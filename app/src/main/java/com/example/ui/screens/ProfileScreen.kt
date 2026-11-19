@@ -142,9 +142,12 @@ fun ProfileScreen(
     }
   }
 
-  val auraColor = runCatching {
-    Color(android.graphics.Color.parseColor(auraHex))
-  }.getOrElse { MaterialTheme.colorScheme.primary }
+  val fallbackPrimary = MaterialTheme.colorScheme.primary
+  val auraColor = remember(auraHex, fallbackPrimary) {
+    runCatching {
+      Color(android.graphics.Color.parseColor(auraHex))
+    }.getOrElse { fallbackPrimary }
+  }
 
   val avatarBitmap = remember(avatarPhotoBase64) {
     PhotoUtils.decodeBase64Thumbnail(avatarPhotoBase64)?.asImageBitmap()
@@ -179,7 +182,7 @@ fun ProfileScreen(
       verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
       // 1. Hero Profile Header: Banner BEHIND Overlapping Circular Profile Photo
-      item {
+      item(key = "profile_hero_header") {
         Column(
           modifier = Modifier
             .fillMaxWidth()
@@ -431,7 +434,7 @@ fun ProfileScreen(
       }
 
       // 2. Player Stats Strip
-      item {
+      item(key = "profile_stats_strip") {
         Row(
           modifier = Modifier
             .fillMaxWidth()
@@ -446,7 +449,7 @@ fun ProfileScreen(
       }
 
       // 3. Create / Edit Profile & Unique Username Form
-      item {
+      item(key = "profile_edit_form") {
         Card(
           colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
           shape = MaterialTheme.shapes.large,
@@ -509,14 +512,16 @@ fun ProfileScreen(
             )
 
             Text("Fondo del banner", style = MaterialTheme.typography.titleSmall)
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-              val presets = listOf(
+            val presets = remember {
+              listOf(
                 "topo" to "Topográfico",
                 "sunset" to "Atardecer You",
                 "cosmos" to "Cósmico",
                 "emerald" to "Esmeralda",
               )
-              items(presets) { (key, label) ->
+            }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              items(presets, key = { it.first }, contentType = { "banner_preset_chip" }) { (key, label) ->
                 FilterChip(
                   selected = bannerPreset == key,
                   onClick = { bannerPreset = key },
@@ -524,7 +529,7 @@ fun ProfileScreen(
                 )
               }
               if (bannerPhotoBase64.isNotBlank()) {
-                item {
+                item(key = "banner_preset_custom") {
                   FilterChip(
                     selected = bannerPreset == "custom",
                     onClick = { bannerPreset = "custom" },
@@ -550,7 +555,7 @@ fun ProfileScreen(
             } else {
               Text("Ícono del avatar", style = MaterialTheme.typography.titleSmall)
               LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(iconOptions) { (key, icon) ->
+                items(iconOptions, key = { it.first }, contentType = { "avatar_icon_option" }) { (key, icon) ->
                   val selected = avatarIcon == key
                   Box(
                     modifier = Modifier
@@ -581,7 +586,7 @@ fun ProfileScreen(
             Text("Aura Material You", style = MaterialTheme.typography.titleSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
               auraOptions.forEach { hex ->
-                val color = Color(android.graphics.Color.parseColor(hex))
+                val color = remember(hex) { Color(android.graphics.Color.parseColor(hex)) }
                 Box(
                   modifier = Modifier
                     .size(38.dp)
@@ -640,7 +645,7 @@ fun ProfileScreen(
       }
 
       // 4. Quick Material You Theme Sync Card
-      item {
+      item(key = "profile_theme_sync_card") {
         Card(
           colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
           shape = MaterialTheme.shapes.large,
@@ -673,7 +678,7 @@ fun ProfileScreen(
             }
 
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-              items(PaletteOption.entries) { opt ->
+              items(PaletteOption.entries, key = { it.key }, contentType = { "palette_chip" }) { opt ->
                 FilterChip(
                   selected = uiState.settings.paletteKey == opt.key,
                   onClick = { onQuickSelectPalette(opt.key) },
@@ -688,14 +693,14 @@ fun ProfileScreen(
 
       // 5. Photo Proofs Gallery
       if (uiState.myCompletions.isNotEmpty()) {
-        item {
+        item(key = "profile_photo_gallery") {
           Column(
             modifier = Modifier.padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
           ) {
             Text("Misiones confirmadas (${uiState.myCompletions.size})", style = MaterialTheme.typography.titleMedium)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-              items(uiState.myCompletions, key = { it.id }) { comp ->
+              items(uiState.myCompletions, key = { it.id }, contentType = { "proof_thumb" }) { comp ->
                 val bmp = remember(comp.photoThumbnail) {
                   PhotoUtils.decodeBase64Thumbnail(comp.photoThumbnail)?.asImageBitmap()
                 }

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -94,7 +95,7 @@ fun SocialArenaScreen(
         ),
         verticalArrangement = Arrangement.spacedBy(14.dp),
       ) {
-        item {
+        item(key = "arena_header") {
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -123,7 +124,7 @@ fun SocialArenaScreen(
           }
         }
 
-      item {
+      item(key = "arena_section_selector") {
         val sections = listOf("Retos", "Ayudas", "Ranking")
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
           sections.forEachIndexed { idx, label ->
@@ -140,18 +141,18 @@ fun SocialArenaScreen(
 
       when (selectedSection) {
         0 -> {
-          item {
+          item(key = "my_challenges_header") {
             Text("Tus duelos y partidas co-op", style = MaterialTheme.typography.titleMedium)
           }
           if (uiState.myChallenges.isEmpty()) {
-            item {
+            item(key = "my_challenges_empty") {
               EmptySocialCard(
                 title = "Sin retos activos",
                 subtitle = "Crea un duelo competitivo o únete a un reto abierto abajo.",
               )
             }
           } else {
-            items(uiState.myChallenges, key = { it.id }) { chal ->
+            items(uiState.myChallenges, key = { "my_${it.id}" }, contentType = { "challenge_card" }) { chal ->
               ChallengeCard(
                 challenge = chal,
                 currentUserId = currentUserId,
@@ -161,19 +162,19 @@ fun SocialArenaScreen(
             }
           }
 
-          item {
+          item(key = "open_challenges_header") {
             Spacer(modifier = Modifier.height(6.dp))
             Text("Retos abiertos en la comunidad", style = MaterialTheme.typography.titleMedium)
           }
           if (uiState.openChallenges.isEmpty()) {
-            item {
+            item(key = "open_challenges_empty") {
               EmptySocialCard(
                 title = "No hay retos abiertos ahora",
                 subtitle = "Pulsa 'Nuevo reto' para invitar a jugadores cercanos a competir o jugar.",
               )
             }
           } else {
-            items(uiState.openChallenges, key = { it.id }) { chal ->
+            items(uiState.openChallenges, key = { "open_${it.id}" }, contentType = { "challenge_card" }) { chal ->
               ChallengeCard(
                 challenge = chal,
                 currentUserId = currentUserId,
@@ -185,18 +186,18 @@ fun SocialArenaScreen(
         }
 
         1 -> {
-          item {
+          item(key = "interactions_header") {
             Text("Ayudas y pulsos en tiempo real", style = MaterialTheme.typography.titleMedium)
           }
           if (uiState.interactions.isEmpty()) {
-            item {
+            item(key = "interactions_empty") {
               EmptySocialCard(
                 title = "Aún no hay ayudas registradas",
                 subtitle = "Toca a cualquier jugador en el mapa radar para enviarle ayuda o un pulso de juego.",
               )
             }
           } else {
-            items(uiState.interactions, key = { it.id }) { inter ->
+            items(uiState.interactions, key = { it.id }, contentType = { "interaction_card" }) { inter ->
               Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
                 shape = MaterialTheme.shapes.large,
@@ -249,10 +250,15 @@ fun SocialArenaScreen(
         }
 
         2 -> {
-          item {
+          item(key = "leaderboard_header") {
             Text("Clasificación en línea", style = MaterialTheme.typography.titleMedium)
           }
-          items(uiState.leaderboardPlayers.mapIndexed { i, p -> i + 1 to p }, key = { it.second.userId }) { (rank, player) ->
+          itemsIndexed(
+            items = uiState.leaderboardPlayers,
+            key = { _, p -> p.userId },
+            contentType = { _, _ -> "leaderboard_row" },
+          ) { index, player ->
+            val rank = index + 1
             Card(
               colors = CardDefaults.cardColors(
                 containerColor = if (player.userId == currentUserId) {

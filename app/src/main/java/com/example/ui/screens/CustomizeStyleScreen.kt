@@ -137,7 +137,7 @@ fun CustomizeStyleScreen(
       ),
       verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-      item {
+      item(key = "style_header") {
         Row(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -179,7 +179,7 @@ fun CustomizeStyleScreen(
       }
 
       // 1. Material You Color & Theme Customization
-      item {
+      item(key = "style_theme_card") {
         Card(
           colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
           shape = MaterialTheme.shapes.large,
@@ -206,7 +206,7 @@ fun CustomizeStyleScreen(
 
             Text("Paleta Material You", style = MaterialTheme.typography.titleMedium)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-              items(PaletteOption.entries) { opt ->
+              items(PaletteOption.entries, key = { it.key }, contentType = { "palette_swatch" }) { opt ->
                 val selected = settings.paletteKey == opt.key
                 val swatchColor = palettePreviewColors[opt.key] ?: MaterialTheme.colorScheme.primary
                 Column(
@@ -273,7 +273,7 @@ fun CustomizeStyleScreen(
       }
 
       // 1A. Gesture Navigation (Hide bottom bar & swipe horizontally across app)
-      item {
+      item(key = "style_gesture_nav_card") {
         Card(
           colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
           shape = MaterialTheme.shapes.large,
@@ -325,7 +325,7 @@ fun CustomizeStyleScreen(
       }
 
       // 1B. 3-Tier Animation Optimization Selector (Low / Medium / High)
-      item {
+      item(key = "style_animation_tier_card") {
         Card(
           colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
           shape = MaterialTheme.shapes.large,
@@ -418,7 +418,7 @@ fun CustomizeStyleScreen(
       }
 
       // 1C. Notification Preferences
-      item {
+      item(key = "style_notifications_card") {
         Card(
           colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
           shape = MaterialTheme.shapes.large,
@@ -472,7 +472,7 @@ fun CustomizeStyleScreen(
       }
 
       // 2. Player Callsign & Aura
-      item {
+      item(key = "style_player_aura_card") {
         Card(
           colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
           shape = MaterialTheme.shapes.large,
@@ -501,7 +501,7 @@ fun CustomizeStyleScreen(
             Text("Color de tu aura en el radar", style = MaterialTheme.typography.labelLarge)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
               auraOptions.forEach { hex ->
-                val color = Color(android.graphics.Color.parseColor(hex))
+                val color = remember(hex) { Color(android.graphics.Color.parseColor(hex)) }
                 Box(
                   modifier = Modifier
                     .size(40.dp)
@@ -555,13 +555,13 @@ fun CustomizeStyleScreen(
       }
 
       // 3. Personal Photo Proofs Gallery
-      item {
+      item(key = "style_gallery_header") {
         Text("Tus fotos de misiones (${uiState.myCompletions.size})", style = MaterialTheme.typography.titleMedium)
       }
       if (uiState.myCompletions.isNotEmpty()) {
-        item {
+        item(key = "style_gallery_row") {
           LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(uiState.myCompletions, key = { it.id }) { comp ->
+            items(uiState.myCompletions, key = { it.id }, contentType = { "style_proof_thumb" }) { comp ->
               val bmp = remember(comp.photoThumbnail) {
                 PhotoUtils.decodeBase64Thumbnail(comp.photoThumbnail)?.asImageBitmap()
               }
@@ -599,7 +599,7 @@ fun CustomizeStyleScreen(
       }
 
       // 4. Private Onboarding Quest Preferences
-      item {
+      item(key = "style_onboarding_card") {
         Card(
           colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
           shape = MaterialTheme.shapes.large,
@@ -643,7 +643,7 @@ fun CustomizeStyleScreen(
       }
 
       // 5. Saved Account Info & Sign Out Button (Always shown at bottom of Estilo)
-      item {
+      item(key = "style_account_signout_card") {
         Column(
           modifier = Modifier.fillMaxWidth(),
           verticalArrangement = Arrangement.spacedBy(12.dp),

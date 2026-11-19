@@ -51,9 +51,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,6 +70,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -78,6 +83,7 @@ import com.example.data.model.MissionWithDistance
 import com.example.data.model.NearbyPlayerItem
 import com.example.data.model.PlayerProfile
 import com.example.util.GeoUtils
+import com.example.util.HapticFeedbackHelper
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -94,12 +100,14 @@ fun RoundRadarMap(
   isBroadcasting: Boolean,
   hasLocationPermission: Boolean,
   activeAcceptedMissionId: String? = null,
+  pauseAnimations: Boolean = false,
   onPlayerClick: (NearbyPlayerItem) -> Unit,
   onMissionClick: (MissionWithDistance) -> Unit,
   onCycleRadius: () -> Unit,
   onExpandMap: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val context = LocalContext.current
   val primaryColor = MaterialTheme.colorScheme.primary
   val secondaryColor = MaterialTheme.colorScheme.secondary
   val tertiaryColor = MaterialTheme.colorScheme.tertiary
@@ -112,21 +120,25 @@ fun RoundRadarMap(
 
   var showExpandHint by remember { mutableStateOf(false) }
 
-  // Essential animation: radar sweep always runs when broadcasting (even on low-end tier).
-  val essentialTransition = rememberInfiniteTransition(label = "veyraEssentialSweep")
-  val sweepAngle by essentialTransition.animateFloat(
-    initialValue = 0f,
-    targetValue = 360f,
-    animationSpec = infiniteRepeatable(
-      animation = tween(durationMillis = if (isLowTier) 3400 else 2800, easing = LinearEasing),
-      repeatMode = RepeatMode.Restart,
-    ),
-    label = "sweepAngle",
-  )
+  // Keep animation drivers as State<Float> so only DrawScope / graphicsLayer / derivedStateOf
+  // read them, preventing 60fps recompositions of all radar mission pins and player dots.
+  val essentialTransition = if (!pauseAnimations) rememberInfiniteTransition(label = "veyraEssentialSweep") else null
+  val sweepAngleState: State<Float> = if (essentialTransition != null) {
+    essentialTransition.animateFloat(
+      initialValue = 0f,
+      targetValue = 360f,
+      animationSpec = infiniteRepeatable(
+        animation = tween(durationMillis = if (isLowTier) 3400 else 2800, easing = LinearEasing),
+        repeatMode = RepeatMode.Restart,
+      ),
+      label = "sweepAngle",
+    )
+  } else {
+    remember { mutableFloatStateOf(45f) }
+  }
 
-  // Medium + High tier lightweight animations
-  val mediumTransition = if (!isLowTier) rememberInfiniteTransition(label = "veyraMediumWave") else null
-  val sonarWave1 = if (mediumTransition != null) {
+  val mediumTransition = if (!pauseAnimations && !isLowTier) rememberInfiniteTransition(label = "veyraMediumWave") else null
+  val sonarWave1State: State<Float> = if (mediumTransition != null) {
     mediumTransition.animateFloat(
       initialValue = 0.08f,
       targetValue = 1.0f,
@@ -135,11 +147,11 @@ fun RoundRadarMap(
         repeatMode = RepeatMode.Restart,
       ),
       label = "sonarWave1",
-    ).value
+    )
   } else {
-    0f
+    remember { mutableFloatStateOf(0f) }
   }
-  val pulseBreath = if (mediumTransition != null) {
+  val pulseBreathState: State<Float> = if (mediumTransition != null) {
     mediumTransition.animateFloat(
       initialValue = 0.92f,
       targetValue = 1.10f,
@@ -148,14 +160,13 @@ fun RoundRadarMap(
         repeatMode = RepeatMode.Reverse,
       ),
       label = "pulseBreath",
-    ).value
+    )
   } else {
-    1.0f
+    remember { mutableFloatStateOf(1.0f) }
   }
 
-  // High tier extra fluid animations
-  val highTransition = if (isHighTier) rememberInfiniteTransition(label = "veyraHighExtras") else null
-  val outerOrbitAngle = if (highTransition != null) {
+  val highTransition = if (!pauseAnimations && isHighTier) rememberInfiniteTransition(label = "veyraHighExtras") else null
+  val outerOrbitAngleState: State<Float> = if (highTransition != null) {
     highTransition.animateFloat(
       initialValue = 360f,
       targetValue = 0f,
@@ -164,11 +175,11 @@ fun RoundRadarMap(
         repeatMode = RepeatMode.Restart,
       ),
       label = "outerOrbitAngle",
-    ).value
+    )
   } else {
-    0f
+    remember { mutableFloatStateOf(0f) }
   }
-  val sonarWave2 = if (highTransition != null) {
+  val sonarWave2State: State<Float> = if (highTransition != null) {
     highTransition.animateFloat(
       initialValue = 0.08f,
       targetValue = 1.0f,
@@ -178,11 +189,11 @@ fun RoundRadarMap(
         initialStartOffset = StartOffset(1350),
       ),
       label = "sonarWave2",
-    ).value
+    )
   } else {
-    0f
+    remember { mutableFloatStateOf(0f) }
   }
-  val liveDotAlpha = if (highTransition != null) {
+  val liveDotAlphaState: State<Float> = if (highTransition != null) {
     highTransition.animateFloat(
       initialValue = 0.38f,
       targetValue = 1f,
@@ -191,10 +202,13 @@ fun RoundRadarMap(
         repeatMode = RepeatMode.Reverse,
       ),
       label = "liveDotAlpha",
-    ).value
+    )
   } else {
-    1f
+    remember { mutableFloatStateOf(1f) }
   }
+
+  val plottedMissions = remember(missions) { missions.take(10) }
+  val plottedPlayers = remember(nearbyPlayers) { nearbyPlayers.take(8) }
 
   Column(
     modifier = modifier.fillMaxWidth(),
@@ -243,6 +257,11 @@ fun RoundRadarMap(
           Canvas(modifier = Modifier.fillMaxSize()) {
             val center = Offset(size.width / 2f, size.height / 2f)
             val maxR = size.minDimension / 2f
+            val sweepAngle = sweepAngleState.value
+            val sonarWave1 = sonarWave1State.value
+            val sonarWave2 = sonarWave2State.value
+            val pulseBreath = pulseBreathState.value
+            val outerOrbitAngle = outerOrbitAngleState.value
 
             // Background depth gradient
             drawCircle(
@@ -421,95 +440,110 @@ fun RoundRadarMap(
               .padding(end = 10.dp),
           )
 
-          // Mission pins plotted on the radar (tapping opens mission info + proximity check)
-          missions.take(10).forEach { item ->
-            val normalizedDist = (item.distanceMeters / searchRadiusMeters.toFloat()).coerceIn(0.18f, 0.84f)
-            val angleRad = Math.toRadians((item.bearingDegrees - 90f).toDouble())
-            val rPx = (radarRadiusPx * 0.80f) * normalizedDist
-            val dx = (rPx * cos(angleRad)).roundToInt()
-            val dy = (rPx * sin(angleRad)).roundToInt()
-
-            val isAccepted = item.mission.id == activeAcceptedMissionId
-            val isSwept = isHighTier && isBroadcasting && isAngleNearSweep(item.bearingDegrees, sweepAngle)
-            val pinScaleValue = if (isHighTier) {
-              val animScale by animateFloatAsState(
-                targetValue = when {
-                  isAccepted -> 1.22f
-                  isSwept && !item.isCompletedByMe -> 1.22f
-                  !item.isCompletedByMe -> 1.0f
-                  else -> 0.88f
-                },
-                animationSpec = spring(dampingRatio = 0.58f, stiffness = 420f),
-                label = "missionPinScale",
-              )
-              animScale
-            } else {
-              if (isAccepted) 1.12f else if (item.isCompletedByMe) 0.90f else 1.0f
-            }
-
-            val pinColor = if (item.isCompletedByMe) {
-              secondaryColor.copy(alpha = 0.60f)
-            } else {
-              MissionIcons.accentColorForMission(item.mission, primaryColor, tertiaryColor)
-            }
-            val pinIcon = MissionIcons.iconForMission(item.mission)
-
-            Box(
-              modifier = Modifier
-                .align(Alignment.Center)
-                .offset { IntOffset(dx, dy) }
-                .size(48.dp)
-                .graphicsLayer {
-                  scaleX = pinScaleValue
-                  scaleY = pinScaleValue
-                }
-                .clickable { onMissionClick(item) }
-                .testTag("radar_mission_pin_${item.mission.id}")
-                .semantics { contentDescription = "Misión ${item.mission.title}" },
-              contentAlignment = Alignment.Center,
-            ) {
-              if (!item.isCompletedByMe && (isSwept || item.isWithinProximity)) {
-                Box(
-                  modifier = Modifier
-                    .size(34.dp)
-                    .clip(CircleShape)
-                    .background(pinColor.copy(alpha = if (item.isWithinProximity) 0.34f else 0.24f)),
-                )
+          // Mission pins plotted on the radar (only recompose on beam edge via derivedStateOf)
+          plottedMissions.forEach { item ->
+            androidx.compose.runtime.key(item.mission.id) {
+              val (dx, dy) = remember(item.distanceMeters, item.bearingDegrees, searchRadiusMeters, radarRadiusPx) {
+                val normalizedDist = (item.distanceMeters / searchRadiusMeters.toFloat()).coerceIn(0.18f, 0.84f)
+                val angleRad = Math.toRadians((item.bearingDegrees - 90f).toDouble())
+                val rPx = (radarRadiusPx * 0.80f) * normalizedDist
+                (rPx * cos(angleRad)).roundToInt() to (rPx * sin(angleRad)).roundToInt()
               }
-              Box(contentAlignment = Alignment.TopEnd) {
-                Surface(
-                  shape = CircleShape,
-                  color = pinColor,
-                  shadowElevation = 4.dp,
-                  modifier = Modifier
-                    .size(26.dp)
-                    .border(
-                      width = if (item.isWithinProximity) 2.dp else 1.4.dp,
-                      color = Color.White.copy(alpha = if (item.isWithinProximity) 1f else 0.78f),
-                      shape = CircleShape,
-                    ),
-                ) {
-                  Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                      imageVector = pinIcon,
-                      contentDescription = null,
-                      tint = Color.White,
-                      modifier = Modifier.size(14.dp),
-                    )
-                  }
+
+              val isAccepted = item.mission.id == activeAcceptedMissionId
+              val isSwept by remember(item.bearingDegrees, isHighTier, isBroadcasting) {
+                derivedStateOf {
+                  isHighTier && isBroadcasting && isAngleNearSweep(item.bearingDegrees, sweepAngleState.value)
                 }
-                if (!item.isWithinProximity && !item.isCompletedByMe) {
+              }
+              val pinScaleValue = if (isHighTier) {
+                val animScale by animateFloatAsState(
+                  targetValue = when {
+                    isAccepted -> 1.22f
+                    isSwept && !item.isCompletedByMe -> 1.22f
+                    !item.isCompletedByMe -> 1.0f
+                    else -> 0.88f
+                  },
+                  animationSpec = spring(dampingRatio = 0.58f, stiffness = 420f),
+                  label = "missionPinScale",
+                )
+                animScale
+              } else {
+                if (isAccepted) 1.12f else if (item.isCompletedByMe) 0.90f else 1.0f
+              }
+
+              val pinColor = remember(item.isCompletedByMe, item.mission.category, primaryColor, secondaryColor, tertiaryColor) {
+                if (item.isCompletedByMe) {
+                  secondaryColor.copy(alpha = 0.60f)
+                } else {
+                  MissionIcons.accentColorForMission(item.mission, primaryColor, tertiaryColor)
+                }
+              }
+              val pinIcon = remember(item.mission.iconKey, item.mission.missionType, item.mission.category) {
+                MissionIcons.iconForMission(item.mission)
+              }
+              val currentItem by rememberUpdatedState(item)
+
+              Box(
+                modifier = Modifier
+                  .align(Alignment.Center)
+                  .offset { IntOffset(dx, dy) }
+                  .size(48.dp)
+                  .graphicsLayer {
+                    scaleX = pinScaleValue
+                    scaleY = pinScaleValue
+                  }
+                  .clickable {
+                    HapticFeedbackHelper.performRadarPinTap(context)
+                    onMissionClick(currentItem)
+                  }
+                  .testTag("radar_mission_pin_${item.mission.id}")
+                  .semantics { contentDescription = "Misión ${item.mission.title}" },
+                contentAlignment = Alignment.Center,
+              ) {
+                if (!item.isCompletedByMe && (isSwept || item.isWithinProximity)) {
+                  Box(
+                    modifier = Modifier
+                      .size(34.dp)
+                      .clip(CircleShape)
+                      .background(pinColor.copy(alpha = if (item.isWithinProximity) 0.34f else 0.24f)),
+                  )
+                }
+                Box(contentAlignment = Alignment.TopEnd) {
                   Surface(
                     shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier.size(12.dp),
+                    color = pinColor,
+                    shadowElevation = 4.dp,
+                    modifier = Modifier
+                      .size(26.dp)
+                      .border(
+                        width = if (item.isWithinProximity) 2.dp else 1.4.dp,
+                        color = Color.White.copy(alpha = if (item.isWithinProximity) 1f else 0.78f),
+                        shape = CircleShape,
+                      ),
                   ) {
-                    Icon(
-                      imageVector = Icons.Rounded.Lock,
-                      contentDescription = null,
-                      tint = MaterialTheme.colorScheme.onSurface,
-                      modifier = Modifier.padding(2.dp),
-                    )
+                    Box(contentAlignment = Alignment.Center) {
+                      Icon(
+                        imageVector = pinIcon,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(14.dp),
+                      )
+                    }
+                  }
+                  if (!item.isWithinProximity && !item.isCompletedByMe) {
+                    Surface(
+                      shape = CircleShape,
+                      color = MaterialTheme.colorScheme.surface,
+                      modifier = Modifier.size(12.dp),
+                    ) {
+                      Icon(
+                        imageVector = Icons.Rounded.Lock,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(2.dp),
+                      )
+                    }
                   }
                 }
               }
@@ -517,107 +551,125 @@ fun RoundRadarMap(
           }
 
           // Nearby online players plotted on the radar
-          nearbyPlayers.take(8).forEachIndexed { idx, playerItem ->
-            val normalizedDist = if (playerItem.distanceMeters > 0f) {
-              (playerItem.distanceMeters / searchRadiusMeters.toFloat()).coerceIn(0.20f, 0.84f)
-            } else {
-              0.38f + (idx * 0.08f).coerceAtMost(0.42f)
-            }
-            val bearing = if (playerItem.distanceMeters > 0f) {
-              playerItem.bearingDegrees
-            } else {
-              (idx * 55f) + 25f
-            }
-            val angleRad = Math.toRadians((bearing - 90f).toDouble())
-            val rPx = (radarRadiusPx * 0.80f) * normalizedDist
-            val dx = (rPx * cos(angleRad)).roundToInt()
-            val dy = (rPx * sin(angleRad)).roundToInt()
-
-            val isSwept = isHighTier && isBroadcasting && isAngleNearSweep(bearing, sweepAngle)
-            val dotScaleValue = if (isHighTier) {
-              val animScale by animateFloatAsState(
-                targetValue = if (isSwept || playerItem.profile.seekingHelp) 1.15f else 1.0f,
-                animationSpec = spring(dampingRatio = 0.58f, stiffness = 400f),
-                label = "playerDotScale",
-              )
-              animScale
-            } else {
-              1.0f
-            }
-
-            val playerDotColor = runCatching {
-              Color(android.graphics.Color.parseColor(playerItem.profile.avatarColorHex))
-            }.getOrElse { primaryColor }
-
-            Box(
-              modifier = Modifier
-                .align(Alignment.Center)
-                .offset { IntOffset(dx, dy) }
-                .size(48.dp)
-                .graphicsLayer {
-                  scaleX = dotScaleValue
-                  scaleY = dotScaleValue
+          plottedPlayers.forEachIndexed { idx, playerItem ->
+            androidx.compose.runtime.key(playerItem.profile.userId) {
+              val (dx, dy, bearing) = remember(playerItem.distanceMeters, playerItem.bearingDegrees, idx, searchRadiusMeters, radarRadiusPx) {
+                val normalizedDist = if (playerItem.distanceMeters > 0f) {
+                  (playerItem.distanceMeters / searchRadiusMeters.toFloat()).coerceIn(0.20f, 0.84f)
+                } else {
+                  0.38f + (idx * 0.08f).coerceAtMost(0.42f)
                 }
-                .clickable { onPlayerClick(playerItem) }
-                .testTag("radar_player_dot_${playerItem.profile.userId}"),
-              contentAlignment = Alignment.Center,
-            ) {
-              Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(contentAlignment = Alignment.Center) {
-                  if (playerItem.profile.seekingHelp || isSwept) {
-                    Box(
-                      modifier = Modifier
-                        .size((34f * pulseBreath).dp)
-                        .clip(CircleShape)
-                        .background(
-                          (if (playerItem.profile.seekingHelp) tertiaryColor else playerDotColor)
-                            .copy(alpha = 0.28f)
-                        ),
-                    )
+                val b = if (playerItem.distanceMeters > 0f) {
+                  playerItem.bearingDegrees
+                } else {
+                  (idx * 55f) + 25f
+                }
+                val angleRad = Math.toRadians((b - 90f).toDouble())
+                val rPx = (radarRadiusPx * 0.80f) * normalizedDist
+                Triple((rPx * cos(angleRad)).roundToInt(), (rPx * sin(angleRad)).roundToInt(), b)
+              }
+
+              val isSwept by remember(bearing, isHighTier, isBroadcasting) {
+                derivedStateOf {
+                  isHighTier && isBroadcasting && isAngleNearSweep(bearing, sweepAngleState.value)
+                }
+              }
+              val dotScaleValue = if (isHighTier) {
+                val animScale by animateFloatAsState(
+                  targetValue = if (isSwept || playerItem.profile.seekingHelp) 1.15f else 1.0f,
+                  animationSpec = spring(dampingRatio = 0.58f, stiffness = 400f),
+                  label = "playerDotScale",
+                )
+                animScale
+              } else {
+                1.0f
+              }
+
+              val playerDotColor = remember(playerItem.profile.avatarColorHex, primaryColor) {
+                runCatching {
+                  Color(android.graphics.Color.parseColor(playerItem.profile.avatarColorHex))
+                }.getOrElse { primaryColor }
+              }
+              val currentPlayerItem by rememberUpdatedState(playerItem)
+
+              Box(
+                modifier = Modifier
+                  .align(Alignment.Center)
+                  .offset { IntOffset(dx, dy) }
+                  .size(48.dp)
+                  .graphicsLayer {
+                    scaleX = dotScaleValue
+                    scaleY = dotScaleValue
                   }
-                  Surface(
-                    shape = CircleShape,
-                    color = playerDotColor,
-                    shadowElevation = 4.dp,
-                    modifier = Modifier
-                      .size(28.dp)
-                      .border(
-                        width = 2.dp,
-                        color = if (playerItem.profile.seekingHelp) tertiaryColor else Color.White,
-                        shape = CircleShape,
-                      ),
-                  ) {
-                    Box(contentAlignment = Alignment.Center) {
-                      Icon(
-                        imageVector = if (playerItem.profile.seekingHelp) {
-                          Icons.Rounded.VolunteerActivism
-                        } else {
-                          Icons.Rounded.Person
-                        },
-                        contentDescription = playerItem.profile.callsign,
-                        tint = Color.White,
-                        modifier = Modifier.size(15.dp),
+                  .clickable {
+                    HapticFeedbackHelper.performRadarPinTap(context)
+                    onPlayerClick(currentPlayerItem)
+                  }
+                  .testTag("radar_player_dot_${playerItem.profile.userId}"),
+                contentAlignment = Alignment.Center,
+              ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                  Box(contentAlignment = Alignment.Center) {
+                    if (playerItem.profile.seekingHelp || isSwept) {
+                      Box(
+                        modifier = Modifier
+                          .size(34.dp)
+                          .graphicsLayer {
+                            val b = pulseBreathState.value
+                            scaleX = b
+                            scaleY = b
+                          }
+                          .clip(CircleShape)
+                          .background(
+                            (if (playerItem.profile.seekingHelp) tertiaryColor else playerDotColor)
+                              .copy(alpha = 0.28f)
+                          ),
                       )
                     }
+                    Surface(
+                      shape = CircleShape,
+                      color = playerDotColor,
+                      shadowElevation = 4.dp,
+                      modifier = Modifier
+                        .size(28.dp)
+                        .border(
+                          width = 2.dp,
+                          color = if (playerItem.profile.seekingHelp) tertiaryColor else Color.White,
+                          shape = CircleShape,
+                        ),
+                    ) {
+                      Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                          imageVector = if (playerItem.profile.seekingHelp) {
+                            Icons.Rounded.VolunteerActivism
+                          } else {
+                            Icons.Rounded.Person
+                          },
+                          contentDescription = playerItem.profile.callsign,
+                          tint = Color.White,
+                          modifier = Modifier.size(15.dp),
+                        )
+                      }
+                    }
                   }
-                }
-                Surface(
-                  color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-                  shape = RoundedCornerShape(6.dp),
-                ) {
-                  Text(
-                    text = playerItem.profile.callsign.take(8),
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
-                  )
+                  Surface(
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                    shape = RoundedCornerShape(6.dp),
+                  ) {
+                    Text(
+                      text = playerItem.profile.callsign.take(8),
+                      style = MaterialTheme.typography.labelSmall,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                      modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                    )
+                  }
                 }
               }
             }
           }
 
-          // Center User Avatar Marker
+          // Center User Avatar Marker (reads pulseBreathState inside graphicsLayer to avoid recomposition)
           Surface(
             shape = CircleShape,
             color = primaryColor,
@@ -626,7 +678,7 @@ fun RoundRadarMap(
               .align(Alignment.Center)
               .size(42.dp)
               .graphicsLayer {
-                val s = if (!isLowTier && isBroadcasting) 0.96f + (pulseBreath - 0.92f) * 0.28f else 1f
+                val s = if (!isLowTier && isBroadcasting) 0.96f + (pulseBreathState.value - 0.92f) * 0.28f else 1f
                 scaleX = s
                 scaleY = s
               }
@@ -744,13 +796,12 @@ fun RoundRadarMap(
           Box(
             modifier = Modifier
               .size(8.dp)
+              .graphicsLayer {
+                alpha = if (isBroadcasting) liveDotAlphaState.value else 1f
+              }
               .clip(CircleShape)
               .background(
-                if (isBroadcasting) {
-                  primaryColor.copy(alpha = liveDotAlpha)
-                } else {
-                  MaterialTheme.colorScheme.outline
-                }
+                if (isBroadcasting) primaryColor else MaterialTheme.colorScheme.outline
               ),
           )
           Text(

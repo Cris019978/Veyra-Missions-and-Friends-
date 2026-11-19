@@ -80,6 +80,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -101,6 +103,7 @@ import com.example.data.model.Mission
 import com.example.data.model.MissionCategory
 import com.example.data.model.MissionWithDistance
 import com.example.data.model.NearbyPlayerItem
+import com.example.ui.components.ConfettiCelebrationOverlay
 import com.example.ui.components.ExpandedRadarMapDialog
 import com.example.ui.components.MissionDetailSheet
 import com.example.ui.components.MissionIcons
@@ -111,6 +114,7 @@ import com.example.ui.components.TilePuzzleGameDialog
 import com.example.ui.components.WireConnectGameDialog
 import com.example.ui.viewmodel.RadarQuestUiState
 import com.example.util.GeoUtils
+import com.example.util.HapticFeedbackHelper
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -135,20 +139,32 @@ fun RadarHomeScreen(
   onRejectMission: (String) -> Unit = {},
   onCancelActiveMission: () -> Unit = {},
   onRespawnRandomMissions: () -> Unit = {},
+  onDialogVisibilityChanged: (Boolean) -> Unit = {},
+  useExternalConfettiHost: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
   var selectedCategory by remember { mutableStateOf("all") }
   var selectedPlayer by remember { mutableStateOf<NearbyPlayerItem?>(null) }
-  var selectedMissionId by remember { mutableStateOf<String?>(null) }
+  var selectedMission by remember { mutableStateOf<MissionWithDistance?>(null) }
   var showExpandedMap by remember { mutableStateOf(false) }
   var activeMissionPlayTarget by remember { mutableStateOf<Mission?>(null) }
   var showCreateMissionDialog by remember { mutableStateOf(false) }
+  var localCelebrationTrigger by remember { mutableLongStateOf(0L) }
 
   val disableDecorAnimations = uiState.settings.animationTier == "low"
 
-  val activeSelectedMission = remember(selectedMissionId, uiState.missions) {
-    selectedMissionId?.let { id -> uiState.missions.firstOrNull { it.mission.id == id } }
+  val isModalOpen = selectedMission != null ||
+    selectedPlayer != null ||
+    activeMissionPlayTarget != null ||
+    showCreateMissionDialog
+  val pauseRadarAnimations = isModalOpen || showExpandedMap
+
+  LaunchedEffect(isModalOpen) {
+    onDialogVisibilityChanged(isModalOpen)
+  }
+  DisposableEffect(Unit) {
+    onDispose { onDialogVisibilityChanged(false) }
   }
 
   val favoriteCategories = remember(uiState.settings.favoriteCategories) {
@@ -178,12 +194,12 @@ fun RadarHomeScreen(
       if (item.isWithinProximity && uiState.hasLocationPermission) {
         onAcceptMission(item.mission.id)
       }
-      selectedMissionId = item.mission.id
+      selectedMission = item
     } else if (item.isWithinProximity && uiState.hasLocationPermission) {
       onAcceptMission(item.mission.id)
       activeMissionPlayTarget = item.mission
     } else {
-      selectedMissionId = item.mission.id
+      selectedMission = item
     }
   }
 
@@ -208,7 +224,7 @@ fun RadarHomeScreen(
         verticalArrangement = Arrangement.spacedBy(14.dp),
       ) {
         // 1. Player HUD Header
-        item {
+        item(key = "hud_header") {
           val level = uiState.myProfile?.level ?: 1L
           val xp = uiState.myProfile?.xp ?: 0L
           val xpInLevel = (xp % 250L) / 250f
@@ -359,7 +375,7 @@ fun RadarHomeScreen(
 
         // 2. Location Permission Prompt if not yet granted
         if (!uiState.hasLocationPermission) {
-          item {
+          item(key = "location_permission_card") {
             Card(
               colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.tertiaryContainer,
@@ -521,7 +537,7 @@ fun RadarHomeScreen(
         }
 
         // 3. Top-Center Animated Round Radar Map
-        item {
+        item(key = "round_radar_map") {
           RoundRadarMap(
             myProfile = uiState.myProfile,
             nearbyPlayers = uiState.nearbyPlayers,
@@ -532,8 +548,9 @@ fun RadarHomeScreen(
             isBroadcasting = uiState.isBroadcastingRadar,
             hasLocationPermission = uiState.hasLocationPermission,
             activeAcceptedMissionId = uiState.activeAcceptedMissionId,
+            pauseAnimations = pauseRadarAnimations,
             onPlayerClick = { selectedPlayer = it },
-            onMissionClick = { selectedMissionId = it.mission.id },
+            onMissionClick = { selectedMission = it },
             onCycleRadius = onCycleRadius,
             onExpandMap = { showExpandedMap = true },
             modifier = Modifier.padding(top = 2.dp),
@@ -541,7 +558,7 @@ fun RadarHomeScreen(
         }
 
         // 4. Nearby Players Strip
-        item {
+        item(key = "nearby_players_strip") {
           Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
               modifier = Modifier
@@ -595,7 +612,11 @@ fun RadarHomeScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
               ) {
-                items(uiState.nearbyPlayers, key = { it.profile.userId }) { item ->
+                items(
+                  items = uiState.nearbyPlayers,
+                  key = { it.profile.userId },
+                  contentType = { "nearby_player_card" },
+                ) { item ->
                   NearbyPlayerCard(
                     item = item,
                     onClick = { selectedPlayer = item },
@@ -608,7 +629,7 @@ fun RadarHomeScreen(
         }
 
         // 5. Bottom Section: Randomized 28+ Real-Life & Mini-Game Missions
-        item {
+        item(key = "missions_section_header") {
           Column(
             modifier = Modifier
               .fillMaxWidth()
@@ -682,7 +703,7 @@ fun RadarHomeScreen(
         }
 
         // Interactive Category & Gameplay Type Pills Bar
-        item {
+        item(key = "mission_category_pills_bar") {
           LazyRow(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -732,7 +753,7 @@ fun RadarHomeScreen(
               )
             }
 
-            items(MissionCategory.entries, key = { it.key }) { cat ->
+            items(MissionCategory.entries, key = { it.key }, contentType = { "category_pill" }) { cat ->
               val pillCount = if (cat == MissionCategory.PUZZLE) {
                 uiState.missions.count { it.mission.category == "puzzle" || it.mission.missionType in setOf("wires", "puzzle", "memory") }
               } else {
@@ -754,7 +775,7 @@ fun RadarHomeScreen(
         }
 
         if (filteredMissions.isEmpty()) {
-          item {
+          item(key = "missions_empty_card") {
             Card(
               colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
               shape = MaterialTheme.shapes.large,
@@ -791,7 +812,11 @@ fun RadarHomeScreen(
             }
           }
         } else {
-          items(filteredMissions, key = { it.mission.id }) { item ->
+          items(
+            items = filteredMissions,
+            key = { it.mission.id },
+            contentType = { "mission_card" },
+          ) { item ->
             val queuePos = uiState.waitingMissionQueue.indexOf(item.mission.id).takeIf { it >= 0 }?.plus(1)
             MissionCard(
               item = item,
@@ -800,7 +825,7 @@ fun RadarHomeScreen(
               waitQueuePosition = queuePos,
               hasLocationPermission = uiState.hasLocationPermission,
               disableAnimations = disableDecorAnimations,
-              onOpenDetails = { selectedMissionId = item.mission.id },
+              onOpenDetails = { selectedMission = item },
               onLaunchMission = { launchMissionFlow(item) },
               onAccept = { onAcceptMission(item.mission.id) },
               onWait = { onWaitMission(item.mission.id) },
@@ -809,6 +834,13 @@ fun RadarHomeScreen(
             )
           }
         }
+      }
+
+      if (!useExternalConfettiHost) {
+        ConfettiCelebrationOverlay(
+          triggerKey = localCelebrationTrigger,
+          disableAnimations = disableDecorAnimations,
+        )
       }
     }
   }
@@ -824,14 +856,15 @@ fun RadarHomeScreen(
       userLon = uiState.currentLocation?.longitude ?: uiState.myProfile?.longitude?.takeIf { it != 0.0 } ?: -99.1332,
       safePublicAnchorsCount = uiState.safePublicAnchorsCount,
       activeAcceptedMissionId = uiState.activeAcceptedMissionId,
+      pauseMapUpdates = isModalOpen,
       onDismiss = { showExpandedMap = false },
-      onMissionClick = { selectedMissionId = it.mission.id },
+      onMissionClick = { selectedMission = it },
       onPlayerClick = { selectedPlayer = it },
       onRespawnRandomMissions = onRespawnRandomMissions,
     )
   }
 
-  activeSelectedMission?.let { item ->
+  selectedMission?.let { item ->
     val queuePos = uiState.waitingMissionQueue.indexOf(item.mission.id).takeIf { it >= 0 }?.plus(1)
     MissionDetailSheet(
       item = item,
@@ -840,33 +873,37 @@ fun RadarHomeScreen(
       isAccepted = item.mission.id == uiState.activeAcceptedMissionId,
       waitQueuePosition = queuePos,
       isSubmitting = uiState.isSubmitting,
-      onDismiss = { selectedMissionId = null },
+      onDismiss = { selectedMission = null },
       onStartMissionAction = {
-        selectedMissionId = null
+        selectedMission = null
         launchMissionFlow(item)
       },
       onCompleteMiniGame = { caption, isPublic ->
         onCompleteMiniGame(item.mission, caption, isPublic)
-        selectedMissionId = null
+        if (!useExternalConfettiHost) {
+          localCelebrationTrigger += 1L
+          HapticFeedbackHelper.performMissionVerified(context)
+        }
+        selectedMission = null
       },
       onAcceptMission = {
         onAcceptMission(item.mission.id)
-        selectedMissionId = null
+        selectedMission = null
       },
       onWaitMission = {
         onWaitMission(item.mission.id)
-        selectedMissionId = null
+        selectedMission = null
       },
       onRejectMission = {
         onRejectMission(item.mission.id)
-        selectedMissionId = null
+        selectedMission = null
       },
       onOpenExpandedMap = {
-        selectedMissionId = null
+        selectedMission = null
         showExpandedMap = true
       },
       onRequestLocationPermission = {
-        selectedMissionId = null
+        selectedMission = null
         onRequestLocationPermission()
       },
     )
@@ -892,6 +929,10 @@ fun RadarHomeScreen(
         onDismiss = { activeMissionPlayTarget = null },
         onComplete = { caption, isPublic ->
           onCompleteMiniGame(mission, caption, isPublic)
+          if (!useExternalConfettiHost) {
+            localCelebrationTrigger += 1L
+            HapticFeedbackHelper.performMissionVerified(context)
+          }
           activeMissionPlayTarget = null
         },
       )
@@ -902,6 +943,10 @@ fun RadarHomeScreen(
         onDismiss = { activeMissionPlayTarget = null },
         onComplete = { caption, isPublic ->
           onCompleteMiniGame(mission, caption, isPublic)
+          if (!useExternalConfettiHost) {
+            localCelebrationTrigger += 1L
+            HapticFeedbackHelper.performMissionVerified(context)
+          }
           activeMissionPlayTarget = null
         },
       )
@@ -912,6 +957,10 @@ fun RadarHomeScreen(
         onDismiss = { activeMissionPlayTarget = null },
         onConfirmPhoto = { caption, base64, isPublic ->
           onConfirmMissionPhoto(mission, caption, base64, isPublic)
+          if (!useExternalConfettiHost) {
+            localCelebrationTrigger += 1L
+            HapticFeedbackHelper.performMissionVerified(context)
+          }
           activeMissionPlayTarget = null
         },
       )
@@ -1033,9 +1082,12 @@ private fun NearbyPlayerCard(
   onQuickHelp: () -> Unit,
 ) {
   val player = item.profile
-  val dotColor = runCatching {
-    Color(android.graphics.Color.parseColor(player.avatarColorHex))
-  }.getOrElse { MaterialTheme.colorScheme.primary }
+  val primaryFallback = MaterialTheme.colorScheme.primary
+  val dotColor = remember(player.avatarColorHex, primaryFallback) {
+    runCatching {
+      Color(android.graphics.Color.parseColor(player.avatarColorHex))
+    }.getOrElse { primaryFallback }
+  }
 
   Card(
     colors = CardDefaults.cardColors(
