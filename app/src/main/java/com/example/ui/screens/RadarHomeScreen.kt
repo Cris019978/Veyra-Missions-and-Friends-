@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Brush
 import androidx.compose.material.icons.rounded.Cable
 import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.Casino
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudOff
@@ -140,6 +141,7 @@ fun RadarHomeScreen(
   onCancelActiveMission: () -> Unit = {},
   onRespawnRandomMissions: () -> Unit = {},
   onDialogVisibilityChanged: (Boolean) -> Unit = {},
+  onOpenRouletteLab: (() -> Unit)? = null,
   useExternalConfettiHost: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
@@ -269,7 +271,7 @@ fun RadarHomeScreen(
                 LinearProgressIndicator(
                   progress = { xpInLevel },
                   modifier = Modifier
-                    .width(120.dp)
+                    .width(96.dp)
                     .height(7.dp)
                     .clip(CircleShape),
                 )
@@ -321,6 +323,19 @@ fun RadarHomeScreen(
                     imageVector = Icons.Rounded.Notifications,
                     contentDescription = "Notificaciones",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+              }
+
+              if (onOpenRouletteLab != null) {
+                IconButton(
+                  onClick = onOpenRouletteLab,
+                  modifier = Modifier.testTag("open_roulette_lab_button"),
+                ) {
+                  Icon(
+                    imageVector = Icons.Rounded.Casino,
+                    contentDescription = "Abrir Ruleta Lab",
+                    tint = MaterialTheme.colorScheme.primary,
                   )
                 }
               }

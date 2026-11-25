@@ -71,6 +71,8 @@ import com.example.data.local.ThemePrefsSnapshot
 import com.example.data.local.db.VeyraLocalDatabase
 import com.example.data.location.LocationTracker
 import com.example.data.repository.RadarQuestRepository
+import com.example.roulette.RouletteStateManager
+import com.example.roulette.RouletteTestScreen
 import com.example.service.ProximityGuidanceService
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.RegistrationCelebrationHost
@@ -234,11 +236,19 @@ private fun MainAppShell(
   var showStyleInProfile by remember { mutableStateOf(false) }
   var showNotificationsSheet by remember { mutableStateOf(false) }
   var radarModalDialogOpen by remember { mutableStateOf(false) }
+  var showRouletteLab by remember { mutableStateOf(false) }
+  val rouletteStateManager: RouletteStateManager = viewModel(
+    key = "roulette_lab_$currentUserId",
+    factory = viewModelFactory {
+      initializer { RouletteStateManager() }
+    },
+  )
   val disableAnimations = uiState.settings.animationTier == "low"
   val gestureNavEnabled = uiState.settings.gestureNavEnabled
 
   val anyOverlayModalOpen = radarModalDialogOpen ||
     showNotificationsSheet ||
+    showRouletteLab ||
     uiState.showOnboardingQuest ||
     uiState.queuedPromptMission != null
 
@@ -486,6 +496,7 @@ private fun MainAppShell(
                 onCancelActiveMission = { viewModel.cancelActiveMission() },
                 onRespawnRandomMissions = { viewModel.respawnRandomMissions() },
                 onDialogVisibilityChanged = { radarModalDialogOpen = it },
+                onOpenRouletteLab = { showRouletteLab = true },
                 useExternalConfettiHost = true,
               )
 
@@ -671,6 +682,16 @@ private fun MainAppShell(
         },
         onReject = { viewModel.rejectMission(queued.mission.id) },
         onKeepWaiting = { viewModel.dismissQueuedPromptKeepWaiting() },
+      )
+    }
+
+    if (showRouletteLab) {
+      BackHandler {
+        showRouletteLab = false
+      }
+      RouletteTestScreen(
+        stateManager = rouletteStateManager,
+        onClose = { showRouletteLab = false },
       )
     }
   }

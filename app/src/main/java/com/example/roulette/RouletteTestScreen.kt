@@ -1,0 +1,1280 @@
+package com.example.roulette
+
+import android.graphics.Paint
+import android.graphics.Typeface
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.Casino
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.rounded.MilitaryTech
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.SettingsEthernet
+import androidx.compose.material.icons.rounded.TrackChanges
+import androidx.compose.material.icons.rounded.ViewCarousel
+import androidx.compose.material.icons.rounded.WarningAmber
+import androidx.compose.material.icons.rounded.WorkspacePremium
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import java.util.Locale
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
+
+/**
+ * Pantalla completa autocontenida de prueba en Jetpack Compose para la Ruleta de Doble Vista.
+ *
+ * Consume [RouletteStateManager] en memoria sin acoplarse a persistencia en disco.
+ * TODO [Persistencia Local Futura]: Al integrar con el flujo principal, conectar un repositorio
+ * en [RouletteStateManager] para restaurar giros, XP, misiones y títulos entre sesiones.
+ */
+@Composable
+fun RouletteTestScreen(
+  stateManager: RouletteStateManager,
+  onClose: (() -> Unit)? = null,
+  modifier: Modifier = Modifier,
+) {
+  val uiState by stateManager.uiState.collectAsStateWithLifecycle()
+
+  RouletteTestScreenContent(
+    uiState = uiState,
+    onSwitchView = stateManager::switchView,
+    onSpinAnimated = { stateManager.spinOnceAnimated() },
+    onSpinInstant = stateManager::spinOnceInstant,
+    onSimulateBatch = stateManager::simulateBatchSpins,
+    onToggleDebugPanel = stateManager::toggleDebugPanel,
+    onReset = stateManager::resetAll,
+    onClose = onClose,
+    modifier = modifier,
+  )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+fun RouletteTestScreenContent(
+  uiState: RouletteUiState,
+  onSwitchView: (RouletteDisplayView) -> Unit,
+  onSpinAnimated: () -> Unit,
+  onSpinInstant: () -> Unit,
+  onSimulateBatch: (Int) -> Unit,
+  onToggleDebugPanel: () -> Unit,
+  onReset: () -> Unit,
+  onClose: (() -> Unit)? = null,
+  modifier: Modifier = Modifier,
+) {
+  val prizes = remember(uiState.prizeProbabilities) {
+    if (uiState.prizeProbabilities.isNotEmpty()) {
+      uiState.prizeProbabilities.map { it.prize }
+    } else {
+      RouletteCatalogDefaults.defaultPrizes
+    }
+  }
+
+  Surface(
+    color = MaterialTheme.colorScheme.background,
+    modifier = modifier
+      .fillMaxSize()
+      .windowInsetsPadding(WindowInsets.safeDrawing)
+      .testTag("roulette_test_screen"),
+  ) {
+    Box(
+      contentAlignment = Alignment.TopCenter,
+      modifier = Modifier.fillMaxSize(),
+    ) {
+      LazyColumn(
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier
+          .fillMaxSize()
+          .widthIn(max = 680.dp)
+          .testTag("roulette_lazy_list"),
+      ) {
+        item(key = "header") {
+          RouletteHeaderBar(
+            uiState = uiState,
+            onClose = onClose,
+          )
+        }
+
+        item(key = "view_switcher") {
+          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SingleChoiceSegmentedButtonRow(
+              modifier = Modifier.fillMaxWidth(),
+            ) {
+              RouletteDisplayView.entries.forEachIndexed { index, viewMode ->
+                SegmentedButton(
+                  selected = uiState.activeView == viewMode,
+                  onClick = { onSwitchView(viewMode) },
+                  shape = SegmentedButtonDefaults.itemShape(
+                    index = index,
+                    count = RouletteDisplayView.entries.size,
+                  ),
+                  icon = {
+                    Icon(
+                      imageVector = if (viewMode == RouletteDisplayView.CLASSIC) {
+                        Icons.Rounded.TrackChanges
+                      } else {
+                        Icons.Rounded.ViewCarousel
+                      },
+                      contentDescription = null,
+                      modifier = Modifier.size(18.dp),
+                    )
+                  },
+                  modifier = Modifier.testTag(
+                    if (viewMode == RouletteDisplayView.CLASSIC) {
+                      "roulette_view_classic"
+                    } else {
+                      "roulette_view_horizontal"
+                    },
+                  ),
+                ) {
+                  Text(
+                    text = viewMode.label,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                }
+              }
+            }
+          }
+        }
+
+        item(key = "roulette_stage") {
+          Card(
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            ),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)),
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Column(
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.spacedBy(14.dp),
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            ) {
+              when (uiState.activeView) {
+                RouletteDisplayView.CLASSIC -> ClassicRouletteWheel(
+                  prizes = prizes,
+                  spinNonce = uiState.spinAnimationNonce,
+                  targetIndex = uiState.pendingTargetPrizeIndex,
+                  lastWonPrizeId = uiState.lastWonRecord?.prize?.id,
+                  isSpinning = uiState.isSpinning,
+                )
+
+                RouletteDisplayView.HORIZONTAL -> HorizontalRouletteTape(
+                  prizes = prizes,
+                  spinNonce = uiState.spinAnimationNonce,
+                  targetIndex = uiState.pendingTargetPrizeIndex,
+                  lastWonPrizeId = uiState.lastWonRecord?.prize?.id,
+                  isSpinning = uiState.isSpinning,
+                )
+              }
+
+              FloorChargeBar(
+                chargePercent = uiState.floorChargePercent,
+                triggersCount = uiState.floorBonusTriggers,
+              )
+
+              Button(
+                onClick = onSpinAnimated,
+                enabled = !uiState.isSpinning,
+                shape = RoundedCornerShape(16.dp),
+                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .testTag("roulette_spin_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Rounded.Casino,
+                  contentDescription = null,
+                  modifier = Modifier.size(20.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                  text = if (uiState.isSpinning) {
+                    "Girando ruleta..."
+                  } else {
+                    "Girar Ruleta (${uiState.activeView.label})"
+                  },
+                  style = MaterialTheme.typography.titleSmall,
+                  fontWeight = FontWeight.Bold,
+                )
+              }
+            }
+          }
+        }
+
+        uiState.lastWonRecord?.let { latest ->
+          item(key = "last_reward") {
+            LastRewardBanner(
+              record = latest,
+              completedMissionTitle = uiState.lastCompletedSpinMissionTitle,
+            )
+          }
+        }
+
+        if (uiState.unlockedExclusiveTitles.isNotEmpty() ||
+          uiState.activeRandomMissions.isNotEmpty() ||
+          uiState.activeHardMissions.isNotEmpty()
+        ) {
+          item(key = "unlocks_summary") {
+            UnlocksAndMissionsSummaryCard(uiState = uiState)
+          }
+        }
+
+        item(key = "spin_missions") {
+          SpinMissionsCard(missions = uiState.spinMissions)
+        }
+
+        item(key = "debug_panel") {
+          RouletteDebugPanel(
+            uiState = uiState,
+            onToggleExpand = onToggleDebugPanel,
+            onSpinInstant = onSpinInstant,
+            onSimulate10 = { onSimulateBatch(10) },
+            onSimulate50 = { onSimulateBatch(50) },
+            onReset = onReset,
+          )
+        }
+      }
+    }
+  }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RouletteHeaderBar(
+  uiState: RouletteUiState,
+  onClose: (() -> Unit)?,
+) {
+  Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.SpaceBetween,
+      modifier = Modifier.fillMaxWidth(),
+    ) {
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = "Ruleta Anti-Fórmula",
+          style = MaterialTheme.typography.headlineSmall,
+          fontWeight = FontWeight.ExtraBold,
+        )
+        Text(
+          text = "Modo prueba en memoria • Recalibración dinámica",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+      if (onClose != null) {
+        IconButton(
+          onClick = onClose,
+          modifier = Modifier.testTag("roulette_close_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Rounded.Close,
+            contentDescription = "Cerrar prueba de ruleta",
+          )
+        }
+      }
+    }
+
+    FlowRow(
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      StatPillChip(label = "Giros", value = uiState.totalSpins.toString(), tag = "roulette_stat_spins")
+      StatPillChip(label = "XP", value = "${uiState.accumulatedXp}", tag = "roulette_stat_xp")
+      StatPillChip(label = "Niveles +", value = "+${uiState.bonusLevelsWon}", tag = "roulette_stat_levels")
+      StatPillChip(label = "Títulos", value = "${uiState.unlockedExclusiveTitles.size}/2", tag = "roulette_stat_titles")
+    }
+  }
+}
+
+@Composable
+private fun StatPillChip(
+  label: String,
+  value: String,
+  tag: String,
+) {
+  Surface(
+    shape = RoundedCornerShape(12.dp),
+    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+    modifier = Modifier.testTag(tag),
+  ) {
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+    ) {
+      Text(
+        text = label,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      Text(
+        text = value,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.primary,
+      )
+    }
+  }
+}
+
+@Composable
+private fun FloorChargeBar(
+  chargePercent: Int,
+  triggersCount: Int,
+) {
+  Column(
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+    modifier = Modifier.fillMaxWidth(),
+  ) {
+    Row(
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+      modifier = Modifier.fillMaxWidth(),
+    ) {
+      Text(
+        text = "Carga de Impulso (piso 1 XP)",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      Text(
+        text = "$chargePercent% • +50 XP al 100% (x$triggersCount)",
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.primary,
+      )
+    }
+    LinearProgressIndicator(
+      progress = { (chargePercent / 100f).coerceIn(0f, 1f) },
+      modifier = Modifier
+        .fillMaxWidth()
+        .height(8.dp)
+        .clip(CircleShape),
+    )
+  }
+}
+
+@Composable
+private fun ClassicRouletteWheel(
+  prizes: List<RoulettePrize>,
+  spinNonce: Long,
+  targetIndex: Int,
+  lastWonPrizeId: String?,
+  isSpinning: Boolean,
+) {
+  val wheelAngle = remember { Animatable(0f) }
+
+  LaunchedEffect(spinNonce) {
+    if (spinNonce > 0L && prizes.isNotEmpty()) {
+      val sweep = 360f / prizes.size
+      val desiredMod = ((360f - (targetIndex * sweep)) % 360f + 360f) % 360f
+      val currentMod = ((wheelAngle.value % 360f) + 360f) % 360f
+      val deltaToTarget = ((desiredMod - currentMod) + 360f) % 360f
+      val extraSpins = 360f * 5f
+      val subtleJitter = (((spinNonce % 5L).toInt() - 2) * (sweep * 0.11f))
+      val finalAngle = wheelAngle.value + extraSpins + deltaToTarget + subtleJitter
+
+      wheelAngle.animateTo(
+        targetValue = finalAngle,
+        animationSpec = tween(
+          durationMillis = 2100,
+          easing = CubicBezierEasing(0.10f, 0.88f, 0.18f, 1.0f),
+        ),
+      )
+    }
+  }
+
+  val surfaceBase = MaterialTheme.colorScheme.surfaceContainerHighest
+  val rimColor = MaterialTheme.colorScheme.outlineVariant
+  val hubBg = MaterialTheme.colorScheme.surface
+  val pointerColor = MaterialTheme.colorScheme.primary
+  val onSurfaceColor = MaterialTheme.colorScheme.onSurface
+
+  val textPaint = remember {
+    Paint().apply {
+      isAntiAlias = true
+      textAlign = Paint.Align.CENTER
+      typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    }
+  }
+
+  Box(
+    contentAlignment = Alignment.Center,
+    modifier = Modifier
+      .fillMaxWidth()
+      .height(300.dp)
+      .testTag("roulette_classic_wheel"),
+  ) {
+    Canvas(modifier = Modifier.size(284.dp)) {
+      val radius = size.minDimension / 2f - 14.dp.toPx()
+      val center = Offset(size.width / 2f, size.height / 2f)
+      val sweep = 360f / prizes.size.coerceAtLeast(1)
+
+      // Halo exterior
+      drawCircle(
+        brush = Brush.radialGradient(
+          colors = listOf(pointerColor.copy(alpha = 0.22f), Color.Transparent),
+          center = center,
+          radius = radius + 16.dp.toPx(),
+        ),
+        radius = radius + 16.dp.toPx(),
+        center = center,
+      )
+
+      rotate(degrees = wheelAngle.value, pivot = center) {
+        prizes.forEachIndexed { idx, prize ->
+          val startDeg = -90f - (sweep / 2f) + (idx * sweep)
+          val isLatestWinner = !isSpinning && lastWonPrizeId == prize.id
+          val sectorFill = if (isLatestWinner) {
+            prize.rarity.accentColor.copy(alpha = 0.44f)
+          } else {
+            prize.rarity.accentColor.copy(alpha = if (idx % 2 == 0) 0.22f else 0.14f)
+          }
+
+          drawArc(
+            color = surfaceBase,
+            startAngle = startDeg,
+            sweepAngle = sweep,
+            useCenter = true,
+            topLeft = Offset(center.x - radius, center.y - radius),
+            size = Size(radius * 2f, radius * 2f),
+          )
+          drawArc(
+            color = sectorFill,
+            startAngle = startDeg,
+            sweepAngle = sweep,
+            useCenter = true,
+            topLeft = Offset(center.x - radius, center.y - radius),
+            size = Size(radius * 2f, radius * 2f),
+          )
+
+          // Franja de color exterior por rareza
+          drawArc(
+            color = prize.rarity.accentColor,
+            startAngle = startDeg + 1f,
+            sweepAngle = sweep - 2f,
+            useCenter = false,
+            topLeft = Offset(center.x - radius + 4.dp.toPx(), center.y - radius + 4.dp.toPx()),
+            size = Size((radius - 4.dp.toPx()) * 2f, (radius - 4.dp.toPx()) * 2f),
+            style = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Butt),
+          )
+
+          // Divisores radiales
+          val radStart = Math.toRadians(startDeg.toDouble())
+          drawLine(
+            color = rimColor,
+            start = center,
+            end = Offset(
+              x = center.x + (radius * cos(radStart)).toFloat(),
+              y = center.y + (radius * sin(radStart)).toFloat(),
+            ),
+            strokeWidth = 1.5.dp.toPx(),
+          )
+
+          // Etiqueta corta dentro del sector
+          val midDeg = startDeg + sweep / 2f
+          val midRad = Math.toRadians(midDeg.toDouble())
+          val labelDist = radius * 0.62f
+          val lx = center.x + (labelDist * cos(midRad)).toFloat()
+          val ly = center.y + (labelDist * sin(midRad)).toFloat()
+
+          textPaint.color = if (prize.isHighRisk) {
+            Color(0xFFFCA5A5).toArgb()
+          } else {
+            onSurfaceColor.toArgb()
+          }
+          textPaint.textSize = 10.5.sp.toPx()
+
+          drawContext.canvas.nativeCanvas.save()
+          drawContext.canvas.nativeCanvas.translate(lx, ly)
+          drawContext.canvas.nativeCanvas.rotate(midDeg + 90f)
+          drawContext.canvas.nativeCanvas.drawText(shortWheelLabel(prize), 0f, 4f, textPaint)
+          drawContext.canvas.nativeCanvas.restore()
+        }
+
+        // Borde circular principal
+        drawCircle(
+          color = rimColor,
+          radius = radius,
+          center = center,
+          style = Stroke(width = 3.dp.toPx()),
+        )
+      }
+
+      // Centro metálico
+      drawCircle(color = hubBg, radius = 26.dp.toPx(), center = center)
+      drawCircle(
+        color = pointerColor,
+        radius = 26.dp.toPx(),
+        center = center,
+        style = Stroke(width = 3.dp.toPx()),
+      )
+      drawCircle(color = pointerColor, radius = 8.dp.toPx(), center = center)
+
+      // Puntero superior fijo (12 en punto)
+      val pointerTopY = center.y - radius - 12.dp.toPx()
+      val pointerTipY = center.y - radius + 12.dp.toPx()
+      val triangle = Path().apply {
+        moveTo(center.x - 11.dp.toPx(), pointerTopY)
+        lineTo(center.x + 11.dp.toPx(), pointerTopY)
+        lineTo(center.x, pointerTipY)
+        close()
+      }
+      drawPath(path = triangle, color = pointerColor)
+    }
+  }
+}
+
+@Composable
+private fun HorizontalRouletteTape(
+  prizes: List<RoulettePrize>,
+  spinNonce: Long,
+  targetIndex: Int,
+  lastWonPrizeId: String?,
+  isSpinning: Boolean,
+) {
+  val density = LocalDensity.current
+  val cardWidthDp = 126.dp
+  val cardSpacingDp = 10.dp
+  val stridePx = with(density) { (cardWidthDp + cardSpacingDp).toPx() }
+  val cycleSize = prizes.size.coerceAtLeast(1)
+  val totalSlots = cycleSize * 7
+  val tapeOffsetPx = remember(cycleSize) { Animatable(cycleSize * stridePx) }
+
+  LaunchedEffect(spinNonce) {
+    if (spinNonce > 0L && prizes.isNotEmpty()) {
+      val currentSlotNormalized = ((tapeOffsetPx.value / stridePx).roundToInt() % cycleSize + cycleSize) % cycleSize
+      val resetSlot = cycleSize + currentSlotNormalized
+      tapeOffsetPx.snapTo(resetSlot * stridePx)
+
+      val destinationSlot = (cycleSize * 5) + targetIndex
+      tapeOffsetPx.animateTo(
+        targetValue = destinationSlot * stridePx,
+        animationSpec = tween(
+          durationMillis = 2100,
+          easing = CubicBezierEasing(0.10f, 0.90f, 0.16f, 1.0f),
+        ),
+      )
+    }
+  }
+
+  Column(
+    verticalArrangement = Arrangement.spacedBy(8.dp),
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("roulette_horizontal_tape"),
+  ) {
+    BoxWithConstraints(
+      modifier = Modifier
+        .fillMaxWidth()
+        .height(148.dp)
+        .clip(RoundedCornerShape(18.dp))
+        .background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.65f))
+        .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f), RoundedCornerShape(18.dp))
+        .clipToBounds(),
+    ) {
+      val viewportWidthPx = with(density) { maxWidth.toPx() }
+      val cardWidthPx = with(density) { cardWidthDp.toPx() }
+      val centerSlotIndex = (tapeOffsetPx.value / stridePx).roundToInt().coerceIn(0, totalSlots - 1)
+      val firstVisible = (centerSlotIndex - 4).coerceAtLeast(0)
+      val lastVisible = (centerSlotIndex + 4).coerceAtMost(totalSlots - 1)
+
+      for (slotIdx in firstVisible..lastVisible) {
+        val prize = prizes[slotIdx % cycleSize]
+        val xOffsetPx = (slotIdx * stridePx) - tapeOffsetPx.value + ((viewportWidthPx - cardWidthPx) / 2f)
+        val isCenteredWinner = !isSpinning && lastWonPrizeId == prize.id && slotIdx == centerSlotIndex
+
+        TapePrizeTile(
+          prize = prize,
+          isHighlighted = isCenteredWinner,
+          modifier = Modifier
+            .width(cardWidthDp)
+            .fillMaxHeight()
+            .padding(vertical = 12.dp)
+            .graphicsLayer { translationX = xOffsetPx },
+        )
+      }
+
+      // Marcador central vertical
+      Box(
+        modifier = Modifier
+          .align(Alignment.Center)
+          .width(3.dp)
+          .fillMaxHeight()
+          .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.9f)),
+      )
+      Surface(
+        shape = RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp),
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.align(Alignment.TopCenter),
+      ) {
+        Text(
+          text = "OBJETIVO",
+          style = MaterialTheme.typography.labelSmall,
+          fontSize = 9.sp,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onPrimary,
+          modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun TapePrizeTile(
+  prize: RoulettePrize,
+  isHighlighted: Boolean,
+  modifier: Modifier = Modifier,
+) {
+  val borderColor = when {
+    isHighlighted -> MaterialTheme.colorScheme.primary
+    prize.isHighRisk -> Color(0xFFEF4444)
+    else -> prize.rarity.accentColor.copy(alpha = 0.7f)
+  }
+
+  Surface(
+    shape = RoundedCornerShape(14.dp),
+    color = MaterialTheme.colorScheme.surface,
+    border = BorderStroke(if (isHighlighted) 2.5.dp else 1.5.dp, borderColor),
+    shadowElevation = if (isHighlighted) 6.dp else 1.dp,
+    modifier = modifier,
+  ) {
+    Column(
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.SpaceBetween,
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(8.dp),
+    ) {
+      Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = prize.rarity.badgeBgColor,
+      ) {
+        Text(
+          text = if (prize.isHighRisk) "ALTO RIESGO" else prize.rarity.label.uppercase(Locale.getDefault()),
+          style = MaterialTheme.typography.labelSmall,
+          fontSize = 9.sp,
+          fontWeight = FontWeight.Bold,
+          color = if (prize.isHighRisk) Color(0xFFFCA5A5) else prize.rarity.accentColor,
+          maxLines = 1,
+          modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+      }
+
+      Icon(
+        imageVector = prizeIcon(prize),
+        contentDescription = prize.title,
+        tint = prize.rarity.accentColor,
+        modifier = Modifier.size(28.dp),
+      )
+
+      Text(
+        text = prize.title,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
+  }
+}
+
+@Composable
+private fun LastRewardBanner(
+  record: RouletteSpinRecord,
+  completedMissionTitle: String?,
+) {
+  Card(
+    colors = CardDefaults.cardColors(
+      containerColor = record.prize.rarity.badgeBgColor.copy(alpha = 0.85f),
+    ),
+    border = BorderStroke(1.dp, record.prize.rarity.accentColor.copy(alpha = 0.75f)),
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("roulette_last_reward_card"),
+  ) {
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(14.dp),
+    ) {
+      Surface(
+        shape = CircleShape,
+        color = record.prize.rarity.accentColor.copy(alpha = 0.2f),
+        modifier = Modifier.size(44.dp),
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = prizeIcon(record.prize),
+            contentDescription = null,
+            tint = record.prize.rarity.accentColor,
+          )
+        }
+      }
+
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = "Giro #${record.spinNumber} • ${record.prize.title}",
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = FontWeight.Bold,
+          color = Color.White,
+        )
+        Text(
+          text = buildString {
+            append(record.prize.subtitle)
+            if (record.bonusFloorXp > 0L) {
+              append(" • ¡Carga 100%: +${record.bonusFloorXp} XP!")
+            }
+          },
+          style = MaterialTheme.typography.bodySmall,
+          color = Color.White.copy(alpha = 0.85f),
+        )
+        if (!completedMissionTitle.isNullOrBlank()) {
+          Text(
+            text = "Misión completada: $completedMissionTitle",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = Color(0xFF6EE7B7),
+          )
+        }
+      }
+    }
+  }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun UnlocksAndMissionsSummaryCard(uiState: RouletteUiState) {
+  Card(
+    colors = CardDefaults.cardColors(
+      containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    ),
+    modifier = Modifier.fillMaxWidth(),
+  ) {
+    Column(
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+      modifier = Modifier.padding(14.dp),
+    ) {
+      if (uiState.unlockedExclusiveTitles.isNotEmpty()) {
+        Text(
+          text = "Títulos Exclusivos Desbloqueados",
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = FontWeight.Bold,
+        )
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          uiState.unlockedExclusiveTitles.forEach { title ->
+            Surface(
+              shape = RoundedCornerShape(10.dp),
+              color = MaterialTheme.colorScheme.tertiaryContainer,
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Rounded.MilitaryTech,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                  modifier = Modifier.size(16.dp),
+                )
+                Text(
+                  text = title,
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.onTertiaryContainer,
+                )
+              }
+            }
+          }
+        }
+      }
+
+      if (uiState.activeHardMissions.isNotEmpty()) {
+        Text(
+          text = "Misiones de Alto Riesgo Activas",
+          style = MaterialTheme.typography.labelLarge,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.error,
+        )
+        uiState.activeHardMissions.take(2).forEach { missionText ->
+          Text(
+            text = "• $missionText",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+        }
+      }
+
+      if (uiState.activeRandomMissions.isNotEmpty()) {
+        Text(
+          text = "Misiones Aleatorias Recientes",
+          style = MaterialTheme.typography.labelLarge,
+          fontWeight = FontWeight.SemiBold,
+          color = MaterialTheme.colorScheme.primary,
+        )
+        uiState.activeRandomMissions.take(2).forEach { missionText ->
+          Text(
+            text = "• $missionText",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun SpinMissionsCard(missions: List<RouletteSpinMission>) {
+  Card(
+    colors = CardDefaults.cardColors(
+      containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    ),
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("roulette_spin_missions_card"),
+  ) {
+    Column(
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+      modifier = Modifier.padding(14.dp),
+    ) {
+      Row(
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Text(
+          text = "5 Misiones de Ruleta Escalonadas",
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = FontWeight.Bold,
+        )
+        val doneCount = missions.count { it.isCompleted }
+        Text(
+          text = "$doneCount/${missions.size}",
+          style = MaterialTheme.typography.labelLarge,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.primary,
+        )
+      }
+
+      missions.forEach { mission ->
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+              modifier = Modifier.weight(1f),
+            ) {
+              Icon(
+                imageVector = if (mission.isCompleted) {
+                  Icons.Rounded.CheckCircle
+                } else {
+                  Icons.Rounded.AutoAwesome
+                },
+                contentDescription = null,
+                tint = if (mission.isCompleted) {
+                  Color(0xFF34D399)
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.size(16.dp),
+              )
+              Text(
+                text = "${mission.title} (${mission.currentSpins}/${mission.targetSpins})",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (mission.isCompleted) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+            Text(
+              text = buildString {
+                append("+${mission.rewardXp} XP")
+                if (mission.bonusLabel != null) {
+                  append(" • ${mission.bonusLabel}")
+                }
+              },
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.primary,
+            )
+          }
+          LinearProgressIndicator(
+            progress = { mission.progressFraction },
+            modifier = Modifier
+              .fillMaxWidth()
+              .height(6.dp)
+              .clip(CircleShape),
+          )
+        }
+      }
+    }
+  }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RouletteDebugPanel(
+  uiState: RouletteUiState,
+  onToggleExpand: () -> Unit,
+  onSpinInstant: () -> Unit,
+  onSimulate10: () -> Unit,
+  onSimulate50: () -> Unit,
+  onReset: () -> Unit,
+) {
+  Card(
+    colors = CardDefaults.cardColors(
+      containerColor = MaterialTheme.colorScheme.surfaceContainer,
+    ),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("roulette_debug_panel"),
+  ) {
+    Column(
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+      modifier = Modifier.padding(14.dp),
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Rounded.BugReport,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+          )
+          Column {
+            Text(
+              text = "Panel Debug (En Memoria)",
+              style = MaterialTheme.typography.titleSmall,
+              fontWeight = FontWeight.Bold,
+            )
+            Text(
+              text = "Simulación rápida y monitoreo anti-fórmula",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+        IconButton(onClick = onToggleExpand) {
+          Icon(
+            imageVector = if (uiState.debugPanelExpanded) {
+              Icons.Rounded.ExpandLess
+            } else {
+              Icons.Rounded.ExpandMore
+            },
+            contentDescription = if (uiState.debugPanelExpanded) "Ocultar debug" else "Mostrar debug",
+          )
+        }
+      }
+
+      FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        FilledTonalButton(
+          onClick = onSpinInstant,
+          enabled = !uiState.isSpinning,
+          modifier = Modifier.testTag("roulette_debug_spin_1"),
+        ) {
+          Text("Girar x1")
+        }
+        FilledTonalButton(
+          onClick = onSimulate10,
+          enabled = !uiState.isSpinning,
+          modifier = Modifier.testTag("roulette_debug_sim_10"),
+        ) {
+          Text("Simular x10")
+        }
+        FilledTonalButton(
+          onClick = onSimulate50,
+          enabled = !uiState.isSpinning,
+          modifier = Modifier.testTag("roulette_debug_sim_50"),
+        ) {
+          Text("Simular x50")
+        }
+        OutlinedButton(
+          onClick = onReset,
+          colors = ButtonDefaults.outlinedButtonColors(
+            contentColor = MaterialTheme.colorScheme.error,
+          ),
+          modifier = Modifier.testTag("roulette_debug_reset"),
+        ) {
+          Icon(
+            imageVector = Icons.Rounded.Refresh,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("Reset")
+        }
+      }
+
+      AnimatedVisibility(visible = uiState.debugPanelExpanded) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          HorizontalDivider()
+          Text(
+            text = "Porcentajes en Vivo y Banda de Oscilación",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+          )
+
+          uiState.prizeProbabilities.forEach { snap ->
+            ProbabilityRow(snapshot = snap)
+          }
+
+          HorizontalDivider()
+          Text(
+            text = "Historial Reciente (${uiState.spinHistory.size})",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+          )
+
+          if (uiState.spinHistory.isEmpty()) {
+            Text(
+              text = "Sin tiradas todavía. Usa Girar x1 o Simular x10/x50.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          } else {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+              uiState.spinHistory.take(12).forEach { rec ->
+                Row(
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier.fillMaxWidth(),
+                ) {
+                  Text(
+                    text = "#${rec.spinNumber} • ${rec.prize.title}",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                  )
+                  Text(
+                    text = buildString {
+                      append(String.format(Locale.US, "%.2f%%", rec.winningProbabilityPercent))
+                      if (rec.bonusFloorXp > 0L) append(" +50 XP")
+                      if (rec.wasSimulatedBatch) append(" [SIM]")
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = rec.prize.rarity.accentColor,
+                  )
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun ProbabilityRow(snapshot: PrizeProbabilitySnapshot) {
+  val delta = snapshot.deltaPercent
+  val deltaText = when {
+    delta > 0.005 -> String.format(Locale.US, "+%.2f%%", delta)
+    delta < -0.005 -> String.format(Locale.US, "%.2f%%", delta)
+    else -> "0.00%"
+  }
+  val deltaColor = when {
+    delta > 0.005 -> Color(0xFF34D399)
+    delta < -0.005 -> Color(0xFFF87171)
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
+  }
+  val tierColor = when (snapshot.oscillationTier) {
+    OscillationTier.HIGH_VOLATILITY -> Color(0xFFF59E0B)
+    OscillationTier.MODERATE -> Color(0xFF38BDF8)
+    OscillationTier.CONTAINED -> Color(0xFFA78BFA)
+  }
+
+  Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.SpaceBetween,
+      modifier = Modifier.fillMaxWidth(),
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.weight(1f),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(8.dp)
+            .clip(CircleShape)
+            .background(snapshot.prize.rarity.accentColor),
+        )
+        Text(
+          text = snapshot.prize.title,
+          style = MaterialTheme.typography.bodySmall,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.weight(1f, fill = false),
+        )
+        Surface(
+          shape = RoundedCornerShape(6.dp),
+          color = tierColor.copy(alpha = 0.16f),
+        ) {
+          Text(
+            text = snapshot.oscillationTier.label,
+            style = MaterialTheme.typography.labelSmall,
+            fontSize = 9.sp,
+            color = tierColor,
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+          )
+        }
+      }
+
+      Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+          text = deltaText,
+          style = MaterialTheme.typography.labelSmall,
+          color = deltaColor,
+        )
+        Text(
+          text = String.format(Locale.US, "%.2f%%", snapshot.probabilityPercent),
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = FontWeight.Bold,
+        )
+      }
+    }
+
+    LinearProgressIndicator(
+      progress = { snapshot.probability.toFloat().coerceIn(0f, 1f) },
+      color = snapshot.prize.rarity.accentColor,
+      trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+      modifier = Modifier
+        .fillMaxWidth()
+        .height(4.dp)
+        .clip(CircleShape),
+    )
+  }
+}
+
+private fun shortWheelLabel(prize: RoulettePrize): String = when (prize.id) {
+  "xp_1_floor" -> "1 XP+"
+  "xp_25" -> "25 XP"
+  "xp_100" -> "100 XP"
+  "mission_random" -> "Misión"
+  "xp_350" -> "350 XP"
+  "mission_hard" -> "Riesgo!"
+  "title_oracle" -> "Oráculo"
+  "title_luck_lord" -> "Azar"
+  "xp_1000" -> "1K XP"
+  "free_level_jackpot" -> "+1 NV"
+  else -> prize.title.take(7)
+}
+
+private fun prizeIcon(prize: RoulettePrize): ImageVector = when (prize.category) {
+  RoulettePrizeCategory.XP -> Icons.Rounded.Bolt
+  RoulettePrizeCategory.FREE_LEVEL -> Icons.Rounded.WorkspacePremium
+  RoulettePrizeCategory.EXCLUSIVE_TITLE -> Icons.Rounded.MilitaryTech
+  RoulettePrizeCategory.RANDOM_MISSION -> Icons.Rounded.Explore
+  RoulettePrizeCategory.HARD_MISSION -> Icons.Rounded.WarningAmber
+}
