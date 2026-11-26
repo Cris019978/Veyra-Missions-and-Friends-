@@ -68,8 +68,11 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -439,6 +442,22 @@ private fun FloorChargeBar(
   }
 }
 
+// OPT: Modelo inmutable precalculado fuera de DrawScope para evitar trigonometría, colores y cadenas en cada frame.
+@Immutable
+private data class WheelSectorSpec(
+  val startDeg: Float,
+  val sweepDeg: Float,
+  val midDeg: Float,
+  val cosStart: Float,
+  val sinStart: Float,
+  val cosMid: Float,
+  val sinMid: Float,
+  val shortLabel: String,
+  val fillColor: Color,
+  val accentColor: Color,
+  val labelColorArgb: Int,
+)
+
 @Composable
 private fun ClassicRouletteWheel(
   prizes: List<RoulettePrize>,
@@ -483,6 +502,45 @@ private fun ClassicRouletteWheel(
     }
   }
 
+  // OPT: Precalcular geometría trigonométrica, colores y etiquetas fuera del ciclo de DrawScope.
+  val sectorSpecs = remember(prizes, lastWonPrizeId, isSpinning, onSurfaceColor) {
+    val count = prizes.size.coerceAtLeast(1)
+    val sweep = 360f / count
+    val highRiskTextArgb = Color(0xFFFCA5A5).toArgb()
+    val normalTextArgb = onSurfaceColor.toArgb()
+    prizes.mapIndexed { idx, prize ->
+      val startDeg = -90f - (sweep / 2f) + (idx * sweep)
+      val midDeg = startDeg + sweep / 2f
+      val radStart = Math.toRadians(startDeg.toDouble())
+      val midRad = Math.toRadians(midDeg.toDouble())
+      val isLatestWinner = !isSpinning && lastWonPrizeId == prize.id
+      val sectorFill = if (isLatestWinner) {
+        prize.rarity.accentColor.copy(alpha = 0.44f)
+      } else {
+        prize.rarity.accentColor.copy(alpha = if (idx % 2 == 0) 0.22f else 0.14f)
+      }
+      WheelSectorSpec(
+        startDeg = startDeg,
+        sweepDeg = sweep,
+        midDeg = midDeg,
+        cosStart = cos(radStart).toFloat(),
+        sinStart = sin(radStart).toFloat(),
+        cosMid = cos(midRad).toFloat(),
+        sinMid = sin(midRad).toFloat(),
+        shortLabel = shortWheelLabel(prize),
+        fillColor = sectorFill,
+        accentColor = prize.rarity.accentColor,
+        labelColorArgb = if (prize.isHighRisk) highRiskTextArgb else normalTextArgb,
+      )
+    }
+  }
+
+  // OPT: Reutilizar Path del puntero y lista de colores del halo sin instanciar en cada frame.
+  val pointerPath = remember { Path() }
+  val haloColors = remember(pointerColor) {
+    listOf(pointerColor.copy(alpha = 0.22f), Color.Transparent)
+  }
+
   Box(
     contentAlignment = Alignment.Center,
     modifier = Modifier
@@ -490,122 +548,116 @@ private fun ClassicRouletteWheel(
       .height(300.dp)
       .testTag("roulette_classic_wheel"),
   ) {
+    // OPT: Capa del disco rotada exclusivamente en graphicsLayer (GPU) sin recomponer ni redibujar sectores por frame.
+    Canvas(
+      modifier = Modifier
+        .size(284.dp)
+        .graphicsLayer { rotationZ = wheelAngle.value },
+    ) {
+      val radius = size.minDimension / 2f - 14.dp.toPx()
+      val center = Offset(size.width / 2f, size.height / 2f)
+      val rimInset = 4.dp.toPx()
+      val outerArcTopLeft = Offset(center.x - radius + rimInset, center.y - radius + rimInset)
+      val outerArcSize = Size((radius - rimInset) * 2f, (radius - rimInset) * 2f)
+      val baseTopLeft = Offset(center.x - radius, center.y - radius)
+      val baseSize = Size(radius * 2f, radius * 2f)
+      val rimStrokeWidth = 7.dp.toPx()
+      val dividerStroke = 1.5.dp.toPx()
+      val labelDist = radius * 0.62f
+      textPaint.textSize = 10.5.sp.toPx()
+
+      sectorSpecs.forEach { sector ->
+        drawArc(
+          color = surfaceBase,
+          startAngle = sector.startDeg,
+          sweepAngle = sector.sweepDeg,
+          useCenter = true,
+          topLeft = baseTopLeft,
+          size = baseSize,
+        )
+        drawArc(
+          color = sector.fillColor,
+          startAngle = sector.startDeg,
+          sweepAngle = sector.sweepDeg,
+          useCenter = true,
+          topLeft = baseTopLeft,
+          size = baseSize,
+        )
+
+        drawArc(
+          color = sector.accentColor,
+          startAngle = sector.startDeg + 1f,
+          sweepAngle = sector.sweepDeg - 2f,
+          useCenter = false,
+          topLeft = outerArcTopLeft,
+          size = outerArcSize,
+          style = Stroke(width = rimStrokeWidth, cap = StrokeCap.Butt),
+        )
+
+        drawLine(
+          color = rimColor,
+          start = center,
+          end = Offset(
+            x = center.x + (radius * sector.cosStart),
+            y = center.y + (radius * sector.sinStart),
+          ),
+          strokeWidth = dividerStroke,
+        )
+
+        val lx = center.x + (labelDist * sector.cosMid)
+        val ly = center.y + (labelDist * sector.sinMid)
+
+        textPaint.color = sector.labelColorArgb
+        drawContext.canvas.nativeCanvas.save()
+        drawContext.canvas.nativeCanvas.translate(lx, ly)
+        drawContext.canvas.nativeCanvas.rotate(sector.midDeg + 90f)
+        drawContext.canvas.nativeCanvas.drawText(sector.shortLabel, 0f, 4f, textPaint)
+        drawContext.canvas.nativeCanvas.restore()
+      }
+
+      drawCircle(
+        color = rimColor,
+        radius = radius,
+        center = center,
+        style = Stroke(width = 3.dp.toPx()),
+      )
+    }
+
+    // OPT: Capa estática (halo exterior, eje metálico y puntero fijo) separada del giro del disco.
     Canvas(modifier = Modifier.size(284.dp)) {
       val radius = size.minDimension / 2f - 14.dp.toPx()
       val center = Offset(size.width / 2f, size.height / 2f)
-      val sweep = 360f / prizes.size.coerceAtLeast(1)
+      val haloRadius = radius + 16.dp.toPx()
 
-      // Halo exterior
       drawCircle(
         brush = Brush.radialGradient(
-          colors = listOf(pointerColor.copy(alpha = 0.22f), Color.Transparent),
+          colors = haloColors,
           center = center,
-          radius = radius + 16.dp.toPx(),
+          radius = haloRadius,
         ),
-        radius = radius + 16.dp.toPx(),
+        radius = haloRadius,
         center = center,
       )
 
-      rotate(degrees = wheelAngle.value, pivot = center) {
-        prizes.forEachIndexed { idx, prize ->
-          val startDeg = -90f - (sweep / 2f) + (idx * sweep)
-          val isLatestWinner = !isSpinning && lastWonPrizeId == prize.id
-          val sectorFill = if (isLatestWinner) {
-            prize.rarity.accentColor.copy(alpha = 0.44f)
-          } else {
-            prize.rarity.accentColor.copy(alpha = if (idx % 2 == 0) 0.22f else 0.14f)
-          }
-
-          drawArc(
-            color = surfaceBase,
-            startAngle = startDeg,
-            sweepAngle = sweep,
-            useCenter = true,
-            topLeft = Offset(center.x - radius, center.y - radius),
-            size = Size(radius * 2f, radius * 2f),
-          )
-          drawArc(
-            color = sectorFill,
-            startAngle = startDeg,
-            sweepAngle = sweep,
-            useCenter = true,
-            topLeft = Offset(center.x - radius, center.y - radius),
-            size = Size(radius * 2f, radius * 2f),
-          )
-
-          // Franja de color exterior por rareza
-          drawArc(
-            color = prize.rarity.accentColor,
-            startAngle = startDeg + 1f,
-            sweepAngle = sweep - 2f,
-            useCenter = false,
-            topLeft = Offset(center.x - radius + 4.dp.toPx(), center.y - radius + 4.dp.toPx()),
-            size = Size((radius - 4.dp.toPx()) * 2f, (radius - 4.dp.toPx()) * 2f),
-            style = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Butt),
-          )
-
-          // Divisores radiales
-          val radStart = Math.toRadians(startDeg.toDouble())
-          drawLine(
-            color = rimColor,
-            start = center,
-            end = Offset(
-              x = center.x + (radius * cos(radStart)).toFloat(),
-              y = center.y + (radius * sin(radStart)).toFloat(),
-            ),
-            strokeWidth = 1.5.dp.toPx(),
-          )
-
-          // Etiqueta corta dentro del sector
-          val midDeg = startDeg + sweep / 2f
-          val midRad = Math.toRadians(midDeg.toDouble())
-          val labelDist = radius * 0.62f
-          val lx = center.x + (labelDist * cos(midRad)).toFloat()
-          val ly = center.y + (labelDist * sin(midRad)).toFloat()
-
-          textPaint.color = if (prize.isHighRisk) {
-            Color(0xFFFCA5A5).toArgb()
-          } else {
-            onSurfaceColor.toArgb()
-          }
-          textPaint.textSize = 10.5.sp.toPx()
-
-          drawContext.canvas.nativeCanvas.save()
-          drawContext.canvas.nativeCanvas.translate(lx, ly)
-          drawContext.canvas.nativeCanvas.rotate(midDeg + 90f)
-          drawContext.canvas.nativeCanvas.drawText(shortWheelLabel(prize), 0f, 4f, textPaint)
-          drawContext.canvas.nativeCanvas.restore()
-        }
-
-        // Borde circular principal
-        drawCircle(
-          color = rimColor,
-          radius = radius,
-          center = center,
-          style = Stroke(width = 3.dp.toPx()),
-        )
-      }
-
-      // Centro metálico
-      drawCircle(color = hubBg, radius = 26.dp.toPx(), center = center)
+      val hubRadius = 26.dp.toPx()
+      drawCircle(color = hubBg, radius = hubRadius, center = center)
       drawCircle(
         color = pointerColor,
-        radius = 26.dp.toPx(),
+        radius = hubRadius,
         center = center,
         style = Stroke(width = 3.dp.toPx()),
       )
       drawCircle(color = pointerColor, radius = 8.dp.toPx(), center = center)
 
-      // Puntero superior fijo (12 en punto)
       val pointerTopY = center.y - radius - 12.dp.toPx()
       val pointerTipY = center.y - radius + 12.dp.toPx()
-      val triangle = Path().apply {
-        moveTo(center.x - 11.dp.toPx(), pointerTopY)
-        lineTo(center.x + 11.dp.toPx(), pointerTopY)
-        lineTo(center.x, pointerTipY)
-        close()
-      }
-      drawPath(path = triangle, color = pointerColor)
+      val halfW = 11.dp.toPx()
+      pointerPath.rewind()
+      pointerPath.moveTo(center.x - halfW, pointerTopY)
+      pointerPath.lineTo(center.x + halfW, pointerTopY)
+      pointerPath.lineTo(center.x, pointerTipY)
+      pointerPath.close()
+      drawPath(path = pointerPath, color = pointerColor)
     }
   }
 }
@@ -621,7 +673,8 @@ private fun HorizontalRouletteTape(
   val density = LocalDensity.current
   val cardWidthDp = 126.dp
   val cardSpacingDp = 10.dp
-  val stridePx = with(density) { (cardWidthDp + cardSpacingDp).toPx() }
+  val stridePx = remember(density) { with(density) { (cardWidthDp + cardSpacingDp).toPx() } }
+  val cardWidthPx = remember(density) { with(density) { cardWidthDp.toPx() } }
   val cycleSize = prizes.size.coerceAtLeast(1)
   val totalSlots = cycleSize * 7
   val tapeOffsetPx = remember(cycleSize) { Animatable(cycleSize * stridePx) }
@@ -643,6 +696,16 @@ private fun HorizontalRouletteTape(
     }
   }
 
+  // OPT: derivedStateOf solo invalida cuando el carril cruza al siguiente ítem en lugar de hacerlo cada frame.
+  val centerSlotIndex by remember(stridePx, totalSlots) {
+    derivedStateOf {
+      (tapeOffsetPx.value / stridePx).roundToInt().coerceIn(0, totalSlots - 1)
+    }
+  }
+  val firstVisible = (centerSlotIndex - 4).coerceAtLeast(0)
+  val lastVisible = (centerSlotIndex + 4).coerceAtMost(totalSlots - 1)
+  val offsetReader: () -> Float = remember(tapeOffsetPx) { { tapeOffsetPx.value } }
+
   Column(
     verticalArrangement = Arrangement.spacedBy(8.dp),
     modifier = Modifier
@@ -659,25 +722,25 @@ private fun HorizontalRouletteTape(
         .clipToBounds(),
     ) {
       val viewportWidthPx = with(density) { maxWidth.toPx() }
-      val cardWidthPx = with(density) { cardWidthDp.toPx() }
-      val centerSlotIndex = (tapeOffsetPx.value / stridePx).roundToInt().coerceIn(0, totalSlots - 1)
-      val firstVisible = (centerSlotIndex - 4).coerceAtLeast(0)
-      val lastVisible = (centerSlotIndex + 4).coerceAtMost(totalSlots - 1)
+      val viewportCenterShiftPx = (viewportWidthPx - cardWidthPx) / 2f
 
       for (slotIdx in firstVisible..lastVisible) {
-        val prize = prizes[slotIdx % cycleSize]
-        val xOffsetPx = (slotIdx * stridePx) - tapeOffsetPx.value + ((viewportWidthPx - cardWidthPx) / 2f)
-        val isCenteredWinner = !isSpinning && lastWonPrizeId == prize.id && slotIdx == centerSlotIndex
+        // OPT: key(slotIdx) y lectura de offsetReader() dentro de graphicsLayer mueven las tarjetas a 60fps sin recomponerlas.
+        key(slotIdx) {
+          val prize = prizes[slotIdx % cycleSize]
+          val isCenteredWinner = !isSpinning && lastWonPrizeId == prize.id && slotIdx == centerSlotIndex
+          val slotBasePx = slotIdx * stridePx + viewportCenterShiftPx
 
-        TapePrizeTile(
-          prize = prize,
-          isHighlighted = isCenteredWinner,
-          modifier = Modifier
-            .width(cardWidthDp)
-            .fillMaxHeight()
-            .padding(vertical = 12.dp)
-            .graphicsLayer { translationX = xOffsetPx },
-        )
+          TapePrizeTile(
+            prize = prize,
+            isHighlighted = isCenteredWinner,
+            modifier = Modifier
+              .width(cardWidthDp)
+              .fillMaxHeight()
+              .padding(vertical = 12.dp)
+              .graphicsLayer { translationX = slotBasePx - offsetReader() },
+          )
+        }
       }
 
       // Marcador central vertical
@@ -712,16 +775,25 @@ private fun TapePrizeTile(
   isHighlighted: Boolean,
   modifier: Modifier = Modifier,
 ) {
-  val borderColor = when {
-    isHighlighted -> MaterialTheme.colorScheme.primary
-    prize.isHighRisk -> Color(0xFFEF4444)
-    else -> prize.rarity.accentColor.copy(alpha = 0.7f)
+  val primaryColor = MaterialTheme.colorScheme.primary
+  // OPT: Cachear BorderStroke, etiqueta superior e ícono evita asignaciones repetidas al entrar en ventana.
+  val borderStroke = remember(isHighlighted, prize.isHighRisk, prize.rarity, primaryColor) {
+    val borderColor = when {
+      isHighlighted -> primaryColor
+      prize.isHighRisk -> Color(0xFFEF4444)
+      else -> prize.rarity.accentColor.copy(alpha = 0.7f)
+    }
+    BorderStroke(if (isHighlighted) 2.5.dp else 1.5.dp, borderColor)
   }
+  val rarityTagText = remember(prize.isHighRisk, prize.rarity) {
+    if (prize.isHighRisk) "ALTO RIESGO" else prize.rarity.label.uppercase(Locale.getDefault())
+  }
+  val tileIcon = remember(prize.category) { prizeIcon(prize) }
 
   Surface(
     shape = RoundedCornerShape(14.dp),
     color = MaterialTheme.colorScheme.surface,
-    border = BorderStroke(if (isHighlighted) 2.5.dp else 1.5.dp, borderColor),
+    border = borderStroke,
     shadowElevation = if (isHighlighted) 6.dp else 1.dp,
     modifier = modifier,
   ) {
@@ -737,7 +809,7 @@ private fun TapePrizeTile(
         color = prize.rarity.badgeBgColor,
       ) {
         Text(
-          text = if (prize.isHighRisk) "ALTO RIESGO" else prize.rarity.label.uppercase(Locale.getDefault()),
+          text = rarityTagText,
           style = MaterialTheme.typography.labelSmall,
           fontSize = 9.sp,
           fontWeight = FontWeight.Bold,
@@ -748,7 +820,7 @@ private fun TapePrizeTile(
       }
 
       Icon(
-        imageVector = prizeIcon(prize),
+        imageVector = tileIcon,
         contentDescription = prize.title,
         tint = prize.rarity.accentColor,
         modifier = Modifier.size(28.dp),
@@ -855,27 +927,30 @@ private fun UnlocksAndMissionsSummaryCard(uiState: RouletteUiState) {
           verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
           uiState.unlockedExclusiveTitles.forEach { title ->
-            Surface(
-              shape = RoundedCornerShape(10.dp),
-              color = MaterialTheme.colorScheme.tertiaryContainer,
-            ) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            // OPT: key estable por título para evitar recrear chips ya desbloqueados.
+            key(title) {
+              Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.tertiaryContainer,
               ) {
-                Icon(
-                  imageVector = Icons.Rounded.MilitaryTech,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                  modifier = Modifier.size(16.dp),
-                )
-                Text(
-                  text = title,
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.onTertiaryContainer,
-                )
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(4.dp),
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Rounded.MilitaryTech,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                    modifier = Modifier.size(16.dp),
+                  )
+                  Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                  )
+                }
               }
             }
           }
@@ -889,12 +964,14 @@ private fun UnlocksAndMissionsSummaryCard(uiState: RouletteUiState) {
           fontWeight = FontWeight.Bold,
           color = MaterialTheme.colorScheme.error,
         )
-        uiState.activeHardMissions.take(2).forEach { missionText ->
-          Text(
-            text = "• $missionText",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface,
-          )
+        uiState.activeHardMissions.take(2).forEachIndexed { idx, missionText ->
+          key("hard_$idx") {
+            Text(
+              text = "• $missionText",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+          }
         }
       }
 
@@ -905,12 +982,14 @@ private fun UnlocksAndMissionsSummaryCard(uiState: RouletteUiState) {
           fontWeight = FontWeight.SemiBold,
           color = MaterialTheme.colorScheme.primary,
         )
-        uiState.activeRandomMissions.take(2).forEach { missionText ->
-          Text(
-            text = "• $missionText",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
+        uiState.activeRandomMissions.take(2).forEachIndexed { idx, missionText ->
+          key("rnd_$idx") {
+            Text(
+              text = "• $missionText",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
         }
       }
     }
@@ -919,6 +998,8 @@ private fun UnlocksAndMissionsSummaryCard(uiState: RouletteUiState) {
 
 @Composable
 private fun SpinMissionsCard(missions: List<RouletteSpinMission>) {
+  // OPT: Cachear conteo completado cuando cambia la lista de misiones.
+  val doneCount = remember(missions) { missions.count { it.isCompleted } }
   Card(
     colors = CardDefaults.cardColors(
       containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -941,7 +1022,6 @@ private fun SpinMissionsCard(missions: List<RouletteSpinMission>) {
           style = MaterialTheme.typography.titleSmall,
           fontWeight = FontWeight.Bold,
         )
-        val doneCount = missions.count { it.isCompleted }
         Text(
           text = "$doneCount/${missions.size}",
           style = MaterialTheme.typography.labelLarge,
@@ -951,57 +1031,63 @@ private fun SpinMissionsCard(missions: List<RouletteSpinMission>) {
       }
 
       missions.forEach { mission ->
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-            modifier = Modifier.fillMaxWidth(),
-          ) {
+        // OPT: key(mission.id) + remember de etiqueta evita formateo y recomposición de filas intactas.
+        key(mission.id) {
+          val rewardLabel = remember(mission.rewardXp, mission.bonusLabel) {
+            buildString {
+              append("+${mission.rewardXp} XP")
+              if (mission.bonusLabel != null) {
+                append(" • ${mission.bonusLabel}")
+              }
+            }
+          }
+          Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-              modifier = Modifier.weight(1f),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              modifier = Modifier.fillMaxWidth(),
             ) {
-              Icon(
-                imageVector = if (mission.isCompleted) {
-                  Icons.Rounded.CheckCircle
-                } else {
-                  Icons.Rounded.AutoAwesome
-                },
-                contentDescription = null,
-                tint = if (mission.isCompleted) {
-                  Color(0xFF34D399)
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                modifier = Modifier.size(16.dp),
-              )
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.weight(1f),
+              ) {
+                Icon(
+                  imageVector = if (mission.isCompleted) {
+                    Icons.Rounded.CheckCircle
+                  } else {
+                    Icons.Rounded.AutoAwesome
+                  },
+                  contentDescription = null,
+                  tint = if (mission.isCompleted) {
+                    Color(0xFF34D399)
+                  } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                  },
+                  modifier = Modifier.size(16.dp),
+                )
+                Text(
+                  text = "${mission.title} (${mission.currentSpins}/${mission.targetSpins})",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = if (mission.isCompleted) FontWeight.Bold else FontWeight.Medium,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
               Text(
-                text = "${mission.title} (${mission.currentSpins}/${mission.targetSpins})",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (mission.isCompleted) FontWeight.Bold else FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                text = rewardLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
               )
             }
-            Text(
-              text = buildString {
-                append("+${mission.rewardXp} XP")
-                if (mission.bonusLabel != null) {
-                  append(" • ${mission.bonusLabel}")
-                }
-              },
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.primary,
+            LinearProgressIndicator(
+              progress = { mission.progressFraction },
+              modifier = Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(CircleShape),
             )
           }
-          LinearProgressIndicator(
-            progress = { mission.progressFraction },
-            modifier = Modifier
-              .fillMaxWidth()
-              .height(6.dp)
-              .clip(CircleShape),
-          )
         }
       }
     }
@@ -1123,7 +1209,10 @@ private fun RouletteDebugPanel(
           )
 
           uiState.prizeProbabilities.forEach { snap ->
-            ProbabilityRow(snapshot = snap)
+            // OPT: key estable por ID de premio en la lista de probabilidades.
+            key(snap.prize.id) {
+              ProbabilityRow(snapshot = snap)
+            }
           }
 
           HorizontalDivider()
@@ -1140,30 +1229,37 @@ private fun RouletteDebugPanel(
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           } else {
+            val visibleHistory = remember(uiState.spinHistory) { uiState.spinHistory.take(12) }
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-              uiState.spinHistory.take(12).forEach { rec ->
-                Row(
-                  horizontalArrangement = Arrangement.SpaceBetween,
-                  verticalAlignment = Alignment.CenterVertically,
-                  modifier = Modifier.fillMaxWidth(),
-                ) {
-                  Text(
-                    text = "#${rec.spinNumber} • ${rec.prize.title}",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                  )
-                  Text(
-                    text = buildString {
+              visibleHistory.forEach { rec ->
+                // OPT: key por número de giro + formateo recordado por entrada.
+                key(rec.spinNumber) {
+                  val metaText = remember(rec.winningProbabilityPercent, rec.bonusFloorXp, rec.wasSimulatedBatch) {
+                    buildString {
                       append(String.format(Locale.US, "%.2f%%", rec.winningProbabilityPercent))
                       if (rec.bonusFloorXp > 0L) append(" +50 XP")
                       if (rec.wasSimulatedBatch) append(" [SIM]")
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = rec.prize.rarity.accentColor,
-                  )
+                    }
+                  }
+                  Row(
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                  ) {
+                    Text(
+                      text = "#${rec.spinNumber} • ${rec.prize.title}",
+                      style = MaterialTheme.typography.bodySmall,
+                      fontWeight = FontWeight.Medium,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                      modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                      text = metaText,
+                      style = MaterialTheme.typography.labelSmall,
+                      color = rec.prize.rarity.accentColor,
+                    )
+                  }
                 }
               }
             }
@@ -1176,15 +1272,21 @@ private fun RouletteDebugPanel(
 
 @Composable
 private fun ProbabilityRow(snapshot: PrizeProbabilitySnapshot) {
-  val delta = snapshot.deltaPercent
-  val deltaText = when {
-    delta > 0.005 -> String.format(Locale.US, "+%.2f%%", delta)
-    delta < -0.005 -> String.format(Locale.US, "%.2f%%", delta)
-    else -> "0.00%"
+  // OPT: Recordar textos formateados y colores para no ejecutar String.format en recomposiciones ajenas.
+  val deltaText = remember(snapshot.probability, snapshot.previousProbability) {
+    val delta = snapshot.deltaPercent
+    when {
+      delta > 0.005 -> String.format(Locale.US, "+%.2f%%", delta)
+      delta < -0.005 -> String.format(Locale.US, "%.2f%%", delta)
+      else -> "0.00%"
+    }
+  }
+  val percentText = remember(snapshot.probability) {
+    String.format(Locale.US, "%.2f%%", snapshot.probabilityPercent)
   }
   val deltaColor = when {
-    delta > 0.005 -> Color(0xFF34D399)
-    delta < -0.005 -> Color(0xFFF87171)
+    snapshot.deltaPercent > 0.005 -> Color(0xFF34D399)
+    snapshot.deltaPercent < -0.005 -> Color(0xFFF87171)
     else -> MaterialTheme.colorScheme.onSurfaceVariant
   }
   val tierColor = when (snapshot.oscillationTier) {
@@ -1238,7 +1340,7 @@ private fun ProbabilityRow(snapshot: PrizeProbabilitySnapshot) {
           color = deltaColor,
         )
         Text(
-          text = String.format(Locale.US, "%.2f%%", snapshot.probabilityPercent),
+          text = percentText,
           style = MaterialTheme.typography.labelMedium,
           fontWeight = FontWeight.Bold,
         )

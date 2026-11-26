@@ -1,5 +1,6 @@
 package com.example.maplab
 
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 
 /**
@@ -103,11 +104,15 @@ enum class MapLandmarkType(val label: String, val accentColor: Color) {
  * TODO [GPS Real]: Proyectar latitud/longitud del dispositivo a metros relativos
  * usando `GeoUtils` alrededor de la ubicación inicial de la sesión.
  */
+// OPT: @Immutable evita invalidaciones de Compose al comparar coordenadas de jugador/misiones.
+@Immutable
 data class LocalMapCoordinate(
   val xMeters: Float,
   val yMeters: Float,
 )
 
+// OPT: @Immutable estabiliza los marcadores del mapa durante gestos de arrastre a 60fps.
+@Immutable
 data class MapLabMission(
   val id: String,
   val title: String,
@@ -117,6 +122,8 @@ data class MapLabMission(
   val isActive: Boolean = false,
 )
 
+// OPT: @Immutable estabiliza las zonas de referencia (parques, plazas, distritos).
+@Immutable
 data class MapLandmark(
   val id: String,
   val name: String,
@@ -125,6 +132,8 @@ data class MapLandmark(
   val radiusMeters: Float,
 )
 
+// OPT: @Immutable hace estable el estado completo de la pantalla de mapa para saltar recomposiciones en capas sin cambio.
+@Immutable
 data class MapScaleUiState(
   val activeScale: MapViewScale = MapViewScale.SCALE_75,
   val playerPosition: LocalMapCoordinate = LocalMapCoordinate(0f, 0f),

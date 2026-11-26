@@ -218,22 +218,23 @@ fun RoundRadarMap(
     label = "radarCornerAnim",
   )
 
-  val animatedOsmAlpha by animateFloatAsState(
+  // OPT: Conservar State<Float> sin delegar 'by' para leerlos solo en graphicsLayer/DrawScope sin recomponer pines.
+  val animatedOsmAlphaState = animateFloatAsState(
     targetValue = radarScale.osmRevealAlpha,
     animationSpec = tween(durationMillis = 280),
     label = "osmRevealAlphaAnim",
   )
-  val animatedVeilOuterAlpha by animateFloatAsState(
+  val animatedVeilOuterAlphaState = animateFloatAsState(
     targetValue = radarScale.veilOuterAlpha,
     animationSpec = tween(durationMillis = 280),
     label = "veilOuterAlphaAnim",
   )
-  val animatedVeilInnerAlpha by animateFloatAsState(
+  val animatedVeilInnerAlphaState = animateFloatAsState(
     targetValue = radarScale.veilInnerAlpha,
     animationSpec = tween(durationMillis = 280),
     label = "veilInnerAlphaAnim",
   )
-  val lupaButtonAlpha by animateFloatAsState(
+  val lupaButtonAlphaState = animateFloatAsState(
     targetValue = if (isDragging50To75 && radarScale != RadarScaleLevel.SCALE_100) 0.25f else 1.0f,
     animationSpec = tween(durationMillis = 160),
     label = "lupaButtonAlphaAnim",
@@ -549,8 +550,36 @@ fun RoundRadarMap(
                 },
                 modifier = Modifier
                   .fillMaxSize()
-                  .graphicsLayer { alpha = animatedOsmAlpha },
+                  // OPT: Lectura diferida de alfa en graphicsLayer sin recomponer AndroidView.
+                  .graphicsLayer { alpha = animatedOsmAlphaState.value },
               )
+            }
+
+            // OPT: Precalcular PathEffects, ángulos de brújula y paletas del radar fuera de DrawScope (60fps).
+            val orbitDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(18f, 14f, 6f, 14f), 0f) }
+            val rangeDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f) }
+            val compassUnitTicks = remember(radarStyle) {
+              if (radarStyle == "compass" || radarStyle == "neon") {
+                val step = if (radarStyle == "compass") 15 else 30
+                (0 until 360 step step).map { deg ->
+                  val rad = Math.toRadians(deg.toDouble())
+                  Triple(cos(rad).toFloat(), sin(rad).toFloat(), deg % 45 == 0)
+                }
+              } else {
+                emptyList()
+              }
+            }
+            val sweepStops = remember(primaryColor, radarStyle) {
+              arrayOf(
+                0.0f to primaryColor.copy(alpha = if (radarStyle == "neon") 0.42f else 0.24f),
+                0.18f to primaryColor.copy(alpha = 0.08f),
+                0.24f to Color.Transparent,
+                1.0f to Color.Transparent,
+              )
+            }
+            val veilColorsBuffer = remember { ArrayList<Color>(3).apply { add(Color.Transparent); add(Color.Transparent); add(Color.Transparent) } }
+            val veilMidColor = remember(primaryColor, radarStyle) {
+              primaryColor.copy(alpha = if (radarStyle == "neon") 0.14f else 0.08f)
             }
 
             // Capa estética del radar: velo progresivo sobre OSM + anillos + barrido
@@ -563,14 +592,14 @@ fun RoundRadarMap(
               val pulseBreath = pulseBreathState.value
               val outerOrbitAngle = outerOrbitAngleState.value
 
-              // Velo radial progresivo: en 50 encierra el radar; en 75 y 100 deja ver más OpenStreetMap
+              // OPT: Reutilizar lista de 3 colores para el velo radial sin instanciar listOf en cada frame.
+              veilColorsBuffer[0] = surfaceContainer.copy(alpha = animatedVeilInnerAlphaState.value)
+              veilColorsBuffer[1] = veilMidColor
+              veilColorsBuffer[2] = surfaceContainer.copy(alpha = animatedVeilOuterAlphaState.value)
+
               drawRect(
                 brush = Brush.radialGradient(
-                  colors = listOf(
-                    surfaceContainer.copy(alpha = animatedVeilInnerAlpha),
-                    primaryColor.copy(alpha = if (radarStyle == "neon") 0.14f else 0.08f),
-                    surfaceContainer.copy(alpha = animatedVeilOuterAlpha),
-                  ),
+                  colors = veilColorsBuffer,
                   center = center,
                   radius = maxR * 1.15f,
                 ),
@@ -586,60 +615,57 @@ fun RoundRadarMap(
                     style = Stroke(
                       width = 2.5f,
                       cap = StrokeCap.Round,
-                      pathEffect = PathEffect.dashPathEffect(floatArrayOf(18f, 14f, 6f, 14f), 0f),
+                      pathEffect = orbitDashEffect,
                     ),
                   )
                 }
               }
 
               // Concentric range rings
-              val dashEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f)
               val ringCount = 3
+              val ringColor = primaryColor.copy(alpha = if (radarStyle == "neon") 0.36f else 0.24f)
               for (i in 1..ringCount) {
                 val r = maxR * (i / 3.25f)
                 drawCircle(
-                  color = primaryColor.copy(alpha = if (radarStyle == "neon") 0.36f else 0.24f),
+                  color = ringColor,
                   radius = r,
                   center = center,
                   style = Stroke(
                     width = if (i == ringCount) 2f else 1.4f,
-                    pathEffect = if (radarStyle == "classic" && i < ringCount) dashEffect else null,
+                    pathEffect = if (radarStyle == "classic" && i < ringCount) rangeDashEffect else null,
                   ),
                 )
               }
 
               // Crosshair lines
+              val crosshairColor = outlineVariant.copy(alpha = 0.42f)
               drawLine(
-                color = outlineVariant.copy(alpha = 0.42f),
+                color = crosshairColor,
                 start = Offset(center.x, center.y - maxR + 14f),
                 end = Offset(center.x, center.y + maxR - 14f),
                 strokeWidth = 1.2f,
               )
               drawLine(
-                color = outlineVariant.copy(alpha = 0.42f),
+                color = crosshairColor,
                 start = Offset(center.x - maxR + 14f, center.y),
                 end = Offset(center.x + maxR - 14f, center.y),
                 strokeWidth = 1.2f,
               )
 
-              // Compass ticks
-              if (radarStyle == "compass" || radarStyle == "neon") {
-                val step = if (radarStyle == "compass") 15 else 30
-                for (deg in 0 until 360 step step) {
-                  val rad = Math.toRadians(deg.toDouble())
-                  val outer = maxR - 10f
-                  val inner = if (deg % 45 == 0) maxR - 22f else maxR - 15f
+              // OPT: Usar vectores unitarios precalculados para marcas de brújula sin trigonometría por frame.
+              if (compassUnitTicks.isNotEmpty()) {
+                val outer = maxR - 10f
+                val majorInner = maxR - 22f
+                val minorInner = maxR - 15f
+                val majorColor = primaryColor.copy(alpha = 0.72f)
+                val minorColor = primaryColor.copy(alpha = 0.32f)
+                compassUnitTicks.forEach { (cosVal, sinVal, isMajor) ->
+                  val inner = if (isMajor) majorInner else minorInner
                   drawLine(
-                    color = primaryColor.copy(alpha = if (deg % 45 == 0) 0.72f else 0.32f),
-                    start = Offset(
-                      center.x + (inner * cos(rad)).toFloat(),
-                      center.y + (inner * sin(rad)).toFloat(),
-                    ),
-                    end = Offset(
-                      center.x + (outer * cos(rad)).toFloat(),
-                      center.y + (outer * sin(rad)).toFloat(),
-                    ),
-                    strokeWidth = if (deg % 45 == 0) 2.2f else 1.2f,
+                    color = if (isMajor) majorColor else minorColor,
+                    start = Offset(center.x + inner * cosVal, center.y + inner * sinVal),
+                    end = Offset(center.x + outer * cosVal, center.y + outer * sinVal),
+                    strokeWidth = if (isMajor) 2.2f else 1.2f,
                   )
                 }
               }
@@ -670,10 +696,7 @@ fun RoundRadarMap(
                   if (!isLowTier) {
                     drawArc(
                       brush = Brush.sweepGradient(
-                        0.0f to primaryColor.copy(alpha = if (radarStyle == "neon") 0.42f else 0.24f),
-                        0.18f to primaryColor.copy(alpha = 0.08f),
-                        0.24f to Color.Transparent,
-                        1.0f to Color.Transparent,
+                        colorStops = sweepStops,
                         center = center,
                       ),
                       startAngle = -80f,
@@ -1049,7 +1072,7 @@ fun RoundRadarMap(
               onRadarScaleChange(radarScale.nextScale())
             },
             modifier = Modifier
-              .graphicsLayer { alpha = lupaButtonAlpha }
+              .graphicsLayer { alpha = lupaButtonAlphaState.value }
               .minimumInteractiveComponentSize()
               .testTag("radar_scale_lupa_button"),
           ) {

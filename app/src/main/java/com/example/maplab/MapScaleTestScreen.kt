@@ -78,7 +78,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -97,6 +100,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -173,7 +177,8 @@ fun MapScaleTestScreenContent(
     }
   }
 
-  val animatedReveal by animateFloatAsState(
+  // OPT: Mantener animatedRevealState como State<Float> + lambda lectora para evitar recomponer toda la pantalla por frame.
+  val animatedRevealState = animateFloatAsState(
     targetValue = uiState.mapRevealProgress,
     animationSpec = if (uiState.isSlidingBetween50And75) {
       tween(durationMillis = 45, easing = LinearEasing)
@@ -182,9 +187,15 @@ fun MapScaleTestScreenContent(
     },
     label = "layerRevealProgress",
   )
+  val revealProvider: () -> Float = remember(animatedRevealState) { { animatedRevealState.value } }
+
+  // OPT: derivedStateOf solo dispara cambio de color cuando se cruza el umbral 0.72f hacia Vista 100.
+  val isWideMode by remember(animatedRevealState) {
+    derivedStateOf { animatedRevealState.value > 0.72f }
+  }
 
   val mainChromeBg by animateColorAsState(
-    targetValue = if (animatedReveal > 0.72f) {
+    targetValue = if (isWideMode) {
       MaterialTheme.colorScheme.surfaceContainerLowest
     } else {
       MaterialTheme.colorScheme.background
@@ -234,15 +245,17 @@ fun MapScaleTestScreenContent(
           val midStageHeight = 330.dp.coerceAtMost(maxHeight * 0.92f)
           val maxStageHeight = maxHeight
 
-          val targetHeight = if (animatedReveal <= 0.50f) {
-            val t = (animatedReveal / 0.50f).coerceIn(0f, 1f)
+          val rawReveal = uiState.mapRevealProgress
+          val targetHeight = if (rawReveal <= 0.50f) {
+            val t = (rawReveal / 0.50f).coerceIn(0f, 1f)
             minStageHeight + (midStageHeight - minStageHeight) * t
           } else {
-            val t = ((animatedReveal - 0.50f) / 0.50f).coerceIn(0f, 1f)
+            val t = ((rawReveal - 0.50f) / 0.50f).coerceIn(0f, 1f)
             midStageHeight + (maxStageHeight - midStageHeight) * t
           }
 
-          val animatedCardHeight by animateDpAsState(
+          // OPT: Leer animatedCardHeightState dentro de Modifier.layout evita recomposiciones de UnifiedRadarMapLayer al escalar.
+          val animatedCardHeightState = animateDpAsState(
             targetValue = targetHeight,
             animationSpec = tween(durationMillis = 70, easing = LinearEasing),
             label = "radarCardHeight",
@@ -258,7 +271,7 @@ fun MapScaleTestScreenContent(
 
           UnifiedRadarMapLayer(
             uiState = uiState,
-            animatedReveal = animatedReveal,
+            revealProvider = revealProvider,
             onDragStarted = onDragStarted,
             onDragDelta = onDragDelta,
             onDragEnded = onDragEnded,
@@ -267,7 +280,13 @@ fun MapScaleTestScreenContent(
             onRestoreToggleButton = onRestoreToggleButton,
             modifier = Modifier
               .fillMaxWidth()
-              .height(animatedCardHeight),
+              .layout { measurable, constraints ->
+                val targetPx = animatedCardHeightState.value.roundToPx().coerceIn(0, constraints.maxHeight)
+                val placeable = measurable.measure(constraints.copy(minHeight = targetPx, maxHeight = targetPx))
+                layout(placeable.width, targetPx) {
+                  placeable.placeRelative(0, 0)
+                }
+              },
           )
         }
 
@@ -298,7 +317,7 @@ fun MapScaleTestScreenContent(
         MainAppBottomBar(
           uiState = uiState,
           missionsInRadiusCount = missionsInRadiusCount,
-          animatedReveal = animatedReveal,
+          isWideMode = isWideMode,
           onToggleDebugPanel = onToggleDebugPanel,
         )
       }
@@ -437,7 +456,7 @@ private fun MainAppHeaderLayer(
 private fun MainAppBottomBar(
   uiState: MapScaleUiState,
   missionsInRadiusCount: Int,
-  animatedReveal: Float,
+  isWideMode: Boolean,
   onToggleDebugPanel: () -> Unit,
 ) {
   val selectedMission = remember(uiState.missions, uiState.selectedMissionId) {
@@ -472,7 +491,7 @@ private fun MainAppBottomBar(
         ) {
           Box(contentAlignment = Alignment.Center) {
             Icon(
-              imageVector = if (animatedReveal > 0.72f) Icons.Rounded.Explore else Icons.Rounded.Radar,
+              imageVector = if (isWideMode) Icons.Rounded.Explore else Icons.Rounded.Radar,
               contentDescription = null,
               tint = MaterialTheme.colorScheme.onSecondaryContainer,
               modifier = Modifier.size(20.dp),
@@ -481,7 +500,7 @@ private fun MainAppBottomBar(
         }
         Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
           Text(
-            text = if (animatedReveal > 0.72f) {
+            text = if (isWideMode) {
               "Modo Mapa Amplio • $missionsInRadiusCount misiones visibles"
             } else {
               "Navegación Base • ${selectedMission?.title ?: "Sin objetivo"}"
@@ -521,10 +540,28 @@ private fun MainAppBottomBar(
   }
 }
 
+// OPT: Datos precalculados de misiones y landmarks fuera de DrawScope (distancia y etiqueta formateada).
+@Immutable
+private data class PreparedMapMission(
+  val mission: MapLabMission,
+  val dxMeters: Float,
+  val dyMeters: Float,
+  val distMeters: Float,
+  val formattedLabel: String,
+)
+
+@Immutable
+private data class PreparedMapLandmark(
+  val landmark: MapLandmark,
+  val dxMeters: Float,
+  val dyMeters: Float,
+  val distMeters: Float,
+)
+
 @Composable
 private fun UnifiedRadarMapLayer(
   uiState: MapScaleUiState,
-  animatedReveal: Float,
+  revealProvider: () -> Float,
   onDragStarted: () -> Unit,
   onDragDelta: (Float, Float) -> Unit,
   onDragEnded: () -> Unit,
@@ -533,7 +570,8 @@ private fun UnifiedRadarMapLayer(
   onRestoreToggleButton: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val animatedZoom by animateFloatAsState(
+  // OPT: Guardar animaciones como State<Float> para leerlas exclusivamente dentro de Canvas DrawScope.
+  val animatedZoomState = animateFloatAsState(
     targetValue = uiState.effectiveZoomFactor,
     animationSpec = if (uiState.isSlidingBetween50And75) {
       tween(durationMillis = 45, easing = LinearEasing)
@@ -543,7 +581,7 @@ private fun UnifiedRadarMapLayer(
     label = "mapZoomAnim",
   )
 
-  val animatedRadiusMeters by animateFloatAsState(
+  val animatedRadiusState = animateFloatAsState(
     targetValue = uiState.effectiveViewRadiusMeters.toFloat(),
     animationSpec = if (uiState.isSlidingBetween50And75) {
       tween(durationMillis = 45, easing = LinearEasing)
@@ -572,10 +610,25 @@ private fun UnifiedRadarMapLayer(
     }
   }
 
+  // OPT: derivedStateOf para el nivel discreto de borde y porcentaje entero sin recomponer el árbol en cada frame.
+  val borderTier by remember(revealProvider) {
+    derivedStateOf {
+      val r = revealProvider()
+      when {
+        r > 0.72f -> 2
+        r > 0.25f -> 1
+        else -> 0
+      }
+    }
+  }
+  val revealPercentInt by remember(revealProvider) {
+    derivedStateOf { (revealProvider() * 100f).toInt() }
+  }
+
   val borderColor by animateColorAsState(
-    targetValue = when {
-      animatedReveal > 0.72f -> MaterialTheme.colorScheme.primary
-      animatedReveal > 0.25f -> MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+    targetValue = when (borderTier) {
+      2 -> MaterialTheme.colorScheme.primary
+      1 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
       else -> MaterialTheme.colorScheme.outlineVariant
     },
     animationSpec = tween(durationMillis = 220),
@@ -589,7 +642,37 @@ private fun UnifiedRadarMapLayer(
   val gridColor = MaterialTheme.colorScheme.outlineVariant
   val blockColor = MaterialTheme.colorScheme.surfaceContainerHigh
   val labelTextColor = MaterialTheme.colorScheme.onSurface
+  val riverBaseColor = remember { Color(0xFF0EA5E9) }
 
+  // OPT: Precalcular distancias relativas y cadenas formateadas fuera de DrawScope.
+  val preparedMissions = remember(uiState.missions, uiState.playerPosition) {
+    uiState.missions.map { mission ->
+      val dx = mission.position.xMeters - uiState.playerPosition.xMeters
+      val dy = mission.position.yMeters - uiState.playerPosition.yMeters
+      val dist = hypot(dx, dy)
+      PreparedMapMission(
+        mission = mission,
+        dxMeters = dx,
+        dyMeters = dy,
+        distMeters = dist,
+        formattedLabel = "${mission.title} (${dist.toInt()}m)",
+      )
+    }
+  }
+  val preparedLandmarks = remember(uiState.landmarks, uiState.playerPosition) {
+    uiState.landmarks.map { landmark ->
+      val dx = landmark.position.xMeters - uiState.playerPosition.xMeters
+      val dy = landmark.position.yMeters - uiState.playerPosition.yMeters
+      PreparedMapLandmark(
+        landmark = landmark,
+        dxMeters = dx,
+        dyMeters = dy,
+        distMeters = hypot(dx, dy),
+      )
+    }
+  }
+
+  // OPT: Reutilizar Paint, Path y PathEffect entre frames sin asignaciones en DrawScope.
   val markerLabelPaint = remember {
     Paint().apply {
       isAntiAlias = true
@@ -597,11 +680,16 @@ private fun UnifiedRadarMapLayer(
       typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     }
   }
+  val riverPath = remember { Path() }
+  val conePath = remember { Path() }
+  val viewRangeDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(16f, 10f), 0f) }
+  val activeRouteDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f) }
+  val fogStopsBuffer = remember { Array(4) { 0f to Color.Transparent } }
 
   Card(
     colors = CardDefaults.cardColors(containerColor = surfaceMapBg),
-    elevation = CardDefaults.cardElevation(defaultElevation = (4 + (8 * animatedReveal)).dp),
-    border = BorderStroke(width = (1.2f + (1.0f * animatedReveal)).dp, color = borderColor),
+    elevation = CardDefaults.cardElevation(defaultElevation = if (borderTier == 2) 10.dp else 5.dp),
+    border = BorderStroke(width = if (borderTier == 2) 2.2.dp else 1.4.dp, color = borderColor),
     shape = RoundedCornerShape(26.dp),
     modifier = modifier.testTag("map_layer_card"),
   ) {
@@ -628,26 +716,48 @@ private fun UnifiedRadarMapLayer(
           .fillMaxSize()
           .testTag("map_lab_canvas"),
       ) {
+        // OPT: Lectura diferida de estados animados exclusivamente en fase de dibujo.
+        val revealNow = revealProvider()
+        val zoomNow = animatedZoomState.value
+        val radiusMetersNow = animatedRadiusState.value
+        val pulseNow = pulseAnim.value
+        val flashNow = scale100Flash.value
+
         val center = Offset(size.width / 2f, size.height / 2f)
         val halfMin = size.minDimension / 2f
-        val metersToPx = (halfMin / 740f) * animatedZoom
-        val radiusPx = animatedRadiusMeters * metersToPx
+        val metersToPx = (halfMin / 740f) * zoomNow
+        val radiusPx = radiusMetersNow * metersToPx
 
-        // Horizonte de revelado progresivo:
-        // En 50 (0f) revela justo un poco más del radio inmediato (235m),
-        // en 75 (0.5f) revela entorno urbano medio (~680m),
-        // en 100 (1f) abre el mapa completo (>1600m).
-        val revealMetersHorizon = if (animatedReveal <= 0.50f) {
-          val t = (animatedReveal / 0.50f).coerceIn(0f, 1f)
+        val revealMetersHorizon = if (revealNow <= 0.50f) {
+          val t = (revealNow / 0.50f).coerceIn(0f, 1f)
           235f + (680f - 235f) * t
         } else {
-          val t = ((animatedReveal - 0.50f) / 0.50f).coerceIn(0f, 1f)
+          val t = ((revealNow - 0.50f) / 0.50f).coerceIn(0f, 1f)
           680f + (1650f - 680f) * t
         }
         val revealPx = revealMetersHorizon * metersToPx
 
+        // OPT: Pre-convertir medidas dp/sp a px una sola vez por frame fuera de los bucles.
+        val blockCornerPx = 6.dp.toPx()
+        val blockCornerRadius = CornerRadius(blockCornerPx, blockCornerPx)
+        val majorGridStrokePx = 1.6.dp.toPx()
+        val minorGridStrokePx = 0.9.dp.toPx()
+        val landmarkMinRadiusPx = 10.dp.toPx()
+        val landmarkStrokePx = 1.2.dp.toPx()
+        val landmarkTextSizePx = 9.sp.toPx()
+        val landmarkTextYOffsetPx = 3.dp.toPx()
+        val pulseStrokePx = 2.dp.toPx()
+        val dashRangeStrokePx = 2.2.dp.toPx()
+        val flashStrokePx = 6.dp.toPx()
+        val routeStrokePx = 1.6.dp.toPx()
+        val hardMissionRadiusPx = 11.dp.toPx()
+        val activeMissionRadiusPx = 9.5.dp.toPx()
+        val normalMissionRadiusPx = 8.dp.toPx()
+        val missionTextSizePx = 10.sp.toPx()
+        val missionTextGapPx = 6.dp.toPx()
+
         // 1. Terreno progresivo offline-first: río curvo, avenidas y cuadrícula por bloques
-        val stepMeters = if (animatedZoom >= 1.6f) 60f else if (animatedZoom >= 0.9f) 140f else 300f
+        val stepMeters = if (zoomNow >= 1.6f) 60f else if (zoomNow >= 0.9f) 140f else 300f
         val visibleWorldHalfW = (size.width / 2f) / metersToPx.coerceAtLeast(0.05f)
         val visibleWorldHalfH = (size.height / 2f) / metersToPx.coerceAtLeast(0.05f)
 
@@ -656,7 +766,9 @@ private fun UnifiedRadarMapLayer(
         val minGridY = floor((uiState.playerPosition.yMeters - visibleWorldHalfH) / stepMeters).toInt()
         val maxGridY = ceil((uiState.playerPosition.yMeters + visibleWorldHalfH) / stepMeters).toInt()
 
-        // Bloques urbanos con opacidad progresiva según cercanía al horizonte revelado
+        val blockSizePx = stepMeters * 0.72f * metersToPx
+        val blockSize = Size(blockSizePx, blockSizePx)
+
         for (gx in minGridX until maxGridX) {
           for (gy in minGridY until maxGridY) {
             if ((gx + gy * 3) % 4 == 0) {
@@ -670,12 +782,11 @@ private fun UnifiedRadarMapLayer(
               if (terrainAlpha > 0.02f) {
                 val bx = center.x + ((gx * stepMeters + stepMeters * 0.14f) - uiState.playerPosition.xMeters) * metersToPx
                 val by = center.y + ((gy * stepMeters + stepMeters * 0.14f) - uiState.playerPosition.yMeters) * metersToPx
-                val bw = stepMeters * 0.72f * metersToPx
                 drawRoundRect(
                   color = blockColor.copy(alpha = 0.45f * terrainAlpha),
                   topLeft = Offset(bx, by),
-                  size = Size(bw, bw),
-                  cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx()),
+                  size = blockSize,
+                  cornerRadius = blockCornerRadius,
                 )
               }
             }
@@ -690,7 +801,7 @@ private fun UnifiedRadarMapLayer(
             color = gridColor.copy(alpha = if (isMajorAvenue) 0.34f else 0.16f),
             start = Offset(screenX, 0f),
             end = Offset(screenX, size.height),
-            strokeWidth = if (isMajorAvenue) 1.6.dp.toPx() else 0.9.dp.toPx(),
+            strokeWidth = if (isMajorAvenue) majorGridStrokePx else minorGridStrokePx,
           )
         }
         for (gy in minGridY..maxGridY) {
@@ -701,40 +812,37 @@ private fun UnifiedRadarMapLayer(
             color = gridColor.copy(alpha = if (isMajorAvenue) 0.34f else 0.16f),
             start = Offset(0f, screenY),
             end = Offset(size.width, screenY),
-            strokeWidth = if (isMajorAvenue) 1.6.dp.toPx() else 0.9.dp.toPx(),
+            strokeWidth = if (isMajorAvenue) majorGridStrokePx else minorGridStrokePx,
           )
         }
 
-        // Río / corredor natural que se descubre conforme amplías hacia 75 y 100
-        if (animatedReveal > 0.12f) {
-          val riverAlpha = ((animatedReveal - 0.12f) / 0.55f).coerceIn(0f, 1f) * 0.28f
-          val riverPath = Path().apply {
-            val startX = center.x + (-1100f - uiState.playerPosition.xMeters) * metersToPx
-            val startY = center.y + (290f - uiState.playerPosition.yMeters) * metersToPx
-            val ctrlX = center.x + (40f - uiState.playerPosition.xMeters) * metersToPx
-            val ctrlY = center.y + (120f - uiState.playerPosition.yMeters) * metersToPx
-            val endX = center.x + (1150f - uiState.playerPosition.xMeters) * metersToPx
-            val endY = center.y + (-340f - uiState.playerPosition.yMeters) * metersToPx
-            moveTo(startX, startY)
-            quadraticTo(ctrlX, ctrlY, endX, endY)
-          }
+        // Río / corredor natural reutilizando riverPath
+        if (revealNow > 0.12f) {
+          val riverAlpha = ((revealNow - 0.12f) / 0.55f).coerceIn(0f, 1f) * 0.28f
+          val startX = center.x + (-1100f - uiState.playerPosition.xMeters) * metersToPx
+          val startY = center.y + (290f - uiState.playerPosition.yMeters) * metersToPx
+          val ctrlX = center.x + (40f - uiState.playerPosition.xMeters) * metersToPx
+          val ctrlY = center.y + (120f - uiState.playerPosition.yMeters) * metersToPx
+          val endX = center.x + (1150f - uiState.playerPosition.xMeters) * metersToPx
+          val endY = center.y + (-340f - uiState.playerPosition.yMeters) * metersToPx
+          riverPath.rewind()
+          riverPath.moveTo(startX, startY)
+          riverPath.quadraticTo(ctrlX, ctrlY, endX, endY)
           drawPath(
             path = riverPath,
-            color = Color(0xFF0EA5E9).copy(alpha = riverAlpha),
-            style = Stroke(width = (14f * animatedZoom).coerceIn(5f, 22f), cap = StrokeCap.Round),
+            color = riverBaseColor.copy(alpha = riverAlpha),
+            style = Stroke(width = (14f * zoomNow).coerceIn(5f, 22f), cap = StrokeCap.Round),
           )
         }
 
-        // 2. Zonas y puntos de referencia del entorno (Parques, Plazas, Distritos, Miradores)
-        uiState.landmarks.forEach { landmark ->
-          val dx = landmark.position.xMeters - uiState.playerPosition.xMeters
-          val dy = landmark.position.yMeters - uiState.playerPosition.yMeters
-          val dist = hypot(dx, dy)
-          val revealFactor = smoothRevealFactor(dist, revealMetersHorizon)
+        // 2. Zonas y puntos de referencia del entorno
+        preparedLandmarks.forEach { prep ->
+          val landmark = prep.landmark
+          val revealFactor = smoothRevealFactor(prep.distMeters, revealMetersHorizon)
           if (revealFactor > 0.04f) {
-            val lx = center.x + dx * metersToPx
-            val ly = center.y + dy * metersToPx
-            val zoneRadiusPx = (landmark.radiusMeters * metersToPx).coerceAtLeast(10.dp.toPx())
+            val lx = center.x + prep.dxMeters * metersToPx
+            val ly = center.y + prep.dyMeters * metersToPx
+            val zoneRadiusPx = (landmark.radiusMeters * metersToPx).coerceAtLeast(landmarkMinRadiusPx)
 
             drawCircle(
               color = landmark.type.accentColor.copy(alpha = 0.14f * revealFactor),
@@ -745,16 +853,16 @@ private fun UnifiedRadarMapLayer(
               color = landmark.type.accentColor.copy(alpha = 0.42f * revealFactor),
               radius = zoneRadiusPx,
               center = Offset(lx, ly),
-              style = Stroke(width = 1.2.dp.toPx()),
+              style = Stroke(width = landmarkStrokePx),
             )
 
             if (revealFactor > 0.45f) {
               markerLabelPaint.color = landmark.type.accentColor.copy(alpha = 0.85f * revealFactor).toArgb()
-              markerLabelPaint.textSize = 9.sp.toPx()
+              markerLabelPaint.textSize = landmarkTextSizePx
               drawContext.canvas.nativeCanvas.drawText(
                 landmark.name,
                 lx,
-                ly + 3.dp.toPx(),
+                ly + landmarkTextYOffsetPx,
                 markerLabelPaint,
               )
             }
@@ -768,41 +876,40 @@ private fun UnifiedRadarMapLayer(
           center = center,
         )
         drawCircle(
-          color = primaryColor.copy(alpha = (1f - pulseAnim.value) * 0.34f),
-          radius = radiusPx * (0.28f + 0.72f * pulseAnim.value),
+          color = primaryColor.copy(alpha = (1f - pulseNow) * 0.34f),
+          radius = radiusPx * (0.28f + 0.72f * pulseNow),
           center = center,
-          style = Stroke(width = 2.dp.toPx()),
+          style = Stroke(width = pulseStrokePx),
         )
         drawCircle(
           color = primaryColor.copy(alpha = 0.85f),
           radius = radiusPx,
           center = center,
           style = Stroke(
-            width = 2.2.dp.toPx(),
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 10f), 0f),
+            width = dashRangeStrokePx,
+            pathEffect = viewRangeDashEffect,
           ),
         )
 
-        if (scale100Flash.value > 0.01f) {
+        if (flashNow > 0.01f) {
           drawCircle(
-            color = secondaryColor.copy(alpha = scale100Flash.value * 0.30f),
-            radius = radiusPx * (1.0f + (1f - scale100Flash.value) * 0.16f),
+            color = secondaryColor.copy(alpha = flashNow * 0.30f),
+            radius = radiusPx * (1.0f + (1f - flashNow) * 0.16f),
             center = center,
-            style = Stroke(width = 6.dp.toPx()),
+            style = Stroke(width = flashStrokePx),
           )
         }
 
-        // 4. Puntos/Misiones con revelado progresivo según la apertura del radar (50 -> 75 -> 100)
-        uiState.missions.forEach { mission ->
-          val dx = mission.position.xMeters - uiState.playerPosition.xMeters
-          val dy = mission.position.yMeters - uiState.playerPosition.yMeters
-          val distMeters = hypot(dx, dy)
+        // 4. Puntos/Misiones con revelado progresivo
+        preparedMissions.forEach { prep ->
+          val mission = prep.mission
+          val distMeters = prep.distMeters
           val pointReveal = smoothRevealFactor(distMeters, revealMetersHorizon)
 
           if (pointReveal > 0.04f) {
-            val mx = center.x + dx * metersToPx
-            val my = center.y + dy * metersToPx
-            val inViewRange = distMeters <= animatedRadiusMeters
+            val mx = center.x + prep.dxMeters * metersToPx
+            val my = center.y + prep.dyMeters * metersToPx
+            val inViewRange = distMeters <= radiusMetersNow
 
             if (mx in -48f..(size.width + 48f) && my in -48f..(size.height + 48f)) {
               if (mission.isActive) {
@@ -810,15 +917,15 @@ private fun UnifiedRadarMapLayer(
                   color = mission.difficulty.markerColor.copy(alpha = 0.45f * pointReveal),
                   start = center,
                   end = Offset(mx, my),
-                  strokeWidth = 1.6.dp.toPx(),
-                  pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f),
+                  strokeWidth = routeStrokePx,
+                  pathEffect = activeRouteDashEffect,
                 )
               }
 
               val baseRadius = when {
-                mission.difficulty == MapMissionDifficulty.HIGH_DIFFICULTY -> 11.dp.toPx()
-                mission.isActive -> 9.5.dp.toPx()
-                else -> 8.dp.toPx()
+                mission.difficulty == MapMissionDifficulty.HIGH_DIFFICULTY -> hardMissionRadiusPx
+                mission.isActive -> activeMissionRadiusPx
+                else -> normalMissionRadiusPx
               }
               val scaledRadius = baseRadius * (0.65f + 0.35f * pointReveal)
               val finalAlpha = pointReveal * if (inViewRange) 1f else 0.72f
@@ -843,14 +950,14 @@ private fun UnifiedRadarMapLayer(
               )
 
               val showLabel = pointReveal > 0.55f &&
-                (animatedZoom >= 1.45f || mission.isActive || mission.difficulty == MapMissionDifficulty.HIGH_DIFFICULTY)
+                (zoomNow >= 1.45f || mission.isActive || mission.difficulty == MapMissionDifficulty.HIGH_DIFFICULTY)
               if (showLabel) {
                 markerLabelPaint.color = labelTextColor.copy(alpha = 0.92f * finalAlpha).toArgb()
-                markerLabelPaint.textSize = 10.sp.toPx()
+                markerLabelPaint.textSize = missionTextSizePx
                 drawContext.canvas.nativeCanvas.drawText(
-                  "${mission.title} (${distMeters.toInt()}m)",
+                  prep.formattedLabel,
                   mx,
-                  my - scaledRadius - 6.dp.toPx(),
+                  my - scaledRadius - missionTextGapPx,
                   markerLabelPaint,
                 )
               }
@@ -858,36 +965,40 @@ private fun UnifiedRadarMapLayer(
           }
         }
 
-        // 5. Velo periférico de apertura progresiva (en 50 cierra el perímetro; al subir a 75 y 100 se abre el mapa)
-        val fogOuterAlpha = (1f - animatedReveal).coerceIn(0f, 1f) * 0.86f
+        // 5. Velo periférico de apertura progresiva reutilizando fogStopsBuffer
+        val fogOuterAlpha = (1f - revealNow).coerceIn(0f, 1f) * 0.86f
         if (fogOuterAlpha > 0.02f) {
           val maxCanvasRadius = hypot(size.width, size.height) * 0.58f
           val innerClearStop = (revealPx * 0.72f / maxCanvasRadius).coerceIn(0.15f, 0.85f)
           val outerEdgeStop = (revealPx * 1.18f / maxCanvasRadius).coerceIn(innerClearStop + 0.06f, 1.0f)
+          val fogEdgeColor = fogVeilColor.copy(alpha = fogOuterAlpha)
+
+          fogStopsBuffer[0] = 0.0f to Color.Transparent
+          fogStopsBuffer[1] = innerClearStop to Color.Transparent
+          fogStopsBuffer[2] = outerEdgeStop to fogEdgeColor
+          fogStopsBuffer[3] = 1.0f to fogEdgeColor
 
           drawRect(
             brush = Brush.radialGradient(
-              colorStops = arrayOf(
-                0.0f to Color.Transparent,
-                innerClearStop to Color.Transparent,
-                outerEdgeStop to fogVeilColor.copy(alpha = fogOuterAlpha),
-                1.0f to fogVeilColor.copy(alpha = fogOuterAlpha),
-              ),
+              colorStops = fogStopsBuffer,
               center = center,
               radius = maxCanvasRadius,
             ),
           )
         }
 
-        // 6. Jugador centrado con cono direccional
+        // 6. Jugador centrado reutilizando conePath
+        val coneTipY = center.y - 24.dp.toPx()
+        val coneBaseY = center.y - 4.dp.toPx()
+        val coneHalfW = 10.dp.toPx()
+        conePath.rewind()
+        conePath.moveTo(center.x, coneTipY)
+        conePath.lineTo(center.x - coneHalfW, coneBaseY)
+        conePath.lineTo(center.x + coneHalfW, coneBaseY)
+        conePath.close()
+
         rotate(degrees = uiState.playerHeadingDeg, pivot = center) {
-          val cone = Path().apply {
-            moveTo(center.x, center.y - 24.dp.toPx())
-            lineTo(center.x - 10.dp.toPx(), center.y - 4.dp.toPx())
-            lineTo(center.x + 10.dp.toPx(), center.y - 4.dp.toPx())
-            close()
-          }
-          drawPath(path = cone, color = primaryColor.copy(alpha = 0.50f))
+          drawPath(path = conePath, color = primaryColor.copy(alpha = 0.50f))
         }
         drawCircle(color = Color.White, radius = 11.dp.toPx(), center = center)
         drawCircle(
@@ -898,7 +1009,7 @@ private fun UnifiedRadarMapLayer(
         )
       }
 
-      // Etiqueta superior izquierda que identifica claramente la capa de Mapa/Radar
+      // Etiqueta superior izquierda con porcentaje derivado sin recomponer el Canvas
       Surface(
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
@@ -920,7 +1031,7 @@ private fun UnifiedRadarMapLayer(
               .background(primaryColor),
           )
           Text(
-            text = "MAPA / RADAR • ${(animatedReveal * 100).toInt()}% revelado",
+            text = "MAPA / RADAR • $revealPercentInt% revelado",
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
           )

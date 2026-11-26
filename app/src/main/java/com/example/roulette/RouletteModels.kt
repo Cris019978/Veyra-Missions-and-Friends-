@@ -1,5 +1,6 @@
 package com.example.roulette
 
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 
 enum class RouletteDisplayView(val label: String) {
@@ -34,6 +35,8 @@ enum class OscillationTier(val label: String) {
   CONTAINED("Cambio suave"),
 }
 
+// OPT: @Immutable garantiza estabilidad fuerte en Compose y evita recomposiciones si el premio no cambia.
+@Immutable
 data class RoulettePrize(
   val id: String,
   val title: String,
@@ -48,6 +51,8 @@ data class RoulettePrize(
   val floorChargeBoost: Int = 0,
 )
 
+// OPT: @Immutable evita recomponer toda la tabla de probabilidades cuando solo cambia otro campo de UI.
+@Immutable
 data class PrizeProbabilitySnapshot(
   val prize: RoulettePrize,
   val currentWeight: Double,
@@ -59,6 +64,8 @@ data class PrizeProbabilitySnapshot(
   val deltaPercent: Double get() = (probability - previousProbability) * 100.0
 }
 
+// OPT: @Immutable estabiliza las tarjetas de las 5 misiones de giros.
+@Immutable
 data class RouletteSpinMission(
   val id: String,
   val stepOrder: Int,
@@ -74,6 +81,8 @@ data class RouletteSpinMission(
     get() = if (targetSpins <= 0) 1f else (currentSpins.toFloat() / targetSpins.toFloat()).coerceIn(0f, 1f)
 }
 
+// OPT: @Immutable estabiliza el historial reciente de tiradas.
+@Immutable
 data class RouletteSpinRecord(
   val spinNumber: Int,
   val prize: RoulettePrize,
@@ -84,6 +93,8 @@ data class RouletteSpinRecord(
   val winningProbabilityPercent: Double,
 )
 
+// OPT: @Immutable con colecciones de solo lectura permite a Compose saltar subárboles sin cambios.
+@Immutable
 data class RouletteUiState(
   val activeView: RouletteDisplayView = RouletteDisplayView.CLASSIC,
   val isSpinning: Boolean = false,
