@@ -14,6 +14,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroidSize
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -157,6 +158,10 @@ fun Veyra2TacticalCanvas(
 
   var canvasMinDimPx by remember { mutableStateOf(600f) }
 
+  val currentOnPanMeters by rememberUpdatedState(onPanMeters)
+  val currentOnZoomMultiplier by rememberUpdatedState(onZoomMultiplier)
+  val currentOnGestureBoost by rememberUpdatedState(onGestureBoostChanged)
+
   Canvas(
     modifier = modifier
       .fillMaxSize()
@@ -164,23 +169,51 @@ fun Veyra2TacticalCanvas(
       .testTag("veyra2_tactical_canvas")
       .pointerInput(uiState.mapMode) {
         if (currentMode.isLandscapeAiming) {
+          val touchSlop = viewConfiguration.touchSlop
           awaitEachGesture {
-            awaitFirstDown(requireUnconsumed = false)
-            onGestureBoostChanged(true)
+            awaitFirstDown(requireUnconsumed = true)
+            var pastTouchSlop = false
+            var zoomAccum = 1f
+            var panAccum = Offset.Zero
+            var lockedToPinch = false
+            currentOnGestureBoost(true)
             do {
               val event = awaitPointerEvent()
-              val zoom = event.calculateZoom()
-              val pan = event.calculatePan()
-              if (zoom != 1f) {
-                onZoomMultiplier(zoom)
+              val canceled = event.changes.any { it.isConsumed }
+              if (!canceled) {
+                val zoomChange = event.calculateZoom()
+                val panChange = event.calculatePan()
+                if (!pastTouchSlop) {
+                  zoomAccum *= zoomChange
+                  panAccum += panChange
+                  val centroidSize = event.calculateCentroidSize(useCurrent = false)
+                  val zoomMotion = kotlin.math.abs(1f - zoomAccum) * centroidSize
+                  val panMotion = panAccum.getDistance()
+                  if (zoomMotion > touchSlop || panMotion > touchSlop) {
+                    pastTouchSlop = true
+                    lockedToPinch = zoomMotion > touchSlop && event.changes.count { it.pressed } >= 2
+                  }
+                }
+                if (pastTouchSlop) {
+                  val safeZoom = if (zoomChange.isFinite() && zoomChange > 0f) {
+                    zoomChange.coerceIn(0.82f, 1.22f)
+                  } else {
+                    1f
+                  }
+                  if (lockedToPinch || (safeZoom != 1f && event.changes.count { it.pressed } >= 2)) {
+                    currentOnZoomMultiplier(safeZoom)
+                  }
+                  if (panChange != Offset.Zero && panChange.x.isFinite() && panChange.y.isFinite()) {
+                    val metersToPxNow = ((canvasMinDimPx / 2f).coerceAtLeast(120f) / 720f) *
+                      currentZoom.coerceIn(0.45f, 3.5f)
+                    val metersPerPx = 1f / metersToPxNow.coerceAtLeast(0.01f)
+                    currentOnPanMeters(-panChange.x * metersPerPx, -panChange.y * metersPerPx)
+                  }
+                  event.changes.forEach { if (it.positionChanged()) it.consume() }
+                }
               }
-              if (pan != Offset.Zero) {
-                val metersPerPx = (1450f / ((canvasMinDimPx / 2f).coerceAtLeast(120f) * currentZoom.coerceIn(0.45f, 3.5f)))
-                onPanMeters(-pan.x * metersPerPx, -pan.y * metersPerPx)
-              }
-              event.changes.forEach { if (it.positionChanged()) it.consume() }
-            } while (event.changes.any { it.pressed })
-            onGestureBoostChanged(false)
+            } while (!canceled && event.changes.any { it.pressed })
+            currentOnGestureBoost(false)
           }
         } else if (currentMode.isMapOpen) {
           detectDragGestures(
@@ -541,7 +574,12 @@ fun VirtualAimJoystick(
           val dtSeconds = ((now - lastNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
           val speedScale = dtSeconds * 60f
           if (knobOffset != Offset.Zero) {
-            currentOnStickInput(knobOffset.x * speedScale, knobOffset.y * speedScale)
+            val mag = hypot(knobOffset.x, knobOffset.y).coerceIn(0f, 1f)
+            val curvedGain = 0.35f + 0.65f * mag
+            currentOnStickInput(
+              knobOffset.x * curvedGain * speedScale,
+              knobOffset.y * curvedGain * speedScale,
+            )
           }
         }
         lastNanos = now

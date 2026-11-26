@@ -334,12 +334,15 @@ private fun MainAppShell(
     viewModel.setHeavyMapUpdatesPaused(anyOverlayModalOpen)
   }
 
+  val hasRealLocation = uiState.currentLocation != null ||
+    ((uiState.myProfile?.latitude ?: 0.0) != 0.0 || (uiState.myProfile?.longitude ?: 0.0) != 0.0)
   val syncLat = uiState.currentLocation?.latitude ?: uiState.myProfile?.latitude?.takeIf { it != 0.0 } ?: 19.4326
   val syncLon = uiState.currentLocation?.longitude ?: uiState.myProfile?.longitude?.takeIf { it != 0.0 } ?: -99.1332
   LaunchedEffect(
     uiState.missions,
     syncLat,
     syncLon,
+    hasRealLocation,
     uiState.activeAcceptedMissionId,
   ) {
     veyra2ViewModel.syncMainMapMissions(
@@ -347,6 +350,7 @@ private fun MainAppShell(
       playerLat = syncLat,
       playerLon = syncLon,
       activeAcceptedMissionId = uiState.activeAcceptedMissionId,
+      isRealGps = hasRealLocation,
     )
   }
 

@@ -45,6 +45,7 @@ class Veyra2TacticalViewModel(
 
   private var hasSyncedMainMap = false
   private var gpsAnchorCoords: Pair<Double, Double>? = null
+  private var anchoredOnRealGps = false
   private val locallyTouchedIds = mutableSetOf<String>()
   private val locallyInspectedIds = mutableSetOf<String>()
   private val locallyPinnedIds = mutableSetOf<String>()
@@ -142,10 +143,33 @@ class Veyra2TacticalViewModel(
     playerLat: Double,
     playerLon: Double,
     activeAcceptedMissionId: String? = null,
+    isRealGps: Boolean = true,
   ) {
     val hasValidGps = playerLat != 0.0 || playerLon != 0.0
-    if (hasValidGps && gpsAnchorCoords == null) {
-      gpsAnchorCoords = playerLat to playerLon
+    var reAnchoredThisSync = false
+    if (hasValidGps) {
+      val currentAnchor = gpsAnchorCoords
+      if (currentAnchor == null) {
+        gpsAnchorCoords = playerLat to playerLon
+        anchoredOnRealGps = isRealGps
+      } else {
+        val prevProjected = projectLatLonToMeters(
+          currentAnchor.first,
+          currentAnchor.second,
+          playerLat,
+          playerLon,
+        )
+        val curStatePlayer = _uiState.value.playerPosition
+        val jumpDist = hypot(
+          prevProjected.xMeters - curStatePlayer.xMeters,
+          prevProjected.yMeters - curStatePlayer.yMeters,
+        )
+        if ((!anchoredOnRealGps && isRealGps) || jumpDist > 5000f) {
+          gpsAnchorCoords = playerLat to playerLon
+          anchoredOnRealGps = isRealGps
+          reAnchoredThisSync = true
+        }
+      }
     }
     val anchor = gpsAnchorCoords
 
@@ -159,15 +183,50 @@ class Veyra2TacticalViewModel(
 
     _uiState.update { cur ->
       val prevPlayer = cur.playerPosition
-      val playerDeltaX = projectedPlayer.xMeters - prevPlayer.xMeters
-      val playerDeltaY = projectedPlayer.yMeters - prevPlayer.yMeters
-      val nextCamera = if (hypot(playerDeltaX, playerDeltaY) > 0.5f) {
+      val nextCamera = if (reAnchoredThisSync) {
+        val relX = (cur.cameraCenter.xMeters - prevPlayer.xMeters).coerceIn(-6000f, 6000f)
+        val relY = (cur.cameraCenter.yMeters - prevPlayer.yMeters).coerceIn(-6000f, 6000f)
         Veyra2Coordinate(
-          xMeters = cur.cameraCenter.xMeters + playerDeltaX,
-          yMeters = cur.cameraCenter.yMeters + playerDeltaY,
+          xMeters = projectedPlayer.xMeters + relX,
+          yMeters = projectedPlayer.yMeters + relY,
         )
       } else {
-        cur.cameraCenter
+        val playerDeltaX = projectedPlayer.xMeters - prevPlayer.xMeters
+        val playerDeltaY = projectedPlayer.yMeters - prevPlayer.yMeters
+        if (hypot(playerDeltaX, playerDeltaY) > 0.5f) {
+          Veyra2Coordinate(
+            xMeters = cur.cameraCenter.xMeters + playerDeltaX,
+            yMeters = cur.cameraCenter.yMeters + playerDeltaY,
+          )
+        } else {
+          cur.cameraCenter
+        }
+      }
+
+      val shiftedTargets = if (reAnchoredThisSync) {
+        cur.markedTargets.map { tgt ->
+          tgt.copy(
+            position = Veyra2Coordinate(
+              xMeters = projectedPlayer.xMeters + (tgt.position.xMeters - prevPlayer.xMeters),
+              yMeters = projectedPlayer.yMeters + (tgt.position.yMeters - prevPlayer.yMeters),
+            ),
+          )
+        }
+      } else {
+        cur.markedTargets
+      }
+
+      val shiftedRoute = if (reAnchoredThisSync) {
+        cur.routePoints.map { wp ->
+          wp.copy(
+            position = Veyra2Coordinate(
+              xMeters = projectedPlayer.xMeters + (wp.position.xMeters - prevPlayer.xMeters),
+              yMeters = projectedPlayer.yMeters + (wp.position.yMeters - prevPlayer.yMeters),
+            ),
+          )
+        }
+      } else {
+        cur.routePoints
       }
 
       val threshold = cur.recycleThresholdMeters
@@ -258,7 +317,20 @@ class Veyra2TacticalViewModel(
         }
       }
 
-      val combined = (mainProjected + localExtras)
+      val shiftedExtras = if (reAnchoredThisSync) {
+        localExtras.map { extra ->
+          extra.copy(
+            position = Veyra2Coordinate(
+              xMeters = projectedPlayer.xMeters + (extra.position.xMeters - prevPlayer.xMeters),
+              yMeters = projectedPlayer.yMeters + (extra.position.yMeters - prevPlayer.yMeters),
+            ),
+          )
+        }
+      } else {
+        localExtras
+      }
+
+      val combined = (mainProjected + shiftedExtras)
         .distinctBy { it.id }
         .sortedBy {
           hypot(it.position.xMeters - projectedPlayer.xMeters, it.position.yMeters - projectedPlayer.yMeters)
@@ -281,6 +353,8 @@ class Veyra2TacticalViewModel(
         cameraCenter = nextCamera,
         missionsInMemory = combined,
         drawnMissions = drawn,
+        markedTargets = shiftedTargets,
+        routePoints = shiftedRoute,
         rewardsLedger = nextLedger,
         selectedMissionId = cur.selectedMissionId?.takeIf { id -> combined.any { it.id == id } }
           ?: combined.firstOrNull()?.id,
@@ -550,10 +624,18 @@ class Veyra2TacticalViewModel(
 
   fun panCameraByMeters(dxMeters: Float, dyMeters: Float) {
     if (dxMeters == 0f && dyMeters == 0f) return
+    if (!dxMeters.isFinite() || !dyMeters.isFinite()) return
     _uiState.update { cur ->
+      val maxOffsetFromPlayer = 6000f
       val nextCenter = Veyra2Coordinate(
-        xMeters = (cur.cameraCenter.xMeters + dxMeters).coerceIn(-6000f, 6000f),
-        yMeters = (cur.cameraCenter.yMeters + dyMeters).coerceIn(-6000f, 6000f),
+        xMeters = (cur.cameraCenter.xMeters + dxMeters).coerceIn(
+          cur.playerPosition.xMeters - maxOffsetFromPlayer,
+          cur.playerPosition.xMeters + maxOffsetFromPlayer,
+        ),
+        yMeters = (cur.cameraCenter.yMeters + dyMeters).coerceIn(
+          cur.playerPosition.yMeters - maxOffsetFromPlayer,
+          cur.playerPosition.yMeters + maxOffsetFromPlayer,
+        ),
       )
       val snapId = if (cur.mapMode.isMapOpen) {
         findClosestMissionToPoint(cur.drawnMissions, nextCenter, snapRadiusMeters(cur.aimZoomFactor))

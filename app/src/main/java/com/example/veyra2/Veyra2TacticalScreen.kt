@@ -235,7 +235,7 @@ fun Veyra2TacticalScreenContent(
         // Joystick abajo izquierda
         VirtualAimJoystick(
           onStickInput = { nx, ny ->
-            val speedFactor = (14f / uiState.aimZoomFactor.coerceIn(0.45f, 3.5f)).coerceIn(4f, 26f)
+            val speedFactor = (6.8f / uiState.aimZoomFactor.coerceIn(0.45f, 3.5f)).coerceIn(2.2f, 14f)
             onPanMeters(nx * speedFactor, ny * speedFactor)
           },
           onStickActiveChanged = onGestureBoostChanged,
@@ -533,8 +533,10 @@ private fun ReticleTargetInfoStrip(
           Text(if (hovered.isClaimed) "Reclamada" else "Reclamar", style = MaterialTheme.typography.labelSmall)
         }
       } else {
+        val relX = (uiState.cameraCenter.xMeters - uiState.playerPosition.xMeters).toInt()
+        val relY = (uiState.cameraCenter.yMeters - uiState.playerPosition.yMeters).toInt()
         Text(
-          text = "Mira (${uiState.cameraCenter.xMeters.toInt()}m, ${uiState.cameraCenter.yMeters.toInt()}m) • Zoom ${String.format("%.2fx", uiState.aimZoomFactor)} • ${uiState.lastEventLog}",
+          text = "Mira (${relX}m, ${relY}m) • Zoom ${String.format("%.2fx", uiState.aimZoomFactor)} • ${uiState.lastEventLog}",
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           maxLines = 1,

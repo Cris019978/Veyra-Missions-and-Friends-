@@ -279,4 +279,62 @@ class Veyra2TacticalViewModelTest {
     vm.movePlayerByMeters(120f, -45f)
     assertEquals(listOf(120f to -45f), walkDeltas)
   }
+
+  @Test
+  fun `panCameraByMeters never teleports to 6000m when real GPS arrives far away or player walks past 6km`() {
+    val vm = Veyra2TacticalViewModel(random = Random(321L))
+    vmStore.put("reanchor_clamp_test", vm)
+
+    // 1. Startup sync before GPS lock uses fallback CDMX coordinates
+    vm.syncMainMapMissions(
+      missions = emptyList(),
+      playerLat = 19.4326,
+      playerLon = -99.1332,
+      isRealGps = false,
+    )
+
+    // 2. Real GPS arrives > 400 km away (Guadalajara) with a nearby mission at 120m East
+    val realLat = 20.6597
+    val realLon = -103.3496
+    val (missionLat, missionLon) = GeoUtils.destinationPoint(realLat, realLon, 120.0, 90.0)
+    vm.syncMainMapMissions(
+      missions = listOf(
+        MissionWithDistance(
+          mission = Mission(
+            id = "real_gps_near",
+            title = "Plaza Real",
+            xpReward = 200L,
+            latitude = missionLat,
+            longitude = missionLon,
+          ),
+          distanceMeters = 120f,
+          bearingDegrees = 90f,
+          isCompletedByMe = false,
+        ),
+      ),
+      playerLat = realLat,
+      playerLon = realLon,
+      isRealGps = true,
+    )
+
+    val afterReanchor = vm.uiState.value
+    assertEquals(0f, afterReanchor.playerPosition.xMeters, 1f)
+    assertEquals(0f, afterReanchor.playerPosition.yMeters, 1f)
+    assertEquals(0f, afterReanchor.cameraCenter.xMeters, 1f)
+    assertEquals(0f, afterReanchor.cameraCenter.yMeters, 1f)
+    assertEquals(1, afterReanchor.missionsInMemory.size)
+
+    // Panning slightly must move smoothly from (0,0), NOT jump to (6000,6000)
+    vm.panCameraByMeters(-26f, 15f)
+    assertEquals(-26f, vm.uiState.value.cameraCenter.xMeters, 1f)
+    assertEquals(15f, vm.uiState.value.cameraCenter.yMeters, 1f)
+
+    // 3. Even if player walks 8 km away from origin, panning stays relative to playerPosition
+    vm.recenterCameraOnPlayer()
+    vm.movePlayerByMeters(8000f, 8000f)
+    vm.panCameraByMeters(-26f, 0f)
+    val farWalkState = vm.uiState.value
+    assertEquals(farWalkState.playerPosition.xMeters - 26f, farWalkState.cameraCenter.xMeters, 1f)
+    assertEquals(farWalkState.playerPosition.yMeters, farWalkState.cameraCenter.yMeters, 1f)
+  }
 }
