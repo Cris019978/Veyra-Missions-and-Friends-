@@ -47,11 +47,14 @@ class LocalAccountStore(private val context: Context) {
     val LONGITUDE_STR = stringPreferencesKey("profile_longitude")
     val XP = longPreferencesKey("profile_xp")
     val LEVEL = longPreferencesKey("profile_level")
+    val BONUS_LEVELS = longPreferencesKey("profile_bonus_levels")
     val MISSIONS_COMPLETED = longPreferencesKey("profile_missions_completed")
     val HELPS_GIVEN = longPreferencesKey("profile_helps_given")
     val DUELS_WON = longPreferencesKey("profile_duels_won")
     val ROLE = stringPreferencesKey("profile_role")
     val ROLE_TITLE = stringPreferencesKey("profile_role_title")
+    val EQUIPPED_ROULETTE_TITLE = stringPreferencesKey("profile_equipped_roulette_title")
+    val UNLOCKED_ROULETTE_TITLES = stringPreferencesKey("profile_unlocked_roulette_titles")
   }
 
   val accountFlow: Flow<LocalAccountSnapshot> = context.accountPrefsDataStore.data.map { prefs ->
@@ -75,11 +78,19 @@ class LocalAccountStore(private val context: Context) {
         longitude = prefs[Keys.LONGITUDE_STR]?.toDoubleOrNull() ?: 0.0,
         xp = prefs[Keys.XP] ?: 0L,
         level = prefs[Keys.LEVEL] ?: 1L,
+        bonusLevels = prefs[Keys.BONUS_LEVELS] ?: 0L,
         missionsCompleted = prefs[Keys.MISSIONS_COMPLETED] ?: 0L,
         helpsGiven = prefs[Keys.HELPS_GIVEN] ?: 0L,
         duelsWon = prefs[Keys.DUELS_WON] ?: 0L,
         role = prefs[Keys.ROLE].orEmpty().ifBlank { LocalAuthManager.ROLE_EXPLORER },
         roleTitle = prefs[Keys.ROLE_TITLE].orEmpty().ifBlank { LocalAuthManager.TITLE_EXPLORER },
+        equippedRouletteTitle = prefs[Keys.EQUIPPED_ROULETTE_TITLE].orEmpty(),
+        unlockedRouletteTitles = prefs[Keys.UNLOCKED_ROULETTE_TITLES]
+          .orEmpty()
+          .split("|")
+          .map { it.trim() }
+          .filter { it.isNotBlank() }
+          .distinct(),
       )
     } else {
       null
@@ -158,11 +169,18 @@ class LocalAccountStore(private val context: Context) {
       prefs[Keys.LONGITUDE_STR] = profile.longitude.toString()
       prefs[Keys.XP] = profile.xp
       prefs[Keys.LEVEL] = profile.level
+      prefs[Keys.BONUS_LEVELS] = profile.bonusLevels
       prefs[Keys.MISSIONS_COMPLETED] = profile.missionsCompleted
       prefs[Keys.HELPS_GIVEN] = profile.helpsGiven
       prefs[Keys.DUELS_WON] = profile.duelsWon
       prefs[Keys.ROLE] = profile.role.ifBlank { LocalAuthManager.ROLE_EXPLORER }
       prefs[Keys.ROLE_TITLE] = profile.roleTitle.ifBlank { LocalAuthManager.TITLE_EXPLORER }
+      prefs[Keys.EQUIPPED_ROULETTE_TITLE] = profile.equippedRouletteTitle
+      prefs[Keys.UNLOCKED_ROULETTE_TITLES] = profile.unlockedRouletteTitles
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .distinct()
+        .joinToString("|")
     }
   }
 

@@ -103,4 +103,88 @@ class RouletteEngineUnitTest {
     assertTrue(resetState.spinHistory.isEmpty())
     assertTrue(resetState.spinMissions.none { it.isCompleted })
   }
+
+  @Test
+  fun `10 special title variants swap on each spin, enter claimable queue, equip, and credit XP and levels`() {
+    assertEquals(10, RouletteCatalogDefaults.specialTitleVariants.size)
+    assertEquals(10, RouletteCatalogDefaults.specialTitleVariants.map { it.title }.distinct().size)
+
+    var creditedXp = 0L
+    var creditedBonusLevels = 0
+    val claimedCallbacks = mutableListOf<String>()
+    var equippedCallback = ""
+
+    // Construimos un catálogo con peso alto en títulos y nivel gratis para verificar determinísticamente
+    val testPrizes = listOf(
+      RouletteCatalogDefaults.prizeForTitleSlot(
+        slotId = RouletteCatalogDefaults.TITLE_SLOT_A_ID,
+        baseWeight = 45.0,
+        variant = RouletteCatalogDefaults.specialTitleVariants[0],
+      ),
+      RouletteCatalogDefaults.prizeForTitleSlot(
+        slotId = RouletteCatalogDefaults.TITLE_SLOT_B_ID,
+        baseWeight = 45.0,
+        variant = RouletteCatalogDefaults.specialTitleVariants[1],
+      ),
+      RoulettePrize(
+        id = "free_level_jackpot",
+        title = "¡Nivel Gratis (+1 NV)!",
+        subtitle = "Bonus de nivel",
+        category = RoulettePrizeCategory.FREE_LEVEL,
+        rarity = RouletteRarity.MYTHIC,
+        baseWeight = 10.0,
+        xpAmount = 0L,
+        freeLevels = 1,
+        wheelShortLabel = "+1 NV",
+      ),
+    )
+
+    val manager = RouletteStateManager(
+      prizes = testPrizes,
+      random = Random(123L),
+      onRewardEarned = { xp, lv ->
+        creditedXp += xp
+        creditedBonusLevels += lv
+      },
+      onTitleClaimed = { claimedCallbacks.add(it) },
+      onTitleEquipped = { equippedCallback = it },
+    )
+    vmStore.put("roulette_titles_test", manager)
+
+    val seenActiveTitlePairs = mutableListOf<List<String>>()
+    repeat(20) {
+      val prevActive = manager.uiState.value.activeTitleVariants
+      seenActiveTitlePairs.add(prevActive)
+      manager.spinOnceInstant()
+      val nextActive = manager.uiState.value.activeTitleVariants
+      // Con cada tirada los títulos en los carriles se intercambian sin repetir el par anterior
+      assertTrue(prevActive.intersect(nextActive.toSet()).isEmpty())
+    }
+
+    val stateAfterSpins = manager.uiState.value
+    assertEquals(20, stateAfterSpins.totalSpins)
+    // Ningún título queda auto-desbloqueado hasta que el jugador lo reclame
+    assertTrue(stateAfterSpins.pendingClaimTitles.isNotEmpty())
+    assertTrue(stateAfterSpins.unlockedExclusiveTitles.isEmpty())
+    // Verificar que salieron múltiples variantes distintas de las 10 disponibles
+    assertTrue(stateAfterSpins.pendingClaimTitles.size >= 4)
+    // Verificar que los niveles gratis y XP de misiones/compensaciones dispararon callbacks reales
+    assertEquals(stateAfterSpins.accumulatedXp, creditedXp)
+    assertEquals(stateAfterSpins.bonusLevelsWon, creditedBonusLevels)
+
+    val firstPending = stateAfterSpins.pendingClaimTitles.first()
+    manager.claimPendingTitle(firstPending, equipAfterClaim = true)
+
+    val afterClaim = manager.uiState.value
+    assertFalse(firstPending in afterClaim.pendingClaimTitles)
+    assertTrue(firstPending in afterClaim.unlockedExclusiveTitles)
+    assertEquals(firstPending, afterClaim.equippedProfileTitle)
+    assertEquals(listOf(firstPending), claimedCallbacks)
+    assertEquals(firstPending, equippedCallback)
+
+    // Reclamamos el resto de títulos pendientes
+    manager.claimAllPendingTitles()
+    assertTrue(manager.uiState.value.pendingClaimTitles.isEmpty())
+    assertEquals(stateAfterSpins.pendingClaimTitles.size, manager.uiState.value.unlockedExclusiveTitles.size)
+  }
 }

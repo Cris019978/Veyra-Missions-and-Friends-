@@ -1882,4 +1882,83 @@ class ExampleRobolectricTest {
     assertEquals("Explorador Trifuerza", authManager.getCurrentSession()?.roleTitle)
     composeTestRule.onNodeWithText("Felicidades eres un Explorador curioso").assertIsDisplayed()
   }
+
+  @Test
+  fun `profile screen equips roulette title below profile name without touching secret-code roleTitle`() {
+    var equippedRequested = ""
+    val profile = com.example.data.model.PlayerProfile(
+      userId = "zelda_explorer",
+      username = "zelda_explorer",
+      callsign = "Link",
+      role = "curious_explorer",
+      roleTitle = "Explorador Trifuerza",
+      equippedRouletteTitle = "Oráculo de Veyra",
+      unlockedRouletteTitles = listOf("Oráculo de Veyra", "Rastreador Estelar"),
+    )
+
+    composeTestRule.setContent {
+      RadarQuestTheme {
+        com.example.ui.screens.ProfileScreen(
+          uiState = RadarQuestUiState(myProfile = profile, isLoading = false),
+          onSaveProfile = { _, _, _, _, _, _, _, _, _ -> },
+          onQuickSelectPalette = {},
+          onOpenStyleCustomization = {},
+          onEquipRouletteTitle = { equippedRequested = it },
+        )
+      }
+    }
+
+    // Secret-code role title stays untouched
+    composeTestRule.onNodeWithTag("profile_role_badge").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Explorador Trifuerza").assertIsDisplayed()
+    // Equipped roulette special title displays below profile name
+    composeTestRule.onNodeWithTag("profile_equipped_roulette_title_badge").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Oráculo de Veyra").assertIsDisplayed()
+
+    // Equip another unlocked variant from the profile card
+    composeTestRule.onNodeWithTag("profile_title_chip_var_star_tracker")
+      .performScrollTo()
+      .performClick()
+    assertEquals("Rastreador Estelar", equippedRequested)
+  }
+
+  @Test
+  fun `radarQuestRepository accumulates roulette XP and bonus levels onto main profile without erasing roleTitle`() = runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val store = LocalAccountStore(context)
+    store.clearSavedAccount(markExplicitlySignedOut = false)
+
+    val repo = RadarQuestRepository(db = null, localAccountStore = store)
+    repo.ensureOrUpdatePlayerProfile(
+      username = "veyra",
+      callsign = "VeyraAdmin",
+      avatarIcon = "explore",
+      avatarColorHex = "#00BFA5",
+      statusMessage = "Probando",
+      seekingHelp = false,
+      isOnline = true,
+      latitude = 19.4326,
+      longitude = -99.1332,
+      role = "creator",
+      roleTitle = "Creador",
+    )
+
+    // Sumar XP (300 XP = +1 nivel) + 1 nivel gratis = Nivel 3
+    repo.awardPlayerStats(addXp = 300L, addBonusLevels = 1L)
+    // Sumar otros 100 XP después NO debe perder el nivel gratis acumulado
+    repo.awardPlayerStats(addXp = 100L)
+
+    repo.claimRouletteTitle("As del Destino")
+    repo.equipRouletteTitle("As del Destino")
+
+    val updated = repo.observeMyProfile(RadarQuestRepository.LOCAL_USER_ID).first()
+    assertNotNull(updated)
+    assertEquals(400L, updated?.xp)
+    assertEquals(1L, updated?.bonusLevels)
+    assertEquals(3L, updated?.level)
+    assertEquals("creator", updated?.role)
+    assertEquals("Creador", updated?.roleTitle)
+    assertEquals("As del Destino", updated?.equippedRouletteTitle)
+    assertTrue(updated?.unlockedRouletteTitles?.contains("As del Destino") == true)
+  }
 }

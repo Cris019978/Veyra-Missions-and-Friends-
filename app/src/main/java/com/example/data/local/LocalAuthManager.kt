@@ -15,6 +15,9 @@ data class LocalAuthSession(
   val roleTitle: String = LocalAuthManager.TITLE_EXPLORER,
   val xp: Long = 0L,
   val level: Long = 1L,
+  val bonusLevels: Long = 0L,
+  val equippedRouletteTitle: String = "",
+  val unlockedRouletteTitles: List<String> = emptyList(),
 )
 
 sealed class LocalAuthResult {
@@ -161,6 +164,9 @@ class LocalAuthManager(context: Context) {
     }
     val xp = prefs.getLong(userXpKey(username), 0L)
     val level = prefs.getLong(userLevelKey(username), 1L)
+    val bonusLevels = prefs.getLong(userBonusLevelsKey(username), 0L)
+    val equippedRouletteTitle = prefs.getString(userEquippedRouletteTitleKey(username), "").orEmpty()
+    val unlockedRouletteTitles = decodeTitles(prefs.getString(userUnlockedRouletteTitlesKey(username), "").orEmpty())
 
     val updatedUsernames = buildUpdatedSavedUsernames(username)
     prefs.edit()
@@ -172,6 +178,9 @@ class LocalAuthManager(context: Context) {
       .putString(KEY_ACTIVE_ROLE_TITLE, roleTitle)
       .putLong(KEY_ACTIVE_XP, xp)
       .putLong(KEY_ACTIVE_LEVEL, level)
+      .putLong(KEY_ACTIVE_BONUS_LEVELS, bonusLevels)
+      .putString(KEY_ACTIVE_EQUIPPED_ROULETTE_TITLE, equippedRouletteTitle)
+      .putString(KEY_ACTIVE_UNLOCKED_ROULETTE_TITLES, unlockedRouletteTitles.joinToString("|"))
       .apply()
 
     val session = LocalAuthSession(
@@ -182,23 +191,46 @@ class LocalAuthManager(context: Context) {
       roleTitle = roleTitle,
       xp = xp,
       level = level,
+      bonusLevels = bonusLevels,
+      equippedRouletteTitle = equippedRouletteTitle,
+      unlockedRouletteTitles = unlockedRouletteTitles,
     )
     _savedUsernamesFlow.value = updatedUsernames
     _sessionFlow.value = session
     return LocalAuthResult.Success(session)
   }
 
-  fun updateActiveStats(xp: Long, level: Long) {
+  fun updateActiveStats(xp: Long, level: Long, bonusLevels: Long = 0L) {
     val current = readActiveSession() ?: return
     val safeXp = xp.coerceAtLeast(0L)
     val safeLevel = level.coerceAtLeast(1L)
+    val safeBonusLevels = bonusLevels.coerceAtLeast(0L)
     prefs.edit()
       .putLong(KEY_ACTIVE_XP, safeXp)
       .putLong(KEY_ACTIVE_LEVEL, safeLevel)
+      .putLong(KEY_ACTIVE_BONUS_LEVELS, safeBonusLevels)
       .putLong(userXpKey(current.username), safeXp)
       .putLong(userLevelKey(current.username), safeLevel)
+      .putLong(userBonusLevelsKey(current.username), safeBonusLevels)
       .apply()
-    _sessionFlow.value = current.copy(xp = safeXp, level = safeLevel)
+    _sessionFlow.value = current.copy(xp = safeXp, level = safeLevel, bonusLevels = safeBonusLevels)
+  }
+
+  fun updateActiveRouletteTitles(equippedTitle: String, unlockedTitles: List<String>) {
+    val current = readActiveSession() ?: return
+    val cleanEquipped = equippedTitle.trim()
+    val cleanUnlocked = unlockedTitles.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+    val encodedUnlocked = cleanUnlocked.joinToString("|")
+    prefs.edit()
+      .putString(KEY_ACTIVE_EQUIPPED_ROULETTE_TITLE, cleanEquipped)
+      .putString(KEY_ACTIVE_UNLOCKED_ROULETTE_TITLES, encodedUnlocked)
+      .putString(userEquippedRouletteTitleKey(current.username), cleanEquipped)
+      .putString(userUnlockedRouletteTitlesKey(current.username), encodedUnlocked)
+      .apply()
+    _sessionFlow.value = current.copy(
+      equippedRouletteTitle = cleanEquipped,
+      unlockedRouletteTitles = cleanUnlocked,
+    )
   }
 
   fun updateActiveRole(role: String, roleTitle: String) {
@@ -223,6 +255,9 @@ class LocalAuthManager(context: Context) {
       .remove(KEY_ACTIVE_ROLE_TITLE)
       .remove(KEY_ACTIVE_XP)
       .remove(KEY_ACTIVE_LEVEL)
+      .remove(KEY_ACTIVE_BONUS_LEVELS)
+      .remove(KEY_ACTIVE_EQUIPPED_ROULETTE_TITLE)
+      .remove(KEY_ACTIVE_UNLOCKED_ROULETTE_TITLES)
       .apply()
     _sessionFlow.value = null
   }
@@ -270,6 +305,11 @@ class LocalAuthManager(context: Context) {
       roleTitle = roleTitle,
       xp = prefs.getLong(KEY_ACTIVE_XP, 0L),
       level = prefs.getLong(KEY_ACTIVE_LEVEL, 1L),
+      bonusLevels = prefs.getLong(KEY_ACTIVE_BONUS_LEVELS, 0L),
+      equippedRouletteTitle = prefs.getString(KEY_ACTIVE_EQUIPPED_ROULETTE_TITLE, "").orEmpty(),
+      unlockedRouletteTitles = decodeTitles(
+        prefs.getString(KEY_ACTIVE_UNLOCKED_ROULETTE_TITLES, "").orEmpty()
+      ),
     )
   }
 
@@ -283,6 +323,9 @@ class LocalAuthManager(context: Context) {
     private const val KEY_ACTIVE_ROLE_TITLE = "active_role_title"
     private const val KEY_ACTIVE_XP = "active_xp"
     private const val KEY_ACTIVE_LEVEL = "active_level"
+    private const val KEY_ACTIVE_BONUS_LEVELS = "active_bonus_levels"
+    private const val KEY_ACTIVE_EQUIPPED_ROULETTE_TITLE = "active_equipped_roulette_title"
+    private const val KEY_ACTIVE_UNLOCKED_ROULETTE_TITLES = "active_unlocked_roulette_titles"
 
     const val ROLE_EXPLORER = "explorer"
     const val ROLE_CREATOR = "creator"
@@ -411,10 +454,16 @@ class LocalAuthManager(context: Context) {
       return digest.joinToString("") { "%02x".format(it) }
     }
 
+    private fun decodeTitles(raw: String): List<String> =
+      raw.split("|").map { it.trim() }.filter { it.isNotBlank() }.distinct()
+
     private fun userPinHashKey(username: String) = "user_pin_hash_$username"
     private fun userRoleKey(username: String) = "user_role_$username"
     private fun userTitleKey(username: String) = "user_title_$username"
     private fun userXpKey(username: String) = "user_xp_$username"
     private fun userLevelKey(username: String) = "user_level_$username"
+    private fun userBonusLevelsKey(username: String) = "user_bonus_levels_$username"
+    private fun userEquippedRouletteTitleKey(username: String) = "user_equipped_roulette_title_$username"
+    private fun userUnlockedRouletteTitlesKey(username: String) = "user_unlocked_roulette_titles_$username"
   }
 }

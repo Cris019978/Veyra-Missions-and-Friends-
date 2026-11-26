@@ -3,6 +3,7 @@ package com.example.ui.screens
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -10,6 +11,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -29,14 +32,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.Casino
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Pets
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.Terrain
+import androidx.compose.material.icons.rounded.WorkspacePremium
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -72,11 +78,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.local.LocalAuthManager
+import com.example.roulette.RouletteCatalogDefaults
 import com.example.ui.components.RoleTitleBadge
+import com.example.ui.components.RouletteSpecialTitleBadge
 import com.example.ui.theme.PaletteOption
 import com.example.ui.viewmodel.RadarQuestUiState
 import com.example.util.PhotoUtils
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ProfileScreen(
   uiState: RadarQuestUiState,
@@ -94,6 +103,8 @@ fun ProfileScreen(
   onQuickSelectPalette: (String) -> Unit,
   onOpenStyleCustomization: () -> Unit,
   modifier: Modifier = Modifier,
+  onEquipRouletteTitle: (String) -> Unit = {},
+  onOpenRoulette: (() -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val profile = uiState.myProfile
@@ -429,6 +440,14 @@ fun ProfileScreen(
               modifier = Modifier.testTag("profile_role_badge"),
             )
           }
+          val equippedRouletteTitle = profile?.equippedRouletteTitle.orEmpty()
+          if (equippedRouletteTitle.isNotBlank()) {
+            Spacer(modifier = Modifier.height(6.dp))
+            RouletteSpecialTitleBadge(
+              title = equippedRouletteTitle,
+              modifier = Modifier.testTag("profile_equipped_roulette_title_badge"),
+            )
+          }
           if (statusMsg.isNotBlank()) {
             Spacer(modifier = Modifier.height(4.dp))
             Text(
@@ -453,6 +472,130 @@ fun ProfileScreen(
           StatPill(label = "XP", value = "${profile?.xp ?: 0}", modifier = Modifier.weight(1f))
           StatPill(label = "Misiones", value = "${profile?.missionsCompleted ?: 0}", modifier = Modifier.weight(1f))
           StatPill(label = "Ayudas", value = "${profile?.helpsGiven ?: 0}", modifier = Modifier.weight(1f))
+        }
+      }
+
+      // 2.5 Equippable Roulette Special Titles (kept strictly separate from Secret-Code RoleTitleBadge)
+      item(key = "profile_roulette_titles_card") {
+        val unlockedTitles = profile?.unlockedRouletteTitles ?: emptyList()
+        val equippedTitle = profile?.equippedRouletteTitle.orEmpty()
+        Card(
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+          shape = MaterialTheme.shapes.large,
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .testTag("profile_roulette_titles_card"),
+        ) {
+          Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.weight(1f),
+              ) {
+                Icon(
+                  imageVector = Icons.Rounded.WorkspacePremium,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                )
+                Column {
+                  Text(
+                    text = "Títulos Especiales (${unlockedTitles.size}/${RouletteCatalogDefaults.specialTitleVariants.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                  )
+                  Text(
+                    text = "Se equipan debajo de tu nombre sin tocar tu título de código especial.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+              }
+              if (onOpenRoulette != null) {
+                FilledTonalButton(
+                  onClick = onOpenRoulette,
+                  shape = CircleShape,
+                  modifier = Modifier.testTag("profile_open_roulette_button"),
+                ) {
+                  Icon(
+                    imageVector = Icons.Rounded.Casino,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                  )
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text("Ruleta")
+                }
+              }
+            }
+
+            if (equippedTitle.isNotBlank()) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth(),
+              ) {
+                Text(
+                  text = "Equipado: $equippedTitle",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.primary,
+                )
+                FilterChip(
+                  selected = false,
+                  onClick = { onEquipRouletteTitle("") },
+                  label = { Text("Quitar") },
+                  modifier = Modifier.testTag("profile_unequip_roulette_title_button"),
+                )
+              }
+            }
+
+            FlowRow(
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              RouletteCatalogDefaults.specialTitleVariants.forEach { variant ->
+                val isUnlocked = variant.title in unlockedTitles
+                val isEquipped = equippedTitle == variant.title
+                FilterChip(
+                  selected = isEquipped,
+                  enabled = isUnlocked,
+                  onClick = {
+                    if (isUnlocked) {
+                      onEquipRouletteTitle(if (isEquipped) "" else variant.title)
+                    }
+                  },
+                  leadingIcon = {
+                    Icon(
+                      imageVector = when {
+                        isEquipped -> Icons.Rounded.Check
+                        isUnlocked -> Icons.Rounded.WorkspacePremium
+                        else -> Icons.Rounded.Lock
+                      },
+                      contentDescription = null,
+                      tint = if (isUnlocked) variant.accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                      modifier = Modifier.size(16.dp),
+                    )
+                  },
+                  label = {
+                    Text(
+                      text = variant.title,
+                      fontWeight = if (isUnlocked) FontWeight.SemiBold else FontWeight.Normal,
+                    )
+                  },
+                  modifier = Modifier.testTag("profile_title_chip_${variant.id}"),
+                )
+              }
+            }
+          }
         }
       }
 

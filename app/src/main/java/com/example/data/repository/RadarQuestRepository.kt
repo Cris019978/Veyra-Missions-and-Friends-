@@ -242,6 +242,9 @@ class RadarQuestRepository(
     roleTitle: String? = null,
     initialXp: Long = 0L,
     initialLevel: Long = 1L,
+    initialBonusLevels: Long = 0L,
+    initialEquippedRouletteTitle: String = "",
+    initialUnlockedRouletteTitles: List<String> = emptyList(),
   ): Result<Unit> {
     val safeUsername = username.trim().replace(Regex("[^a-zA-Z0-9_]"), "").take(24)
     val safeCallsign = callsign.trim().ifBlank { "Explorador" }.take(32).padEnd(2, 'X')
@@ -255,7 +258,11 @@ class RadarQuestRepository(
       val resolvedRole = role?.ifBlank { null } ?: current?.role ?: LocalAuthManager.ROLE_EXPLORER
       val resolvedTitle = roleTitle?.ifBlank { null } ?: current?.roleTitle ?: LocalAuthManager.TITLE_EXPLORER
       val resolvedXp = current?.xp ?: initialXp.coerceAtLeast(0L)
-      val resolvedLevel = current?.level ?: initialLevel.coerceAtLeast(1L)
+      val resolvedBonusLevels = current?.bonusLevels ?: initialBonusLevels.coerceAtLeast(0L)
+      val resolvedLevel = current?.level ?: maxOf(initialLevel.coerceAtLeast(1L), (resolvedXp / 250L) + 1L + resolvedBonusLevels)
+      val resolvedEquippedRoulette = current?.equippedRouletteTitle ?: initialEquippedRouletteTitle.trim()
+      val resolvedUnlockedRoulette = current?.unlockedRouletteTitles
+        ?: initialUnlockedRouletteTitles.map { it.trim() }.filter { it.isNotBlank() }.distinct()
       val updated = PlayerProfile(
         id = current?.id?.ifBlank { activeUid } ?: activeUid,
         userId = current?.userId?.ifBlank { activeUid } ?: activeUid,
@@ -273,11 +280,14 @@ class RadarQuestRepository(
         longitude = longitude.coerceIn(-180.0, 180.0),
         xp = resolvedXp,
         level = resolvedLevel,
+        bonusLevels = resolvedBonusLevels,
         missionsCompleted = current?.missionsCompleted ?: 0L,
         helpsGiven = current?.helpsGiven ?: 0L,
         duelsWon = current?.duelsWon ?: 0L,
         role = resolvedRole,
         roleTitle = resolvedTitle,
+        equippedRouletteTitle = resolvedEquippedRoulette,
+        unlockedRouletteTitles = resolvedUnlockedRoulette,
       )
       localProfileFlow.value = updated
       runCatching { localAccountStore?.saveProfile(updated) }
@@ -386,6 +396,7 @@ class RadarQuestRepository(
     addMissionsCompleted: Long = 0L,
     addHelpsGiven: Long = 0L,
     addDuelsWon: Long = 0L,
+    addBonusLevels: Long = 0L,
   ): Result<Unit> {
     val firestore = db
     if (firestore == null) {
@@ -395,11 +406,18 @@ class RadarQuestRepository(
         userId = uid,
         callsign = "Explorador",
       )
+      val baseLevelFromOldXp = (current.xp / 250L) + 1L
+      val preservedBonusLevels = maxOf(
+        current.bonusLevels,
+        (current.level - baseLevelFromOldXp).coerceAtLeast(0L),
+      )
       val newXp = (current.xp + addXp).coerceAtLeast(0L)
-      val newLevel = (newXp / 250L) + 1L
+      val newBonusLevels = (preservedBonusLevels + addBonusLevels).coerceAtLeast(0L)
+      val newLevel = (newXp / 250L) + 1L + newBonusLevels
       val updated = current.copy(
         xp = newXp,
         level = newLevel,
+        bonusLevels = newBonusLevels,
         missionsCompleted = current.missionsCompleted + addMissionsCompleted,
         helpsGiven = current.helpsGiven + addHelpsGiven,
         duelsWon = current.duelsWon + addDuelsWon,
@@ -414,8 +432,15 @@ class RadarQuestRepository(
       val docRef = firestore.collection("players").document(uid)
       val snap = docRef.get().await()
       val currentXp = snap.getLong("xp") ?: 0L
+      val currentLevel = snap.getLong("level") ?: 1L
+      val currentBonus = snap.getLong("bonusLevels") ?: 0L
+      val preservedBonusLevels = maxOf(
+        currentBonus,
+        (currentLevel - ((currentXp / 250L) + 1L)).coerceAtLeast(0L),
+      )
       val newXp = (currentXp + addXp).coerceAtLeast(0L)
-      val newLevel = (newXp / 250L) + 1L
+      val newBonusLevels = (preservedBonusLevels + addBonusLevels).coerceAtLeast(0L)
+      val newLevel = (newXp / 250L) + 1L + newBonusLevels
       val currentMissions = snap.getLong("missionsCompleted") ?: 0L
       val currentHelps = snap.getLong("helpsGiven") ?: 0L
       val currentDuels = snap.getLong("duelsWon") ?: 0L
@@ -423,12 +448,93 @@ class RadarQuestRepository(
         mapOf(
           "xp" to newXp,
           "level" to newLevel,
+          "bonusLevels" to newBonusLevels,
           "missionsCompleted" to currentMissions + addMissionsCompleted,
           "helpsGiven" to currentHelps + addHelpsGiven,
           "duelsWon" to currentDuels + addDuelsWon,
           "updatedAt" to FieldValue.serverTimestamp(),
         )
       ).await()
+      Unit
+    }.onFailure { e ->
+      if (e is CancellationException) throw e
+      handleFirestoreError(e, OperationType.UPDATE, "players/${requireUserId()}")
+    }
+  }
+
+  suspend fun claimRouletteTitle(title: String): Result<Unit> {
+    val cleanTitle = title.trim().take(64)
+    if (cleanTitle.isBlank()) return Result.success(Unit)
+    val firestore = db
+    if (firestore == null) {
+      val uid = requireUserId()
+      val current = ensureHydratedLocalProfile() ?: PlayerProfile(
+        id = uid,
+        userId = uid,
+        callsign = "Explorador",
+      )
+      if (cleanTitle in current.unlockedRouletteTitles) {
+        return Result.success(Unit)
+      }
+      val updated = current.copy(
+        unlockedRouletteTitles = (current.unlockedRouletteTitles + cleanTitle).distinct(),
+      )
+      localProfileFlow.value = updated
+      runCatching { localAccountStore?.saveProfile(updated) }
+      return Result.success(Unit)
+    }
+
+    return runCatching {
+      val uid = requireUserId()
+      val docRef = firestore.collection("players").document(uid)
+      docRef.update(
+        mapOf(
+          "unlockedRouletteTitles" to FieldValue.arrayUnion(cleanTitle),
+          "updatedAt" to FieldValue.serverTimestamp(),
+        )
+      ).await()
+      Unit
+    }.onFailure { e ->
+      if (e is CancellationException) throw e
+      handleFirestoreError(e, OperationType.UPDATE, "players/${requireUserId()}")
+    }
+  }
+
+  suspend fun equipRouletteTitle(title: String): Result<Unit> {
+    val cleanTitle = title.trim().take(64)
+    val firestore = db
+    if (firestore == null) {
+      val uid = requireUserId()
+      val current = ensureHydratedLocalProfile() ?: PlayerProfile(
+        id = uid,
+        userId = uid,
+        callsign = "Explorador",
+      )
+      val nextUnlocked = if (cleanTitle.isNotBlank() && cleanTitle !in current.unlockedRouletteTitles) {
+        (current.unlockedRouletteTitles + cleanTitle).distinct()
+      } else {
+        current.unlockedRouletteTitles
+      }
+      val updated = current.copy(
+        equippedRouletteTitle = cleanTitle,
+        unlockedRouletteTitles = nextUnlocked,
+      )
+      localProfileFlow.value = updated
+      runCatching { localAccountStore?.saveProfile(updated) }
+      return Result.success(Unit)
+    }
+
+    return runCatching {
+      val uid = requireUserId()
+      val docRef = firestore.collection("players").document(uid)
+      val updates = mutableMapOf<String, Any>(
+        "equippedRouletteTitle" to cleanTitle,
+        "updatedAt" to FieldValue.serverTimestamp(),
+      )
+      if (cleanTitle.isNotBlank()) {
+        updates["unlockedRouletteTitles"] = FieldValue.arrayUnion(cleanTitle)
+      }
+      docRef.update(updates).await()
       Unit
     }.onFailure { e ->
       if (e is CancellationException) throw e

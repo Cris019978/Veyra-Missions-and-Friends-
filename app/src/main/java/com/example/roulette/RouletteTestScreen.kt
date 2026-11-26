@@ -43,6 +43,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MilitaryTech
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SettingsEthernet
@@ -56,6 +57,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -104,11 +106,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
- * Pantalla completa autocontenida de prueba en Jetpack Compose para la Ruleta de Doble Vista.
- *
- * Consume [RouletteStateManager] en memoria sin acoplarse a persistencia en disco.
- * TODO [Persistencia Local Futura]: Al integrar con el flujo principal, conectar un repositorio
- * en [RouletteStateManager] para restaurar giros, XP, misiones y títulos entre sesiones.
+ * Pantalla completa de la Ruleta de Doble Vista conectada al perfil principal de Veyra.
  */
 @Composable
 fun RouletteTestScreen(
@@ -125,6 +123,9 @@ fun RouletteTestScreen(
     onSpinAnimated = { stateManager.spinOnceAnimated() },
     onSpinInstant = stateManager::spinOnceInstant,
     onSimulateBatch = stateManager::simulateBatchSpins,
+    onClaimTitle = { title, equip -> stateManager.claimPendingTitle(title, equipAfterClaim = equip) },
+    onClaimAllTitles = stateManager::claimAllPendingTitles,
+    onEquipTitle = stateManager::equipProfileTitle,
     onToggleDebugPanel = stateManager::toggleDebugPanel,
     onReset = stateManager::resetAll,
     onClose = onClose,
@@ -146,6 +147,9 @@ fun RouletteTestScreenContent(
   onClose: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
   animationTier: String = "high",
+  onClaimTitle: (title: String, equipAfterClaim: Boolean) -> Unit = { _, _ -> },
+  onClaimAllTitles: () -> Unit = {},
+  onEquipTitle: (String) -> Unit = {},
 ) {
   val prizes = remember(uiState.prizeProbabilities) {
     if (uiState.prizeProbabilities.isNotEmpty()) {
@@ -298,17 +302,22 @@ fun RouletteTestScreenContent(
             LastRewardBanner(
               record = latest,
               completedMissionTitle = uiState.lastCompletedSpinMissionTitle,
+              pendingClaimTitles = uiState.pendingClaimTitles,
+              unlockedTitles = uiState.unlockedExclusiveTitles,
+              equippedTitle = uiState.equippedProfileTitle,
+              onClaimTitle = onClaimTitle,
+              onEquipTitle = onEquipTitle,
             )
           }
         }
 
-        if (uiState.unlockedExclusiveTitles.isNotEmpty() ||
-          uiState.activeRandomMissions.isNotEmpty() ||
-          uiState.activeHardMissions.isNotEmpty()
-        ) {
-          item(key = "unlocks_summary") {
-            UnlocksAndMissionsSummaryCard(uiState = uiState)
-          }
+        item(key = "unlocks_summary") {
+          UnlocksAndMissionsSummaryCard(
+            uiState = uiState,
+            onClaimTitle = onClaimTitle,
+            onClaimAllTitles = onClaimAllTitles,
+            onEquipTitle = onEquipTitle,
+          )
         }
 
         item(key = "spin_missions") {
@@ -350,9 +359,10 @@ private fun RouletteHeaderBar(
           fontWeight = FontWeight.ExtraBold,
         )
         Text(
-          text = "Modo prueba en memoria • Recalibración dinámica",
+          text = "Perfil: NV ${uiState.mainProfileLevel} • ${uiState.mainProfileXp} XP (suma real)",
           style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          color = MaterialTheme.colorScheme.primary,
+          fontWeight = FontWeight.SemiBold,
         )
       }
       if (onClose != null) {
@@ -373,9 +383,13 @@ private fun RouletteHeaderBar(
       verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       StatPillChip(label = "Giros", value = uiState.totalSpins.toString(), tag = "roulette_stat_spins")
-      StatPillChip(label = "XP", value = "${uiState.accumulatedXp}", tag = "roulette_stat_xp")
+      StatPillChip(label = "XP Ganado", value = "${uiState.accumulatedXp}", tag = "roulette_stat_xp")
       StatPillChip(label = "Niveles +", value = "+${uiState.bonusLevelsWon}", tag = "roulette_stat_levels")
-      StatPillChip(label = "Títulos", value = "${uiState.unlockedExclusiveTitles.size}/2", tag = "roulette_stat_titles")
+      StatPillChip(
+        label = "Títulos",
+        value = "${uiState.unlockedExclusiveTitles.size}/${RouletteCatalogDefaults.specialTitleVariants.size}",
+        tag = "roulette_stat_titles",
+      )
     }
   }
 }
@@ -869,11 +883,22 @@ private fun TapePrizeTile(
   }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LastRewardBanner(
   record: RouletteSpinRecord,
   completedMissionTitle: String?,
+  pendingClaimTitles: List<String>,
+  unlockedTitles: List<String>,
+  equippedTitle: String,
+  onClaimTitle: (title: String, equipAfterClaim: Boolean) -> Unit,
+  onEquipTitle: (String) -> Unit,
 ) {
+  val wonTitle = record.claimableTitle ?: record.prize.unlockedTitle
+  val isPendingClaim = wonTitle != null && wonTitle in pendingClaimTitles
+  val isClaimed = wonTitle != null && wonTitle in unlockedTitles
+  val isEquipped = wonTitle != null && wonTitle == equippedTitle
+
   Card(
     colors = CardDefaults.cardColors(
       containerColor = record.prize.rarity.badgeBgColor.copy(alpha = 0.85f),
@@ -883,51 +908,88 @@ private fun LastRewardBanner(
       .fillMaxWidth()
       .testTag("roulette_last_reward_card"),
   ) {
-    Row(
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(12.dp),
+    Column(
+      verticalArrangement = Arrangement.spacedBy(10.dp),
       modifier = Modifier
         .fillMaxWidth()
         .padding(14.dp),
     ) {
-      Surface(
-        shape = CircleShape,
-        color = record.prize.rarity.accentColor.copy(alpha = 0.2f),
-        modifier = Modifier.size(44.dp),
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.fillMaxWidth(),
       ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            imageVector = prizeIcon(record.prize),
-            contentDescription = null,
-            tint = record.prize.rarity.accentColor,
+        Surface(
+          shape = CircleShape,
+          color = record.prize.rarity.accentColor.copy(alpha = 0.2f),
+          modifier = Modifier.size(44.dp),
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = prizeIcon(record.prize),
+              contentDescription = null,
+              tint = record.prize.rarity.accentColor,
+            )
+          }
+        }
+
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = "Giro #${record.spinNumber} • ${record.prize.title}",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
           )
+          Text(
+            text = buildString {
+              append(record.prize.subtitle)
+              if (record.bonusFloorXp > 0L) {
+                append(" • ¡Carga 100%: +${record.bonusFloorXp} XP!")
+              }
+              if (record.totalXpGranted > 0L) {
+                append(" • +${record.totalXpGranted} XP al perfil")
+              }
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.85f),
+          )
+          if (!completedMissionTitle.isNullOrBlank()) {
+            Text(
+              text = "Misión completada: $completedMissionTitle",
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.SemiBold,
+              color = Color(0xFF6EE7B7),
+            )
+          }
         }
       }
 
-      Column(modifier = Modifier.weight(1f)) {
-        Text(
-          text = "Giro #${record.spinNumber} • ${record.prize.title}",
-          style = MaterialTheme.typography.titleSmall,
-          fontWeight = FontWeight.Bold,
-          color = Color.White,
-        )
-        Text(
-          text = buildString {
-            append(record.prize.subtitle)
-            if (record.bonusFloorXp > 0L) {
-              append(" • ¡Carga 100%: +${record.bonusFloorXp} XP!")
+      if (wonTitle != null && (isPendingClaim || isClaimed)) {
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          if (isPendingClaim) {
+            Button(
+              onClick = { onClaimTitle(wonTitle, false) },
+              modifier = Modifier.testTag("roulette_claim_last_title_button"),
+            ) {
+              Text("Reclamar título")
             }
-          },
-          style = MaterialTheme.typography.bodySmall,
-          color = Color.White.copy(alpha = 0.85f),
-        )
-        if (!completedMissionTitle.isNullOrBlank()) {
-          Text(
-            text = "Misión completada: $completedMissionTitle",
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = Color(0xFF6EE7B7),
-          )
+            FilledTonalButton(
+              onClick = { onClaimTitle(wonTitle, true) },
+              modifier = Modifier.testTag("roulette_claim_and_equip_button"),
+            ) {
+              Text("Reclamar y equipar")
+            }
+          } else if (isClaimed) {
+            FilledTonalButton(
+              onClick = { onEquipTitle(if (isEquipped) "" else wonTitle) },
+              modifier = Modifier.testTag("roulette_equip_last_title_button"),
+            ) {
+              Text(if (isEquipped) "Equipado en perfil (Quitar)" else "Equipar en perfil")
+            }
+          }
         }
       }
     }
@@ -936,54 +998,129 @@ private fun LastRewardBanner(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun UnlocksAndMissionsSummaryCard(uiState: RouletteUiState) {
+private fun UnlocksAndMissionsSummaryCard(
+  uiState: RouletteUiState,
+  onClaimTitle: (title: String, equipAfterClaim: Boolean) -> Unit,
+  onClaimAllTitles: () -> Unit,
+  onEquipTitle: (String) -> Unit,
+) {
   Card(
     colors = CardDefaults.cardColors(
       containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
     ),
-    modifier = Modifier.fillMaxWidth(),
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("roulette_titles_catalog_card"),
   ) {
     Column(
       verticalArrangement = Arrangement.spacedBy(10.dp),
       modifier = Modifier.padding(14.dp),
     ) {
-      if (uiState.unlockedExclusiveTitles.isNotEmpty()) {
+      Row(
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = "Títulos Especiales (${uiState.unlockedExclusiveTitles.size}/${RouletteCatalogDefaults.specialTitleVariants.size})",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+          )
+          if (uiState.activeTitleVariants.isNotEmpty()) {
+            Text(
+              text = "En giro actual: ${uiState.activeTitleVariants.joinToString(" • ")}",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.primary,
+            )
+          }
+        }
+        if (uiState.pendingClaimTitles.size > 1) {
+          FilledTonalButton(
+            onClick = onClaimAllTitles,
+            modifier = Modifier.testTag("roulette_claim_all_titles_button"),
+          ) {
+            Text("Reclamar (${uiState.pendingClaimTitles.size})")
+          }
+        }
+      }
+
+      if (uiState.pendingClaimTitles.isNotEmpty()) {
         Text(
-          text = "Títulos Exclusivos Desbloqueados",
-          style = MaterialTheme.typography.titleSmall,
+          text = "Disponibles para reclamar:",
+          style = MaterialTheme.typography.labelMedium,
           fontWeight = FontWeight.Bold,
+          color = Color(0xFFFBBF24),
         )
         FlowRow(
           horizontalArrangement = Arrangement.spacedBy(8.dp),
           verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          uiState.unlockedExclusiveTitles.forEach { title ->
-            // OPT: key estable por título para evitar recrear chips ya desbloqueados.
-            key(title) {
-              Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.tertiaryContainer,
+          uiState.pendingClaimTitles.forEach { title ->
+            key("pending_$title") {
+              FilledTonalButton(
+                onClick = { onClaimTitle(title, true) },
+                modifier = Modifier.testTag("roulette_claim_title_$title"),
               ) {
-                Row(
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(4.dp),
-                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                ) {
-                  Icon(
-                    imageVector = Icons.Rounded.MilitaryTech,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                    modifier = Modifier.size(16.dp),
-                  )
-                  Text(
-                    text = title,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer,
-                  )
-                }
+                Icon(
+                  imageVector = Icons.Rounded.WorkspacePremium,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Reclamar: $title")
               }
             }
+          }
+        }
+      }
+
+      FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        RouletteCatalogDefaults.specialTitleVariants.forEach { variant ->
+          key(variant.id) {
+            val isClaimed = variant.title in uiState.unlockedExclusiveTitles
+            val isPending = variant.title in uiState.pendingClaimTitles
+            val isEquipped = uiState.equippedProfileTitle == variant.title
+            FilterChip(
+              selected = isEquipped,
+              enabled = isClaimed || isPending,
+              onClick = {
+                when {
+                  isPending -> onClaimTitle(variant.title, true)
+                  isClaimed -> onEquipTitle(if (isEquipped) "" else variant.title)
+                }
+              },
+              leadingIcon = {
+                Icon(
+                  imageVector = when {
+                    isEquipped -> Icons.Rounded.CheckCircle
+                    isPending -> Icons.Rounded.WorkspacePremium
+                    isClaimed -> Icons.Rounded.MilitaryTech
+                    else -> Icons.Rounded.Lock
+                  },
+                  contentDescription = null,
+                  tint = when {
+                    isClaimed || isPending -> variant.accentColor
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                  },
+                  modifier = Modifier.size(16.dp),
+                )
+              },
+              label = {
+                Text(
+                  text = when {
+                    isEquipped -> "${variant.title} • Equipado"
+                    isPending -> "${variant.title} (Reclamar)"
+                    else -> variant.title
+                  },
+                  fontWeight = if (isClaimed || isPending) FontWeight.Bold else FontWeight.Normal,
+                )
+              },
+              modifier = Modifier.testTag("roulette_variant_chip_${variant.id}"),
+            )
           }
         }
       }
@@ -1400,19 +1537,22 @@ private fun ProbabilityRow(snapshot: PrizeProbabilitySnapshot) {
   }
 }
 
-private fun shortWheelLabel(prize: RoulettePrize): String = when (prize.id) {
-  "xp_1_floor" -> "1 XP+"
-  "xp_25" -> "25 XP"
-  "xp_100" -> "100 XP"
-  "mission_random" -> "Misión"
-  "xp_350" -> "350 XP"
-  "mission_hard" -> "Riesgo!"
-  "title_oracle" -> "Oráculo"
-  "title_luck_lord" -> "Azar"
-  "xp_1000" -> "1K XP"
-  "free_level_jackpot" -> "+1 NV"
-  else -> prize.title.take(7)
-}
+private fun shortWheelLabel(prize: RoulettePrize): String =
+  prize.wheelShortLabel.ifBlank {
+    when (prize.id) {
+      "xp_1_floor" -> "1 XP+"
+      "xp_25" -> "25 XP"
+      "xp_100" -> "100 XP"
+      "mission_random" -> "Misión"
+      "xp_350" -> "350 XP"
+      "mission_hard" -> "Riesgo!"
+      RouletteCatalogDefaults.TITLE_SLOT_A_ID -> "Título A"
+      RouletteCatalogDefaults.TITLE_SLOT_B_ID -> "Título B"
+      "xp_1000" -> "1K XP"
+      "free_level_jackpot" -> "+1 NV"
+      else -> prize.title.take(7)
+    }
+  }
 
 private fun prizeIcon(prize: RoulettePrize): ImageVector = when (prize.category) {
   RoulettePrizeCategory.XP -> Icons.Rounded.Bolt

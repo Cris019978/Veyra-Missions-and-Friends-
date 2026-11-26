@@ -64,11 +64,14 @@ data class PlayerProfile(
   val longitude: Double = 0.0,
   val xp: Long = 0L,
   val level: Long = 1L,
+  val bonusLevels: Long = 0L,
   val missionsCompleted: Long = 0L,
   val helpsGiven: Long = 0L,
   val duelsWon: Long = 0L,
   val role: String = "explorer", // explorer, creator, beta_tester
   val roleTitle: String = "Explorador",
+  val equippedRouletteTitle: String = "",
+  val unlockedRouletteTitles: List<String> = emptyList(),
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null,
 )

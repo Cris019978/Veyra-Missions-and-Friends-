@@ -14,6 +14,7 @@ import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.MilitaryTech
 import androidx.compose.material.icons.rounded.NightsStay
 import androidx.compose.material.icons.rounded.Science
+import androidx.compose.material.icons.rounded.WorkspacePremium
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -25,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.local.LocalAuthManager
+import com.example.roulette.RouletteCatalogDefaults
 
 @Composable
 fun RoleTitleBadge(
@@ -176,6 +178,46 @@ fun ContributionScoreBadge(
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.SemiBold,
         color = contentColor,
+      )
+    }
+  }
+}
+
+@Composable
+fun RouletteSpecialTitleBadge(
+  title: String,
+  modifier: Modifier = Modifier,
+) {
+  val cleanTitle = title.trim()
+  if (cleanTitle.isBlank()) return
+  val variant = RouletteCatalogDefaults.findTitleVariant(cleanTitle)
+  val accentColor = variant?.accentColor ?: MaterialTheme.colorScheme.tertiary
+  val containerColor = variant?.rarity?.badgeBgColor ?: MaterialTheme.colorScheme.tertiaryContainer
+  val borderColor = accentColor.copy(alpha = 0.65f)
+
+  Surface(
+    color = containerColor,
+    contentColor = accentColor,
+    shape = RoundedCornerShape(50),
+    border = BorderStroke(1.dp, borderColor),
+    modifier = modifier,
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 11.dp, vertical = 4.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+      Icon(
+        imageVector = Icons.Rounded.WorkspacePremium,
+        contentDescription = "Título de ruleta equipado: $cleanTitle",
+        tint = accentColor,
+        modifier = Modifier.size(14.dp),
+      )
+      Text(
+        text = cleanTitle,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.Bold,
+        color = accentColor,
       )
     }
   }

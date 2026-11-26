@@ -49,6 +49,17 @@ data class RoulettePrize(
   val unlockedTitle: String? = null,
   val isHighRisk: Boolean = false,
   val floorChargeBoost: Int = 0,
+  val wheelShortLabel: String = "",
+)
+
+@Immutable
+data class RouletteTitleVariant(
+  val id: String,
+  val title: String,
+  val shortLabel: String,
+  val rarity: RouletteRarity,
+  val accentColor: Color,
+  val duplicateXpCompensation: Long,
 )
 
 // OPT: @Immutable evita recomponer toda la tabla de probabilidades cuando solo cambia otro campo de UI.
@@ -91,6 +102,8 @@ data class RouletteSpinRecord(
   val wasSimulatedBatch: Boolean,
   val timestampMs: Long,
   val winningProbabilityPercent: Double,
+  val claimableTitle: String? = null,
+  val totalXpGranted: Long = 0L,
 )
 
 // OPT: @Immutable con colecciones de solo lectura permite a Compose saltar subárboles sin cambios.
@@ -104,6 +117,11 @@ data class RouletteUiState(
   val floorChargePercent: Int = 0,
   val floorBonusTriggers: Int = 0,
   val unlockedExclusiveTitles: List<String> = emptyList(),
+  val pendingClaimTitles: List<String> = emptyList(),
+  val equippedProfileTitle: String = "",
+  val activeTitleVariants: List<String> = emptyList(),
+  val mainProfileLevel: Long = 1L,
+  val mainProfileXp: Long = 0L,
   val activeRandomMissions: List<String> = emptyList(),
   val activeHardMissions: List<String> = emptyList(),
   val prizeProbabilities: List<PrizeProbabilitySnapshot> = emptyList(),
@@ -117,6 +135,114 @@ data class RouletteUiState(
 )
 
 object RouletteCatalogDefaults {
+  const val TITLE_SLOT_A_ID = "title_oracle"
+  const val TITLE_SLOT_B_ID = "title_luck_lord"
+
+  val specialTitleVariants: List<RouletteTitleVariant> = listOf(
+    RouletteTitleVariant(
+      id = "var_oracle",
+      title = "Oráculo de Veyra",
+      shortLabel = "Oráculo",
+      rarity = RouletteRarity.EPIC,
+      accentColor = Color(0xFFA78BFA),
+      duplicateXpCompensation = 200L,
+    ),
+    RouletteTitleVariant(
+      id = "var_luck_lord",
+      title = "Señor del Azar",
+      shortLabel = "Azar",
+      rarity = RouletteRarity.LEGENDARY,
+      accentColor = Color(0xFFFBBF24),
+      duplicateXpCompensation = 300L,
+    ),
+    RouletteTitleVariant(
+      id = "var_star_tracker",
+      title = "Rastreador Estelar",
+      shortLabel = "Estelar",
+      rarity = RouletteRarity.EPIC,
+      accentColor = Color(0xFF38BDF8),
+      duplicateXpCompensation = 200L,
+    ),
+    RouletteTitleVariant(
+      id = "var_pulse_walker",
+      title = "Caminante del Pulso",
+      shortLabel = "Pulso",
+      rarity = RouletteRarity.EPIC,
+      accentColor = Color(0xFF34D399),
+      duplicateXpCompensation = 200L,
+    ),
+    RouletteTitleVariant(
+      id = "var_neon_cipher",
+      title = "Cifra Neón",
+      shortLabel = "Neón",
+      rarity = RouletteRarity.LEGENDARY,
+      accentColor = Color(0xFFF472B6),
+      duplicateXpCompensation = 300L,
+    ),
+    RouletteTitleVariant(
+      id = "var_abyss_compass",
+      title = "Brújula Abisal",
+      shortLabel = "Abisal",
+      rarity = RouletteRarity.EPIC,
+      accentColor = Color(0xFF60A5FA),
+      duplicateXpCompensation = 200L,
+    ),
+    RouletteTitleVariant(
+      id = "var_solar_warden",
+      title = "Guardián Solar",
+      shortLabel = "Solar",
+      rarity = RouletteRarity.LEGENDARY,
+      accentColor = Color(0xFFFB923C),
+      duplicateXpCompensation = 300L,
+    ),
+    RouletteTitleVariant(
+      id = "var_chronos_runner",
+      title = "Corredor de Cronos",
+      shortLabel = "Cronos",
+      rarity = RouletteRarity.EPIC,
+      accentColor = Color(0xFF2DD4BF),
+      duplicateXpCompensation = 200L,
+    ),
+    RouletteTitleVariant(
+      id = "var_eclipse_sage",
+      title = "Sabio del Eclipse",
+      shortLabel = "Eclipse",
+      rarity = RouletteRarity.LEGENDARY,
+      accentColor = Color(0xFFC084FC),
+      duplicateXpCompensation = 300L,
+    ),
+    RouletteTitleVariant(
+      id = "var_destiny_ace",
+      title = "As del Destino",
+      shortLabel = "Destino",
+      rarity = RouletteRarity.MYTHIC,
+      accentColor = Color(0xFFF43F5E),
+      duplicateXpCompensation = 350L,
+    ),
+  )
+
+  fun findTitleVariant(title: String?): RouletteTitleVariant? {
+    val clean = title?.trim().orEmpty()
+    if (clean.isBlank()) return null
+    return specialTitleVariants.firstOrNull { it.title.equals(clean, ignoreCase = true) }
+  }
+
+  fun prizeForTitleSlot(
+    slotId: String,
+    baseWeight: Double,
+    variant: RouletteTitleVariant,
+  ): RoulettePrize = RoulettePrize(
+    id = slotId,
+    title = "Título: ${variant.title}",
+    subtitle = "Reclamable de ruleta (${variant.rarity.label}) • +${variant.duplicateXpCompensation} XP si repetido",
+    category = RoulettePrizeCategory.EXCLUSIVE_TITLE,
+    rarity = variant.rarity,
+    baseWeight = baseWeight,
+    xpAmount = variant.duplicateXpCompensation,
+    unlockedTitle = variant.title,
+    wheelShortLabel = variant.shortLabel,
+  )
+
   val defaultPrizes: List<RoulettePrize> = listOf(
     RoulettePrize(
       id = "xp_1_floor",
@@ -127,6 +253,7 @@ object RouletteCatalogDefaults {
       baseWeight = 34.0,
       xpAmount = 1L,
       floorChargeBoost = 25,
+      wheelShortLabel = "1 XP+",
     ),
     RoulettePrize(
       id = "xp_25",
@@ -137,6 +264,7 @@ object RouletteCatalogDefaults {
       baseWeight = 22.0,
       xpAmount = 25L,
       floorChargeBoost = 10,
+      wheelShortLabel = "25 XP",
     ),
     RoulettePrize(
       id = "xp_100",
@@ -147,54 +275,48 @@ object RouletteCatalogDefaults {
       baseWeight = 15.0,
       xpAmount = 100L,
       floorChargeBoost = 5,
+      wheelShortLabel = "100 XP",
     ),
     RoulettePrize(
       id = "mission_random",
       title = "Misión Aleatoria",
-      subtitle = "Ruta rápida sorpresa (+120 XP al completar)",
+      subtitle = "Ruta rápida sorpresa (+40 XP inmediatos)",
       category = RoulettePrizeCategory.RANDOM_MISSION,
       rarity = RouletteRarity.UNCOMMON,
       baseWeight = 11.0,
       xpAmount = 40L,
+      wheelShortLabel = "Misión",
     ),
     RoulettePrize(
       id = "xp_350",
       title = "350 XP Sobrecarga",
-      subtitle = "Salto fuerte de experiencia",
+      subtitle = "Salto fuerte de experiencia al perfil",
       category = RoulettePrizeCategory.XP,
       rarity = RouletteRarity.RARE,
       baseWeight = 7.5,
       xpAmount = 350L,
+      wheelShortLabel = "350 XP",
     ),
     RoulettePrize(
       id = "mission_hard",
       title = "Misión Alto Riesgo",
-      subtitle = "Dificultad extrema • Recompensa doble (+450 XP)",
+      subtitle = "Dificultad extrema • Recompensa alta (+120 XP)",
       category = RoulettePrizeCategory.HARD_MISSION,
       rarity = RouletteRarity.RARE,
       baseWeight = 5.2,
       xpAmount = 120L,
       isHighRisk = true,
+      wheelShortLabel = "Riesgo!",
     ),
-    RoulettePrize(
-      id = "title_oracle",
-      title = "Título: Oráculo de Veyra",
-      subtitle = "Exclusivo de ruleta (o +200 XP si ya lo tienes)",
-      category = RoulettePrizeCategory.EXCLUSIVE_TITLE,
-      rarity = RouletteRarity.EPIC,
+    prizeForTitleSlot(
+      slotId = TITLE_SLOT_A_ID,
       baseWeight = 2.6,
-      xpAmount = 200L,
-      unlockedTitle = "Oráculo de Veyra",
+      variant = specialTitleVariants[0],
     ),
-    RoulettePrize(
-      id = "title_luck_lord",
-      title = "Título: Señor del Azar",
-      subtitle = "Exclusivo mítico de ruleta (+300 XP si repetido)",
-      category = RoulettePrizeCategory.EXCLUSIVE_TITLE,
-      rarity = RouletteRarity.LEGENDARY,
+    prizeForTitleSlot(
+      slotId = TITLE_SLOT_B_ID,
       baseWeight = 1.4,
-      xpAmount = 300L,
-      unlockedTitle = "Señor del Azar",
+      variant = specialTitleVariants[1],
     ),
     RoulettePrize(
       id = "xp_1000",
@@ -204,16 +326,18 @@ object RouletteCatalogDefaults {
       rarity = RouletteRarity.LEGENDARY,
       baseWeight = 0.9,
       xpAmount = 1000L,
+      wheelShortLabel = "1K XP",
     ),
     RoulettePrize(
       id = "free_level_jackpot",
       title = "¡Nivel Gratis (+1 NV)!",
-      subtitle = "Premio mayor más raro de toda la ruleta",
+      subtitle = "Premio mayor más raro (+1 Nivel directo a tu perfil)",
       category = RoulettePrizeCategory.FREE_LEVEL,
       rarity = RouletteRarity.MYTHIC,
       baseWeight = 0.4,
-      xpAmount = 250L,
+      xpAmount = 0L,
       freeLevels = 1,
+      wheelShortLabel = "+1 NV",
     ),
   )
 

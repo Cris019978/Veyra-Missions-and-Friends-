@@ -94,6 +94,9 @@ class RadarQuestViewModel(
   private val accountRoleTitle: String = LocalAuthManager.TITLE_EXPLORER,
   private val initialAccountXp: Long = 0L,
   private val initialAccountLevel: Long = 1L,
+  private val initialBonusLevels: Long = 0L,
+  private val initialEquippedRouletteTitle: String = "",
+  private val initialUnlockedRouletteTitles: List<String> = emptyList(),
   private val localMissionFeedRepository: LocalMissionFeedRepository? = null,
   private val onSyncSessionRole: (role: String, roleTitle: String) -> Unit = { _, _ -> },
   private val onSystemNotify: (id: Int, title: String, message: String, isProximity: Boolean) -> Unit = { _, _, _, _ -> },
@@ -790,6 +793,9 @@ class RadarQuestViewModel(
             roleTitle = accountRoleTitle,
             initialXp = initialAccountXp,
             initialLevel = initialAccountLevel,
+            initialBonusLevels = initialBonusLevels,
+            initialEquippedRouletteTitle = initialEquippedRouletteTitle,
+            initialUnlockedRouletteTitles = initialUnlockedRouletteTitles,
           )
         } else {
           val (handleRole, handleTitle) = LocalAuthManager.resolveRoleAndTitle(prof.username)
@@ -1608,6 +1614,46 @@ class RadarQuestViewModel(
       photoThumbnailBase64 = badgeThumb,
       isPublic = isPublic,
     )
+  }
+
+  fun applyRouletteRewards(addXp: Long, addBonusLevels: Int) {
+    val safeXp = addXp.coerceAtLeast(0L)
+    val safeLevels = addBonusLevels.toLong().coerceAtLeast(0L)
+    if (safeXp == 0L && safeLevels == 0L) return
+    viewModelScope.launch {
+      repository.awardPlayerStats(
+        addXp = safeXp,
+        addBonusLevels = safeLevels,
+      )
+      if (safeLevels > 0L) {
+        _celebrationEventId.value += 1L
+      }
+    }
+  }
+
+  fun claimRouletteTitle(title: String) {
+    val cleanTitle = title.trim()
+    if (cleanTitle.isBlank()) return
+    viewModelScope.launch {
+      val res = repository.claimRouletteTitle(cleanTitle)
+      if (res.isSuccess) {
+        _snackbarMessage.value = "Título reclamado: $cleanTitle"
+      }
+    }
+  }
+
+  fun equipRouletteTitle(title: String) {
+    val cleanTitle = title.trim()
+    viewModelScope.launch {
+      val res = repository.equipRouletteTitle(cleanTitle)
+      if (res.isSuccess) {
+        _snackbarMessage.value = if (cleanTitle.isBlank()) {
+          "Título de ruleta desequipado"
+        } else {
+          "Título equipado: $cleanTitle"
+        }
+      }
+    }
   }
 
   fun clearSnackbar() {

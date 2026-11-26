@@ -76,6 +76,7 @@ import com.example.data.local.ThemePrefsSnapshot
 import com.example.data.local.db.VeyraLocalDatabase
 import com.example.data.location.LocationTracker
 import com.example.data.repository.RadarQuestRepository
+import com.example.roulette.RouletteLocalStore
 import com.example.roulette.RouletteStateManager
 import com.example.roulette.RouletteTestScreen
 import com.example.service.ProximityGuidanceService
@@ -190,6 +191,9 @@ fun AppNavigation() {
                 accountRoleTitle = session.roleTitle,
                 initialAccountXp = session.xp,
                 initialAccountLevel = session.level,
+                initialBonusLevels = session.bonusLevels,
+                initialEquippedRouletteTitle = session.equippedRouletteTitle,
+                initialUnlockedRouletteTitles = session.unlockedRouletteTitles,
                 localMissionFeedRepository = feedRepo,
                 onSyncSessionRole = { role, roleTitle -> authManager.updateActiveRole(role, roleTitle) },
                 onSystemNotify = notificationManager::postNotification,
@@ -202,8 +206,11 @@ fun AppNavigation() {
           viewModel = viewModel,
           notificationManager = notificationManager,
           currentUserId = localUid,
-          onSyncSessionStats = { xp, level ->
-            authManager.updateActiveStats(xp, level)
+          onSyncSessionStats = { xp, level, bonusLevels ->
+            authManager.updateActiveStats(xp, level, bonusLevels)
+          },
+          onSyncSessionRouletteTitles = { equippedTitle, unlockedTitles ->
+            authManager.updateActiveRouletteTitles(equippedTitle, unlockedTitles)
           },
           onSignOutRequested = handleSignOut,
         )
@@ -247,7 +254,8 @@ private fun MainAppShell(
   viewModel: RadarQuestViewModel,
   notificationManager: VeyraNotificationManager,
   currentUserId: String,
-  onSyncSessionStats: (xp: Long, level: Long) -> Unit,
+  onSyncSessionStats: (xp: Long, level: Long, bonusLevels: Long) -> Unit,
+  onSyncSessionRouletteTitles: (equippedTitle: String, unlockedTitles: List<String>) -> Unit,
   onSignOutRequested: () -> Unit,
 ) {
   val context = LocalContext.current
@@ -263,7 +271,25 @@ private fun MainAppShell(
   val rouletteStateManager: RouletteStateManager = viewModel(
     key = "roulette_lab_$currentUserId",
     factory = viewModelFactory {
-      initializer { RouletteStateManager() }
+      initializer {
+        val profile = uiState.myProfile
+        RouletteStateManager(
+          localStore = RouletteLocalStore(context.applicationContext, currentUserId),
+          initialUnlockedProfileTitles = profile?.unlockedRouletteTitles ?: emptyList(),
+          initialEquippedTitle = profile?.equippedRouletteTitle.orEmpty(),
+          initialMainLevel = profile?.level ?: 1L,
+          initialMainXp = profile?.xp ?: 0L,
+          onRewardEarned = { xpDelta, bonusLevelsDelta ->
+            viewModel.applyRouletteRewards(xpDelta, bonusLevelsDelta)
+          },
+          onTitleClaimed = { title ->
+            viewModel.claimRouletteTitle(title)
+          },
+          onTitleEquipped = { title ->
+            viewModel.equipRouletteTitle(title)
+          },
+        )
+      }
     },
   )
   val animationTier = uiState.settings.animationTier
@@ -288,10 +314,23 @@ private fun MainAppShell(
     }
   }
 
-  LaunchedEffect(uiState.myProfile?.xp, uiState.myProfile?.level) {
+  LaunchedEffect(
+    uiState.myProfile?.xp,
+    uiState.myProfile?.level,
+    uiState.myProfile?.bonusLevels,
+    uiState.myProfile?.equippedRouletteTitle,
+    uiState.myProfile?.unlockedRouletteTitles,
+  ) {
     val prof = uiState.myProfile
     if (prof != null) {
-      onSyncSessionStats(prof.xp, prof.level)
+      onSyncSessionStats(prof.xp, prof.level, prof.bonusLevels)
+      onSyncSessionRouletteTitles(prof.equippedRouletteTitle, prof.unlockedRouletteTitles)
+      rouletteStateManager.syncProfileSnapshot(
+        mainLevel = prof.level,
+        mainXp = prof.xp,
+        equippedTitle = prof.equippedRouletteTitle,
+        profileUnlockedTitles = prof.unlockedRouletteTitles,
+      )
     }
   }
 
@@ -587,6 +626,10 @@ private fun MainAppShell(
                     viewModel.saveThemeCustomization(paletteKey = palette)
                   },
                   onOpenStyleCustomization = { showStyleInProfile = true },
+                  onEquipRouletteTitle = { title ->
+                    viewModel.equipRouletteTitle(title)
+                  },
+                  onOpenRoulette = { showRouletteLab = true },
                 )
               }
 
