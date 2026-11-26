@@ -71,6 +71,8 @@ import com.example.data.local.ThemePrefsSnapshot
 import com.example.data.local.db.VeyraLocalDatabase
 import com.example.data.location.LocationTracker
 import com.example.data.repository.RadarQuestRepository
+import com.example.maplab.MapScaleStateManager
+import com.example.maplab.MapScaleTestScreen
 import com.example.roulette.RouletteStateManager
 import com.example.roulette.RouletteTestScreen
 import com.example.service.ProximityGuidanceService
@@ -237,10 +239,17 @@ private fun MainAppShell(
   var showNotificationsSheet by remember { mutableStateOf(false) }
   var radarModalDialogOpen by remember { mutableStateOf(false) }
   var showRouletteLab by remember { mutableStateOf(false) }
+  var showMapLab by remember { mutableStateOf(false) }
   val rouletteStateManager: RouletteStateManager = viewModel(
     key = "roulette_lab_$currentUserId",
     factory = viewModelFactory {
       initializer { RouletteStateManager() }
+    },
+  )
+  val mapScaleStateManager: MapScaleStateManager = viewModel(
+    key = "map_lab_$currentUserId",
+    factory = viewModelFactory {
+      initializer { MapScaleStateManager() }
     },
   )
   val disableAnimations = uiState.settings.animationTier == "low"
@@ -249,6 +258,7 @@ private fun MainAppShell(
   val anyOverlayModalOpen = radarModalDialogOpen ||
     showNotificationsSheet ||
     showRouletteLab ||
+    showMapLab ||
     uiState.showOnboardingQuest ||
     uiState.queuedPromptMission != null
 
@@ -497,6 +507,7 @@ private fun MainAppShell(
                 onRespawnRandomMissions = { viewModel.respawnRandomMissions() },
                 onDialogVisibilityChanged = { radarModalDialogOpen = it },
                 onOpenRouletteLab = { showRouletteLab = true },
+                onOpenMapLab = { showMapLab = true },
                 useExternalConfettiHost = true,
               )
 
@@ -692,6 +703,16 @@ private fun MainAppShell(
       RouletteTestScreen(
         stateManager = rouletteStateManager,
         onClose = { showRouletteLab = false },
+      )
+    }
+
+    if (showMapLab) {
+      BackHandler {
+        showMapLab = false
+      }
+      MapScaleTestScreen(
+        stateManager = mapScaleStateManager,
+        onClose = { showMapLab = false },
       )
     }
   }

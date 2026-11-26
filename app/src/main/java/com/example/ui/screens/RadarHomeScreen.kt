@@ -142,6 +142,7 @@ fun RadarHomeScreen(
   onRespawnRandomMissions: () -> Unit = {},
   onDialogVisibilityChanged: (Boolean) -> Unit = {},
   onOpenRouletteLab: (() -> Unit)? = null,
+  onOpenMapLab: (() -> Unit)? = null,
   useExternalConfettiHost: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
@@ -570,6 +571,35 @@ fun RadarHomeScreen(
             onExpandMap = { showExpandedMap = true },
             modifier = Modifier.padding(top = 2.dp),
           )
+        }
+
+        if (onOpenMapLab != null) {
+          item(key = "map_50_75_100_lab_launcher") {
+            Box(
+              contentAlignment = Alignment.Center,
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            ) {
+              FilledTonalButton(
+                onClick = onOpenMapLab,
+                shape = CircleShape,
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                modifier = Modifier.testTag("open_map_lab_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Rounded.Map,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                  text = "Probar Mapa 50 / 75 / 100",
+                  style = MaterialTheme.typography.labelMedium,
+                )
+              }
+            }
+          }
         }
 
         // 4. Nearby Players Strip
