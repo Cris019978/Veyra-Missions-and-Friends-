@@ -337,4 +337,53 @@ class Veyra2TacticalViewModelTest {
     assertEquals(farWalkState.playerPosition.xMeters - 26f, farWalkState.cameraCenter.xMeters, 1f)
     assertEquals(farWalkState.playerPosition.yMeters, farWalkState.cameraCenter.yMeters, 1f)
   }
+
+  @Test
+  fun `signalMission marks and pins mission for info and targeting without claiming rewards`() {
+    val pinnedIds = mutableListOf<String>()
+    val claimedIds = mutableListOf<String>()
+    val vm = Veyra2TacticalViewModel(
+      random = Random(77L),
+      onClaimMainMission = { claimedIds.add(it) },
+      onPinMainMission = { pinnedIds.add(it) },
+    )
+    vmStore.put("signal_only_test", vm)
+
+    val playerLat = 19.4326
+    val playerLon = -99.1332
+    val (lat, lon) = GeoUtils.destinationPoint(playerLat, playerLon, 150.0, 45.0)
+    vm.syncMainMapMissions(
+      missions = listOf(
+        MissionWithDistance(
+          mission = Mission(
+            id = "sig_m1",
+            title = "Misión Señalizable",
+            description = "Solo ver info y señalar",
+            xpReward = 175L,
+            latitude = lat,
+            longitude = lon,
+          ),
+          distanceMeters = 150f,
+          bearingDegrees = 45f,
+          isCompletedByMe = false,
+        ),
+      ),
+      playerLat = playerLat,
+      playerLon = playerLon,
+    )
+
+    vm.inspectMission("sig_m1")
+    vm.signalMission("sig_m1")
+    vm.signalMission("sig_m1")
+
+    val state = vm.uiState.value
+    val signaled = state.missionsInMemory.first { it.id == "sig_m1" }
+    assertTrue(signaled.isPinnedTarget)
+    assertTrue(signaled.hasBeenInspected)
+    assertFalse(signaled.isClaimed)
+    assertEquals(1, state.markedTargets.count { it.linkedMissionId == "sig_m1" })
+    assertEquals(0L, state.rewardsLedger.totalXp)
+    assertTrue(claimedIds.isEmpty())
+    assertEquals(listOf("sig_m1", "sig_m1"), pinnedIds)
+  }
 }

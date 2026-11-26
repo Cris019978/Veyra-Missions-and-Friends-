@@ -57,6 +57,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -66,7 +67,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -149,7 +152,7 @@ fun Veyra2TacticalScreen(
     onClearAimAndRoute = viewModel::clearAimedMarksAndRoute,
     onRecenterCamera = viewModel::recenterCameraOnPlayer,
     onInspectMission = viewModel::inspectMission,
-    onClaimMission = { viewModel.claimMissionReward(it) },
+    onSignalMission = viewModel::signalMission,
     onMovePlayer = viewModel::movePlayerByMeters,
     onSpawnDebugMission = { dist, touched, claimed, diff ->
       viewModel.spawnDebugMission(dist, touched, claimed, diff)
@@ -178,7 +181,7 @@ fun Veyra2TacticalScreenContent(
   onClearAimAndRoute: () -> Unit,
   onRecenterCamera: () -> Unit,
   onInspectMission: (String) -> Unit,
-  onClaimMission: (String) -> Unit,
+  onSignalMission: (String) -> Unit,
   onMovePlayer: (Float, Float) -> Unit,
   onSpawnDebugMission: (Float, Boolean, Boolean, Veyra2MissionDifficulty) -> Unit,
   onManualRecyclePass: () -> Unit,
@@ -186,6 +189,11 @@ fun Veyra2TacticalScreenContent(
   onResetPrototype: (Boolean) -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  var inspectedInfoMissionId by remember { mutableStateOf<String?>(null) }
+  val inspectedMission = inspectedInfoMissionId?.let { id ->
+    uiState.missionsInMemory.firstOrNull { it.id == id }
+  }
+
   Surface(
     color = MaterialTheme.colorScheme.background,
     modifier = modifier
@@ -222,8 +230,11 @@ fun Veyra2TacticalScreenContent(
         ClosedMapTextualMissionsOverlay(
           uiState = uiState,
           onOpenScale = onSelectMapMode,
-          onInspectMission = onInspectMission,
-          onClaimMission = onClaimMission,
+          onInspectMission = { id ->
+            onInspectMission(id)
+            inspectedInfoMissionId = id
+          },
+          onSignalMission = onSignalMission,
           modifier = Modifier
             .align(Alignment.Center)
             .padding(top = 64.dp, bottom = 78.dp, start = 16.dp, end = 16.dp),
@@ -244,11 +255,14 @@ fun Veyra2TacticalScreenContent(
             .padding(start = 16.dp, bottom = 16.dp),
         )
 
-        // Tarjeta de objetivo bajo retícula o telemetría de ruta abajo centro
+        // Tarjeta de objetivo bajo retícula o telemetría de ruta abajo centro (solo señalar y ver info)
         ReticleTargetInfoStrip(
           uiState = uiState,
-          onInspectMission = onInspectMission,
-          onClaimMission = onClaimMission,
+          onInspectMission = { id ->
+            onInspectMission(id)
+            inspectedInfoMissionId = id
+          },
+          onSignalMission = onSignalMission,
           modifier = Modifier
             .align(Alignment.BottomCenter)
             .padding(horizontal = 148.dp, vertical = 14.dp),
@@ -274,6 +288,24 @@ fun Veyra2TacticalScreenContent(
           modifier = Modifier
             .align(Alignment.BottomCenter)
             .padding(horizontal = 14.dp, vertical = 12.dp),
+        )
+      }
+
+      // 4b. Tarjeta discreta de información de la misión seleccionada (solo lectura + señalar)
+      if (inspectedMission != null) {
+        val distMeters = hypot(
+          inspectedMission.position.xMeters - uiState.playerPosition.xMeters,
+          inspectedMission.position.yMeters - uiState.playerPosition.yMeters,
+        ).toInt()
+        MissionInfoInspectCard(
+          mission = inspectedMission,
+          distanceMeters = distMeters,
+          onSignalMission = { onSignalMission(inspectedMission.id) },
+          onClose = { inspectedInfoMissionId = null },
+          modifier = Modifier
+            .align(Alignment.TopStart)
+            .padding(top = 64.dp, start = 14.dp, end = 14.dp)
+            .widthIn(max = 360.dp),
         )
       }
 
@@ -483,7 +515,7 @@ private fun LandscapeAimActionsRail(
 private fun ReticleTargetInfoStrip(
   uiState: Veyra2TacticalUiState,
   onInspectMission: (String) -> Unit,
-  onClaimMission: (String) -> Unit,
+  onSignalMission: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val hovered = uiState.missionUnderReticle
@@ -498,10 +530,19 @@ private fun ReticleTargetInfoStrip(
   ) {
     Row(
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
       modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
       if (hovered != null) {
+        val distMeters = hypot(
+          hovered.position.xMeters - uiState.playerPosition.xMeters,
+          hovered.position.yMeters - uiState.playerPosition.yMeters,
+        ).toInt()
+        val statusLabel = when {
+          hovered.isClaimed -> "Completada"
+          hovered.isPinnedTarget -> "Señalada"
+          else -> "Visible"
+        }
         Column(modifier = Modifier.weight(1f, fill = false)) {
           Text(
             text = "En mira: ${hovered.title}",
@@ -511,26 +552,30 @@ private fun ReticleTargetInfoStrip(
             overflow = TextOverflow.Ellipsis,
           )
           Text(
-            text = "+${hovered.xpReward} XP • ${if (hovered.isClaimed) "Reclamada" else "Lista para reclamar"}",
+            text = "$distMeters m • +${hovered.xpReward} XP • ${hovered.difficulty.label} • $statusLabel",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
           )
         }
-        if (!hovered.hasBeenInspected) {
-          OutlinedButton(
-            onClick = { onInspectMission(hovered.id) },
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-          ) {
-            Text("Inspeccionar", style = MaterialTheme.typography.labelSmall)
-          }
+        OutlinedButton(
+          onClick = { onInspectMission(hovered.id) },
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+          modifier = Modifier
+            .minimumInteractiveComponentSize()
+            .testTag("veyra2_inspect_reticle_mission_button"),
+        ) {
+          Text("Ver info", style = MaterialTheme.typography.labelSmall)
         }
         Button(
-          onClick = { onClaimMission(hovered.id) },
-          enabled = !hovered.isClaimed,
+          onClick = { onSignalMission(hovered.id) },
           contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-          modifier = Modifier.testTag("veyra2_claim_reticle_mission_button"),
+          modifier = Modifier
+            .minimumInteractiveComponentSize()
+            .testTag("veyra2_signal_reticle_mission_button"),
         ) {
-          Text(if (hovered.isClaimed) "Reclamada" else "Reclamar", style = MaterialTheme.typography.labelSmall)
+          Text(if (hovered.isPinnedTarget) "Señalada" else "Señalar", style = MaterialTheme.typography.labelSmall)
         }
       } else {
         val relX = (uiState.cameraCenter.xMeters - uiState.playerPosition.xMeters).toInt()
@@ -548,11 +593,99 @@ private fun ReticleTargetInfoStrip(
 }
 
 @Composable
+private fun MissionInfoInspectCard(
+  mission: PhysicalMapMission,
+  distanceMeters: Int,
+  onSignalMission: () -> Unit,
+  onClose: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Card(
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.96f)),
+    border = BorderStroke(1.dp, mission.difficulty.markerColor.copy(alpha = 0.7f)),
+    shape = RoundedCornerShape(20.dp),
+    modifier = modifier.testTag("veyra2_mission_info_card"),
+  ) {
+    Column(
+      modifier = Modifier.padding(14.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = mission.title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+          )
+          Text(
+            text = "${mission.difficulty.label} • $distanceMeters m • +${mission.xpReward} XP",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+          )
+        }
+        IconButton(
+          onClick = onClose,
+          modifier = Modifier.testTag("veyra2_close_mission_info_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Rounded.Close,
+            contentDescription = "Cerrar información de misión",
+          )
+        }
+      }
+      Text(
+        text = mission.summary.ifBlank { "Misión táctica visible para explorar y señalar desde el mapa." },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Surface(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
+          Text(
+            text = when {
+              mission.isClaimed -> "Estado: Completada"
+              mission.isPinnedTarget -> "Estado: Señalada en radar"
+              else -> "Estado: Solo visualización"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+          )
+        }
+        Spacer(modifier = Modifier.weight(1f))
+        Button(
+          onClick = onSignalMission,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+          modifier = Modifier
+            .minimumInteractiveComponentSize()
+            .testTag("veyra2_info_card_signal_button"),
+        ) {
+          Icon(Icons.Rounded.GpsFixed, contentDescription = null, modifier = Modifier.size(15.dp))
+          Spacer(Modifier.width(6.dp))
+          Text(if (mission.isPinnedTarget) "Señalada" else "Señalar", style = MaterialTheme.typography.labelSmall)
+        }
+      }
+    }
+  }
+}
+
+@Composable
 private fun ClosedMapTextualMissionsOverlay(
   uiState: Veyra2TacticalUiState,
   onOpenScale: (Veyra2MapMode) -> Unit,
   onInspectMission: (String) -> Unit,
-  onClaimMission: (String) -> Unit,
+  onSignalMission: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   Card(
@@ -592,7 +725,7 @@ private fun ClosedMapTextualMissionsOverlay(
         }
       }
       Text(
-        text = "Las misiones se conservan en memoria y solo se dibujan al abrir el mapa (50 / 75 / 100 / Horizontal).",
+        text = "Las misiones se conservan visibles en memoria para señalar o ver su información, y solo se dibujan al abrir el mapa.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
@@ -619,7 +752,7 @@ private fun ClosedMapTextualMissionsOverlay(
               Column(modifier = Modifier.weight(1f)) {
                 Text(m.title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                 Text(
-                  text = "$dist m • +${m.xpReward} XP • ${if (m.isClaimed) "Reclamada" else if (m.hasBeenTouched) "Tocada" else "Sin tocar"}",
+                  text = "$dist m • +${m.xpReward} XP • ${if (m.isClaimed) "Completada" else if (m.isPinnedTarget) "Señalada" else "Visible"}",
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -629,14 +762,13 @@ private fun ClosedMapTextualMissionsOverlay(
                   onClick = { onInspectMission(m.id) },
                   contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                 ) {
-                  Text("Ver", style = MaterialTheme.typography.labelSmall)
+                  Text("Ver info", style = MaterialTheme.typography.labelSmall)
                 }
                 Button(
-                  onClick = { onClaimMission(m.id) },
-                  enabled = !m.isClaimed,
+                  onClick = { onSignalMission(m.id) },
                   contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                 ) {
-                  Text(if (m.isClaimed) "OK" else "Reclamar", style = MaterialTheme.typography.labelSmall)
+                  Text(if (m.isPinnedTarget) "Señalada" else "Señalar", style = MaterialTheme.typography.labelSmall)
                 }
               }
             }

@@ -720,12 +720,57 @@ class Veyra2TacticalViewModel(
         cur.mapMode,
         cur.recycleThresholdMeters,
       )
+      val nextMarkedTargets = if (snappedMission != null) {
+        (cur.markedTargets.filterNot { it.linkedMissionId == snappedMission.id } + marker).takeLast(18)
+      } else {
+        (cur.markedTargets + marker).takeLast(18)
+      }
       cur.copy(
-        markedTargets = (cur.markedTargets + marker).takeLast(18),
+        markedTargets = nextMarkedTargets,
         missionsInMemory = updatedMemory,
         drawnMissions = updatedDrawn,
         selectedMissionId = snappedMission?.id ?: cur.selectedMissionId,
-        lastEventLog = "Objetivo marcado: ${marker.label} (${targetPos.xMeters.toInt()}m, ${targetPos.yMeters.toInt()}m)",
+        lastEventLog = "Señalada: ${marker.label}",
+      )
+    }
+    pinnedMainId?.let(onPinMainMission)
+  }
+
+  fun signalMission(missionId: String) {
+    var pinnedMainId: String? = null
+    _uiState.update { cur ->
+      val target = cur.missionsInMemory.firstOrNull { it.id == missionId } ?: return@update cur
+      locallyTouchedIds.add(target.id)
+      locallyPinnedIds.add(target.id)
+      if (target.isFromMainMap) {
+        pinnedMainId = target.id
+      }
+      val marker = AimedTargetMarker(
+        id = "tgt_${targetCounter++}",
+        label = target.title,
+        position = target.position,
+        linkedMissionId = target.id,
+      )
+      val updatedMemory = cur.missionsInMemory.map { m ->
+        if (m.id == target.id) m.copy(hasBeenTouched = true, isPinnedTarget = true) else m
+      }
+      val updatedDrawn = computeDrawnMissions(
+        updatedMemory,
+        cur.playerPosition,
+        cur.mapMode,
+        cur.recycleThresholdMeters,
+      )
+      val nextMarkedTargets = (cur.markedTargets.filterNot { it.linkedMissionId == target.id } + marker).takeLast(18)
+      val dist = hypot(
+        target.position.xMeters - cur.playerPosition.xMeters,
+        target.position.yMeters - cur.playerPosition.yMeters,
+      ).toInt()
+      cur.copy(
+        markedTargets = nextMarkedTargets,
+        missionsInMemory = updatedMemory,
+        drawnMissions = updatedDrawn,
+        selectedMissionId = target.id,
+        lastEventLog = "Señalada: ${target.title} ($dist m)",
       )
     }
     pinnedMainId?.let(onPinMainMission)
