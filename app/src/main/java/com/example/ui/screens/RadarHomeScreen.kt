@@ -3,11 +3,13 @@ package com.example.ui.screens
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -110,6 +112,7 @@ import com.example.ui.components.MissionDetailSheet
 import com.example.ui.components.MissionIcons
 import com.example.ui.components.PhotoConfirmSheet
 import com.example.ui.components.PlayerActionSheet
+import com.example.ui.components.RadarScaleLevel
 import com.example.ui.components.RoundRadarMap
 import com.example.ui.components.TilePuzzleGameDialog
 import com.example.ui.components.WireConnectGameDialog
@@ -142,7 +145,6 @@ fun RadarHomeScreen(
   onRespawnRandomMissions: () -> Unit = {},
   onDialogVisibilityChanged: (Boolean) -> Unit = {},
   onOpenRouletteLab: (() -> Unit)? = null,
-  onOpenMapLab: (() -> Unit)? = null,
   useExternalConfettiHost: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
@@ -151,6 +153,7 @@ fun RadarHomeScreen(
   var selectedPlayer by remember { mutableStateOf<NearbyPlayerItem?>(null) }
   var selectedMission by remember { mutableStateOf<MissionWithDistance?>(null) }
   var showExpandedMap by remember { mutableStateOf(false) }
+  var radarScale by remember { mutableStateOf(RadarScaleLevel.SCALE_75) }
   var activeMissionPlayTarget by remember { mutableStateOf<Mission?>(null) }
   var showCreateMissionDialog by remember { mutableStateOf(false) }
   var localCelebrationTrigger by remember { mutableLongStateOf(0L) }
@@ -206,28 +209,23 @@ fun RadarHomeScreen(
     }
   }
 
-  PullToRefreshBox(
-    isRefreshing = uiState.isRefreshing,
-    onRefresh = onRefresh,
-    modifier = modifier
-      .fillMaxSize()
-      .testTag("radar_pull_to_refresh"),
+  val resolvedLat = uiState.currentLocation?.latitude ?: uiState.myProfile?.latitude?.takeIf { it != 0.0 } ?: 19.4326
+  val resolvedLon = uiState.currentLocation?.longitude ?: uiState.myProfile?.longitude?.takeIf { it != 0.0 } ?: -99.1332
+
+  BoxWithConstraints(
+    modifier = modifier.fillMaxSize(),
+    contentAlignment = Alignment.TopCenter,
   ) {
-    Box(
-      modifier = Modifier.fillMaxSize(),
-      contentAlignment = Alignment.TopCenter,
+    val maxExpandedRadarHeight = (maxHeight * 0.52f).coerceIn(300.dp, 450.dp)
+
+    Column(
+      modifier = Modifier
+        .widthIn(max = 680.dp)
+        .fillMaxSize(),
+      horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-      LazyColumn(
-        modifier = Modifier
-          .widthIn(max = 680.dp)
-          .fillMaxSize(),
-        contentPadding = PaddingValues(
-          bottom = if (uiState.settings.gestureNavEnabled) 28.dp else 104.dp,
-        ),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-      ) {
-        // 1. Player HUD Header
-        item(key = "hud_header") {
+      // 1. Player HUD Header (Interfaz Principal fija arriba)
+      run {
           val level = uiState.myProfile?.level ?: 1L
           val xp = uiState.myProfile?.xp ?: 0L
           val xpInLevel = (xp % 250L) / 250f
@@ -353,7 +351,65 @@ fun RadarHomeScreen(
               }
             }
           }
-        }
+      }
+
+      // 2. Capa del Radar / Mapa OpenStreetMap único (se expande 50 / 75 / 100 reduciendo la zona táctil de misiones abajo)
+      Surface(
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.65f),
+        border = BorderStroke(
+          width = 1.dp,
+          color = MaterialTheme.colorScheme.outlineVariant.copy(
+            alpha = if (radarScale == RadarScaleLevel.SCALE_100) 0.70f else 0.35f,
+          ),
+        ),
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 10.dp),
+      ) {
+        RoundRadarMap(
+          myProfile = uiState.myProfile,
+          nearbyPlayers = uiState.nearbyPlayers,
+          missions = uiState.missions,
+          searchRadiusMeters = uiState.settings.searchRadiusMeters,
+          radarStyle = uiState.settings.radarStyle,
+          animationTier = uiState.settings.animationTier,
+          isBroadcasting = uiState.isBroadcastingRadar,
+          hasLocationPermission = uiState.hasLocationPermission,
+          activeAcceptedMissionId = uiState.activeAcceptedMissionId,
+          pauseAnimations = pauseRadarAnimations,
+          userLat = resolvedLat,
+          userLon = resolvedLon,
+          radarScale = radarScale,
+          expandedHeightDp = maxExpandedRadarHeight,
+          onRadarScaleChange = { radarScale = it },
+          onPlayerClick = { selectedPlayer = it },
+          onMissionClick = { selectedMission = it },
+          onCycleRadius = onCycleRadius,
+          onExpandMap = { showExpandedMap = true },
+          modifier = Modifier.padding(vertical = 8.dp),
+        )
+      }
+
+      Spacer(modifier = Modifier.height(6.dp))
+
+      // 3. Zona táctil de Misiones y Jugadores (visible en 50 y 75; más compacta cuanto más grande es el mapa en 100)
+      PullToRefreshBox(
+        isRefreshing = uiState.isRefreshing,
+        onRefresh = onRefresh,
+        modifier = Modifier
+          .weight(1f)
+          .fillMaxWidth()
+          .testTag("radar_pull_to_refresh"),
+      ) {
+        LazyColumn(
+          modifier = Modifier.fillMaxSize(),
+          contentPadding = PaddingValues(
+            top = 6.dp,
+            bottom = if (uiState.settings.gestureNavEnabled) 28.dp else 104.dp,
+          ),
+          verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
 
         // 1b. Subtle Local Mode Indicator when Firebase / Google Services are unavailable
         if (uiState.isLocalOfflineMode) {
@@ -547,56 +603,6 @@ fun RadarHomeScreen(
                     )
                   }
                 }
-              }
-            }
-          }
-        }
-
-        // 3. Top-Center Animated Round Radar Map
-        item(key = "round_radar_map") {
-          RoundRadarMap(
-            myProfile = uiState.myProfile,
-            nearbyPlayers = uiState.nearbyPlayers,
-            missions = uiState.missions,
-            searchRadiusMeters = uiState.settings.searchRadiusMeters,
-            radarStyle = uiState.settings.radarStyle,
-            animationTier = uiState.settings.animationTier,
-            isBroadcasting = uiState.isBroadcastingRadar,
-            hasLocationPermission = uiState.hasLocationPermission,
-            activeAcceptedMissionId = uiState.activeAcceptedMissionId,
-            pauseAnimations = pauseRadarAnimations,
-            onPlayerClick = { selectedPlayer = it },
-            onMissionClick = { selectedMission = it },
-            onCycleRadius = onCycleRadius,
-            onExpandMap = { showExpandedMap = true },
-            modifier = Modifier.padding(top = 2.dp),
-          )
-        }
-
-        if (onOpenMapLab != null) {
-          item(key = "map_50_75_100_lab_launcher") {
-            Box(
-              contentAlignment = Alignment.Center,
-              modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            ) {
-              FilledTonalButton(
-                onClick = onOpenMapLab,
-                shape = CircleShape,
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                modifier = Modifier.testTag("open_map_lab_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.Rounded.Map,
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                  text = "Probar Mapa 50 / 75 / 100",
-                  style = MaterialTheme.typography.labelMedium,
-                )
               }
             }
           }
@@ -880,13 +886,14 @@ fun RadarHomeScreen(
           }
         }
       }
-
-      if (!useExternalConfettiHost) {
-        ConfettiCelebrationOverlay(
-          triggerKey = localCelebrationTrigger,
-          disableAnimations = disableDecorAnimations,
-        )
       }
+    }
+
+    if (!useExternalConfettiHost) {
+      ConfettiCelebrationOverlay(
+        triggerKey = localCelebrationTrigger,
+        disableAnimations = disableDecorAnimations,
+      )
     }
   }
 
