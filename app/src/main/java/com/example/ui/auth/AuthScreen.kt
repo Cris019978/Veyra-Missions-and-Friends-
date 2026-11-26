@@ -20,6 +20,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -28,7 +29,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -66,7 +66,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -259,34 +258,26 @@ fun AuthScreen(
     )
   }
 
-  Scaffold(
-    containerColor = DarkObsidian,
-    contentWindowInsets = WindowInsets(0, 0, 0, 0),
-  ) { _ ->
-    Box(
+  Box(
+    modifier = Modifier
+      .fillMaxSize()
+      .background(DarkObsidian)
+      .background(bgBrush)
+      .statusBarsPadding()
+      .navigationBarsPadding()
+      .imePadding(),
+    contentAlignment = Alignment.TopCenter,
+  ) {
+    Column(
       modifier = Modifier
+        .widthIn(max = 460.dp)
         .fillMaxSize()
-        .background(bgBrush)
-        .statusBarsPadding()
-        .navigationBarsPadding()
-        .imePadding(),
+        .verticalScroll(scrollState)
+        .testTag("auth_scrollable_container")
+        .padding(horizontal = 22.dp, vertical = 18.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(18.dp, Alignment.CenterVertically),
     ) {
-      Column(
-        modifier = Modifier
-          .fillMaxSize()
-          .verticalScroll(scrollState)
-          .testTag("auth_scrollable_container")
-          .padding(horizontal = 22.dp, vertical = 18.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(18.dp, Alignment.CenterVertically),
-      ) {
-        Column(
-          modifier = Modifier
-            .widthIn(max = 460.dp)
-            .fillMaxWidth(),
-          horizontalAlignment = Alignment.CenterHorizontally,
-          verticalArrangement = Arrangement.spacedBy(18.dp),
-        ) {
         // Minimalist Dark Header Banner
         Surface(
           color = DarkCardSurface,
@@ -483,30 +474,27 @@ fun AuthScreen(
                 ) {
                   savedUsernames.forEach { saved ->
                     val isCurrent = LocalAuthManager.normalizeUsername(username) == saved
-                    Surface(
-                      color = if (isCurrent) VeyraTeal.copy(alpha = 0.18f) else DarkInputFill,
-                      shape = CircleShape,
-                      border = BorderStroke(
-                        width = 1.dp,
-                        color = if (isCurrent) VeyraTeal else DarkCardBorder,
-                      ),
+                    Text(
+                      text = "@$saved",
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                      color = if (isCurrent) VeyraTeal else VeyraTextPrimary,
                       modifier = Modifier
                         .clip(CircleShape)
+                        .background(if (isCurrent) VeyraTeal.copy(alpha = 0.18f) else DarkInputFill)
+                        .border(
+                          width = 1.dp,
+                          color = if (isCurrent) VeyraTeal else DarkCardBorder,
+                          shape = CircleShape,
+                        )
                         .clickable {
                           username = "@$saved"
                           errorMessage = null
                           pinFocusRequester.requestFocus()
                         }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
                         .testTag("auth_saved_user_chip_$saved"),
-                    ) {
-                      Text(
-                        text = "@$saved",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                        color = if (isCurrent) VeyraTeal else VeyraTextPrimary,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                      )
-                    }
+                    )
                   }
                 }
               }
@@ -778,18 +766,16 @@ fun AuthScreen(
             }
           }
         }
-        }
-      }
+    }
 
-      if (renderCelebrationOverlay) {
-        RegistrationCelebrationHost(
-          triggerKey = standaloneCelebrationKey,
-          message = standaloneCelebrationMsg,
-          roleTitle = standaloneCelebrationTitle,
-          onDismiss = { standaloneCelebrationMsg = null },
-          animationTier = animationTier,
-        )
-      }
+    if (renderCelebrationOverlay) {
+      RegistrationCelebrationHost(
+        triggerKey = standaloneCelebrationKey,
+        message = standaloneCelebrationMsg,
+        roleTitle = standaloneCelebrationTitle,
+        onDismiss = { standaloneCelebrationMsg = null },
+        animationTier = animationTier,
+      )
     }
   }
 
@@ -1125,22 +1111,19 @@ private fun AuthModePill(
     targetFg
   }
 
-  Surface(
-    color = bgColor,
-    contentColor = fgColor,
-    shape = RoundedCornerShape(12.dp),
+  Box(
     modifier = modifier
       .height(48.dp)
       .clip(RoundedCornerShape(12.dp))
+      .background(bgColor)
       .clickable(onClick = onClick),
+    contentAlignment = Alignment.Center,
   ) {
-    Box(contentAlignment = Alignment.Center) {
-      Text(
-        text = label,
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-        color = fgColor,
-      )
-    }
+    Text(
+      text = label,
+      style = MaterialTheme.typography.labelLarge,
+      fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+      color = fgColor,
+    )
   }
 }

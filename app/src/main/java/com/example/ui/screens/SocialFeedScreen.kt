@@ -156,15 +156,12 @@ fun SocialFeedScreen(
       .fillMaxSize()
       .testTag("social_feed_screen"),
   ) {
-    Box(
-      modifier = Modifier.fillMaxSize(),
-      contentAlignment = Alignment.TopCenter,
-    ) {
-      LazyColumn(
-        modifier = Modifier
-          .widthIn(max = 680.dp)
-          .fillMaxSize()
-          .testTag("social_feed_list"),
+    LazyColumn(
+      modifier = Modifier
+        .align(Alignment.TopCenter)
+        .widthIn(max = 680.dp)
+        .fillMaxSize()
+        .testTag("social_feed_list"),
         contentPadding = PaddingValues(
           start = 16.dp,
           end = 16.dp,
@@ -532,7 +529,6 @@ fun SocialFeedScreen(
           animationTier = uiState.settings.animationTier,
         )
       }
-    }
   }
 
   if (showCreateFeedPostDialog) {

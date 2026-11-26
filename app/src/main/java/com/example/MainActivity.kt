@@ -393,7 +393,7 @@ private fun MainAppShell(
   }
 
   val isExpandedWidth = LocalConfiguration.current.screenWidthDp >= 720
-  val radiusPresets = listOf(500L, 2000L, 5000L, 15000L)
+  val radiusPresets = remember { listOf(500L, 2000L, 5000L, 15000L) }
 
   RadarQuestTheme(
     themeMode = uiState.settings.themeMode,

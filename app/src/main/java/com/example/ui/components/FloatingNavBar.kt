@@ -5,7 +5,6 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,7 +34,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
-import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -72,43 +70,50 @@ fun FloatingBottomNavBar(
 ) {
   val isLowTier = disableAnimations || animationTier == "low"
   val isHighTier = !isLowTier && animationTier != "medium"
-  val destinations = listOf(
-    FloatingNavDestination(
-      index = 0,
-      label = stringResource(id = R.string.nav_radar),
-      selectedIcon = Icons.Rounded.Radar,
-      unselectedIcon = Icons.Outlined.Radar,
-      testTag = "nav_tab_radar",
-    ),
-    FloatingNavDestination(
-      index = 1,
-      label = stringResource(id = R.string.nav_profile),
-      selectedIcon = Icons.Rounded.AccountCircle,
-      unselectedIcon = Icons.Outlined.AccountCircle,
-      testTag = "nav_tab_profile",
-    ),
-    FloatingNavDestination(
-      index = 2,
-      label = stringResource(id = R.string.nav_social_feed),
-      selectedIcon = Icons.Rounded.PhotoLibrary,
-      unselectedIcon = Icons.Outlined.PhotoLibrary,
-      testTag = "nav_tab_social_feed",
-    ),
-    FloatingNavDestination(
-      index = 3,
-      label = stringResource(id = R.string.nav_social),
-      selectedIcon = Icons.Rounded.Groups,
-      unselectedIcon = Icons.Outlined.Groups,
-      testTag = "nav_tab_social",
-    ),
-    FloatingNavDestination(
-      index = 4,
-      label = stringResource(id = R.string.nav_streak),
-      selectedIcon = Icons.Rounded.LocalFireDepartment,
-      unselectedIcon = Icons.Outlined.LocalFireDepartment,
-      testTag = "nav_tab_streak",
-    ),
-  )
+  val radarLabel = stringResource(id = R.string.nav_radar)
+  val profileLabel = stringResource(id = R.string.nav_profile)
+  val socialFeedLabel = stringResource(id = R.string.nav_social_feed)
+  val socialLabel = stringResource(id = R.string.nav_social)
+  val streakLabel = stringResource(id = R.string.nav_streak)
+  val destinations = remember(radarLabel, profileLabel, socialFeedLabel, socialLabel, streakLabel) {
+    listOf(
+      FloatingNavDestination(
+        index = 0,
+        label = radarLabel,
+        selectedIcon = Icons.Rounded.Radar,
+        unselectedIcon = Icons.Outlined.Radar,
+        testTag = "nav_tab_radar",
+      ),
+      FloatingNavDestination(
+        index = 1,
+        label = profileLabel,
+        selectedIcon = Icons.Rounded.AccountCircle,
+        unselectedIcon = Icons.Outlined.AccountCircle,
+        testTag = "nav_tab_profile",
+      ),
+      FloatingNavDestination(
+        index = 2,
+        label = socialFeedLabel,
+        selectedIcon = Icons.Rounded.PhotoLibrary,
+        unselectedIcon = Icons.Outlined.PhotoLibrary,
+        testTag = "nav_tab_social_feed",
+      ),
+      FloatingNavDestination(
+        index = 3,
+        label = socialLabel,
+        selectedIcon = Icons.Rounded.Groups,
+        unselectedIcon = Icons.Outlined.Groups,
+        testTag = "nav_tab_social",
+      ),
+      FloatingNavDestination(
+        index = 4,
+        label = streakLabel,
+        selectedIcon = Icons.Rounded.LocalFireDepartment,
+        unselectedIcon = Icons.Outlined.LocalFireDepartment,
+        testTag = "nav_tab_streak",
+      ),
+    )
+  }
 
   Box(
     modifier = modifier
@@ -166,11 +171,7 @@ fun FloatingBottomNavBar(
               .weight(1f)
               .minimumInteractiveComponentSize()
               .clip(RoundedCornerShape(26.dp))
-              .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = ripple(bounded = true),
-                onClick = { onSelectTab(item.index) },
-              )
+              .clickable(onClick = { onSelectTab(item.index) })
               .padding(vertical = 4.dp)
               .testTag(item.testTag),
             horizontalAlignment = Alignment.CenterHorizontally,

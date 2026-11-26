@@ -325,14 +325,14 @@ fun ProfileScreen(
                 .align(Alignment.BottomCenter)
                 .size(106.dp),
             ) {
-              Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 0.dp,
+              Box(
                 modifier = Modifier
                   .fillMaxSize()
-                  .border(4.dp, MaterialTheme.colorScheme.surface, CircleShape)
+                  .clip(CircleShape)
+                  .background(MaterialTheme.colorScheme.surface)
                   .padding(4.dp)
+                  .clip(CircleShape)
+                  .background(auraColor.copy(alpha = 0.2f))
                   .border(3.dp, auraColor, CircleShape)
                   .clickable {
                     avatarPicker.launch(
@@ -340,56 +340,46 @@ fun ProfileScreen(
                     )
                   }
                   .testTag("profile_avatar_photo"),
+                contentAlignment = Alignment.Center,
               ) {
-                Box(
-                  modifier = Modifier
-                    .fillMaxSize()
-                    .background(auraColor.copy(alpha = 0.2f)),
-                  contentAlignment = Alignment.Center,
-                ) {
-                  if (avatarBitmap != null) {
-                    Image(
-                      bitmap = avatarBitmap,
-                      contentDescription = callsign,
-                      contentScale = ContentScale.Crop,
-                      modifier = Modifier
-                        .fillMaxSize()
-                        .clip(CircleShape),
-                    )
-                  } else {
-                    val chosenIcon = iconOptions.firstOrNull { it.first == avatarIcon }?.second ?: Icons.Rounded.Explore
-                    Icon(
-                      imageVector = chosenIcon,
-                      contentDescription = callsign,
-                      tint = auraColor,
-                      modifier = Modifier.size(46.dp),
-                    )
-                  }
+                if (avatarBitmap != null) {
+                  Image(
+                    bitmap = avatarBitmap,
+                    contentDescription = callsign,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                  )
+                } else {
+                  val chosenIcon = iconOptions.firstOrNull { it.first == avatarIcon }?.second ?: Icons.Rounded.Explore
+                  Icon(
+                    imageVector = chosenIcon,
+                    contentDescription = callsign,
+                    tint = auraColor,
+                    modifier = Modifier.size(46.dp),
+                  )
                 }
               }
 
-              Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primary,
-                shadowElevation = 0.dp,
+              Box(
                 modifier = Modifier
                   .align(Alignment.BottomEnd)
                   .size(34.dp)
+                  .clip(CircleShape)
+                  .background(MaterialTheme.colorScheme.primary)
                   .clickable {
                     avatarPicker.launch(
                       PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                     )
                   }
                   .testTag("change_avatar_button"),
+                contentAlignment = Alignment.Center,
               ) {
-                Box(contentAlignment = Alignment.Center) {
-                  Icon(
-                    imageVector = Icons.Rounded.CameraAlt,
-                    contentDescription = stringResource(id = R.string.profile_change_photo),
-                    tint = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(18.dp),
-                  )
-                }
+                Icon(
+                  imageVector = Icons.Rounded.CameraAlt,
+                  contentDescription = stringResource(id = R.string.profile_change_photo),
+                  tint = MaterialTheme.colorScheme.onPrimary,
+                  modifier = Modifier.size(18.dp),
+                )
               }
             }
           }
@@ -769,26 +759,23 @@ private fun StatPill(
   value: String,
   modifier: Modifier = Modifier,
 ) {
-  Surface(
-    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    shape = RoundedCornerShape(18.dp),
-    modifier = modifier,
+  Column(
+    modifier = modifier
+      .clip(RoundedCornerShape(18.dp))
+      .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+      .padding(vertical = 10.dp, horizontal = 6.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
   ) {
-    Column(
-      modifier = Modifier.padding(vertical = 10.dp, horizontal = 6.dp),
-      horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-      Text(
-        text = value,
-        style = MaterialTheme.typography.titleLarge,
-        fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.primary,
-      )
-      Text(
-        text = label,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-    }
+    Text(
+      text = value,
+      style = MaterialTheme.typography.titleLarge,
+      fontWeight = FontWeight.Bold,
+      color = MaterialTheme.colorScheme.primary,
+    )
+    Text(
+      text = label,
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
   }
 }

@@ -79,14 +79,11 @@ fun SocialArenaScreen(
     onRefresh = onRefresh,
     modifier = modifier.fillMaxSize(),
   ) {
-    Box(
-      modifier = Modifier.fillMaxSize(),
-      contentAlignment = Alignment.TopCenter,
-    ) {
-      LazyColumn(
-        modifier = Modifier
-          .widthIn(max = 680.dp)
-          .fillMaxSize(),
+    LazyColumn(
+      modifier = Modifier
+        .align(Alignment.TopCenter)
+        .widthIn(max = 680.dp)
+        .fillMaxSize(),
         contentPadding = PaddingValues(
           start = 16.dp,
           end = 16.dp,
@@ -300,7 +297,6 @@ fun SocialArenaScreen(
           }
         }
       }
-    }
     }
   }
 

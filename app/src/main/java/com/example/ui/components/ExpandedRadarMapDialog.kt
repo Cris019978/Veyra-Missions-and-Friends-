@@ -7,6 +7,7 @@ import android.graphics.drawable.BitmapDrawable
 import android.os.Build
 import android.view.View
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -54,6 +55,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -604,22 +606,20 @@ fun ExpandedRadarMapDialog(
               contentAlignment = Alignment.Center,
             ) {
               Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Surface(
-                  shape = CircleShape,
-                  color = primaryColor,
-                  shadowElevation = 0.dp,
+                Box(
                   modifier = Modifier
                     .size(40.dp)
+                    .clip(CircleShape)
+                    .background(primaryColor)
                     .border(3.dp, MaterialTheme.colorScheme.surface, CircleShape),
+                  contentAlignment = Alignment.Center,
                 ) {
-                  Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                      imageVector = if (hasLocationPermission) Icons.Rounded.MyLocation else Icons.Rounded.Explore,
-                      contentDescription = myProfile?.callsign ?: "Tú",
-                      tint = MaterialTheme.colorScheme.onPrimary,
-                      modifier = Modifier.size(20.dp),
-                    )
-                  }
+                  Icon(
+                    imageVector = if (hasLocationPermission) Icons.Rounded.MyLocation else Icons.Rounded.Explore,
+                    contentDescription = myProfile?.callsign ?: "Tú",
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(20.dp),
+                  )
                 }
                 Surface(
                   color = MaterialTheme.colorScheme.primaryContainer,
@@ -671,28 +671,28 @@ fun ExpandedRadarMapDialog(
                   .semantics { contentDescription = "Ver misión ${item.mission.title}" },
               ) {
                 Box(contentAlignment = Alignment.TopEnd) {
-                  Surface(
-                    shape = CircleShape,
-                    color = pinColor,
-                    shadowElevation = 0.dp,
+                  Box(
                     modifier = Modifier
                       .size(if (isAccepted) 40.dp else 34.dp)
+                      .clip(CircleShape)
+                      .background(pinColor)
                       .border(if (isAccepted) 3.dp else 2.dp, Color.White, CircleShape),
+                    contentAlignment = Alignment.Center,
                   ) {
-                    Box(contentAlignment = Alignment.Center) {
-                      Icon(
-                        imageVector = pinIcon,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(if (isAccepted) 21.dp else 18.dp),
-                      )
-                    }
+                    Icon(
+                      imageVector = pinIcon,
+                      contentDescription = null,
+                      tint = Color.White,
+                      modifier = Modifier.size(if (isAccepted) 21.dp else 18.dp),
+                    )
                   }
                   if (!item.isWithinProximity && !item.isCompletedByMe) {
-                    Surface(
-                      shape = CircleShape,
-                      color = MaterialTheme.colorScheme.surface,
-                      modifier = Modifier.size(16.dp),
+                    Box(
+                      modifier = Modifier
+                        .size(16.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surface),
+                      contentAlignment = Alignment.Center,
                     ) {
                       Icon(
                         imageVector = Icons.Rounded.Lock,
@@ -751,26 +751,24 @@ fun ExpandedRadarMapDialog(
                     onPlayerClick(playerItem)
                   },
               ) {
-                Surface(
-                  shape = CircleShape,
-                  color = playerDotColor,
-                  shadowElevation = 0.dp,
+                Box(
                   modifier = Modifier
                     .size(32.dp)
+                    .clip(CircleShape)
+                    .background(playerDotColor)
                     .border(2.dp, Color.White, CircleShape),
+                  contentAlignment = Alignment.Center,
                 ) {
-                  Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                      imageVector = if (playerItem.profile.seekingHelp) {
-                        Icons.Rounded.VolunteerActivism
-                      } else {
-                        Icons.Rounded.Person
-                      },
-                      contentDescription = playerItem.profile.callsign,
-                      tint = Color.White,
-                      modifier = Modifier.size(17.dp),
-                    )
-                  }
+                  Icon(
+                    imageVector = if (playerItem.profile.seekingHelp) {
+                      Icons.Rounded.VolunteerActivism
+                    } else {
+                      Icons.Rounded.Person
+                    },
+                    contentDescription = playerItem.profile.callsign,
+                    tint = Color.White,
+                    modifier = Modifier.size(17.dp),
+                  )
                 }
                 Surface(
                   color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),

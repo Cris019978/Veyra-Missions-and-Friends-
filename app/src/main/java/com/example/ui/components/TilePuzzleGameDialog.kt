@@ -241,14 +241,12 @@ fun TilePuzzleGameDialog(
                     )
                   } else {
                     val baseColor = tilePalette[(value - 1).coerceIn(0, tilePalette.lastIndex)]
-                    Surface(
-                      color = if (inRightSpot) baseColor else baseColor.copy(alpha = 0.80f),
-                      shape = RoundedCornerShape(16.dp),
-                      shadowElevation = 0.dp,
+                    Box(
                       modifier = Modifier
                         .weight(1f)
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(16.dp))
+                        .background(if (inRightSpot) baseColor else baseColor.copy(alpha = 0.80f))
                         .clickable(enabled = canMove) {
                           val next = tiles.toMutableList()
                           next[blankIdx] = value
@@ -258,23 +256,22 @@ fun TilePuzzleGameDialog(
                         }
                         .testTag("puzzle_tile_$value")
                         .semantics { contentDescription = "Pieza $value" },
+                      contentAlignment = Alignment.Center,
                     ) {
-                      Box(contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                          Text(
-                            text = value.toString(),
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = Color.White,
+                      Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                          text = value.toString(),
+                          style = MaterialTheme.typography.headlineMedium,
+                          fontWeight = FontWeight.ExtraBold,
+                          color = Color.White,
+                        )
+                        if (inRightSpot) {
+                          Icon(
+                            imageVector = Icons.Rounded.CheckCircle,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.85f),
+                            modifier = Modifier.size(14.dp),
                           )
-                          if (inRightSpot) {
-                            Icon(
-                              imageVector = Icons.Rounded.CheckCircle,
-                              contentDescription = null,
-                              tint = Color.White.copy(alpha = 0.85f),
-                              modifier = Modifier.size(14.dp),
-                            )
-                          }
                         }
                       }
                     }

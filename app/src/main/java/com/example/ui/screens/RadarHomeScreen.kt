@@ -1,6 +1,5 @@
 package com.example.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
@@ -227,16 +226,15 @@ fun RadarHomeScreen(
       horizontalAlignment = Alignment.CenterHorizontally,
     ) {
       // 1. Player HUD Header (Interfaz Principal fija arriba)
-      run {
-          val level = uiState.myProfile?.level ?: 1L
-          val xp = uiState.myProfile?.xp ?: 0L
-          val xpInLevel = (xp % 250L) / 250f
-          val seekingHelp = uiState.myProfile?.seekingHelp == true
+      val level = uiState.myProfile?.level ?: 1L
+      val xp = uiState.myProfile?.xp ?: 0L
+      val xpInLevel = (xp % 250L) / 250f
+      val seekingHelp = uiState.myProfile?.seekingHelp == true
 
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 16.dp, vertical = 8.dp),
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
           ) {
@@ -351,47 +349,32 @@ fun RadarHomeScreen(
                   tint = if (uiState.isBroadcastingRadar) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                 )
               }
-            }
-          }
+        }
       }
 
       // 2. Capa del Radar / Mapa OpenStreetMap único (se expande 50 / 75 / 100 reduciendo la zona táctil de misiones abajo)
-      Surface(
-        shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.65f),
-        border = BorderStroke(
-          width = 1.dp,
-          color = MaterialTheme.colorScheme.outlineVariant.copy(
-            alpha = if (radarScale == RadarScaleLevel.SCALE_100) 0.70f else 0.35f,
-          ),
-        ),
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 10.dp),
-      ) {
-        RoundRadarMap(
-          myProfile = uiState.myProfile,
-          nearbyPlayers = uiState.nearbyPlayers,
-          missions = uiState.missions,
-          searchRadiusMeters = uiState.settings.searchRadiusMeters,
-          radarStyle = uiState.settings.radarStyle,
-          animationTier = uiState.settings.animationTier,
-          isBroadcasting = uiState.isBroadcastingRadar,
-          hasLocationPermission = uiState.hasLocationPermission,
-          activeAcceptedMissionId = uiState.activeAcceptedMissionId,
-          pauseAnimations = pauseRadarAnimations,
-          userLat = resolvedLat,
-          userLon = resolvedLon,
-          radarScale = radarScale,
-          expandedHeightDp = maxExpandedRadarHeight,
-          onRadarScaleChange = { radarScale = it },
-          onPlayerClick = { selectedPlayer = it },
-          onMissionClick = { selectedMission = it },
-          onCycleRadius = onCycleRadius,
-          onExpandMap = { showExpandedMap = true },
-          modifier = Modifier.padding(vertical = 8.dp),
-        )
-      }
+      RoundRadarMap(
+        myProfile = uiState.myProfile,
+        nearbyPlayers = uiState.nearbyPlayers,
+        missions = uiState.missions,
+        searchRadiusMeters = uiState.settings.searchRadiusMeters,
+        radarStyle = uiState.settings.radarStyle,
+        animationTier = uiState.settings.animationTier,
+        isBroadcasting = uiState.isBroadcastingRadar,
+        hasLocationPermission = uiState.hasLocationPermission,
+        activeAcceptedMissionId = uiState.activeAcceptedMissionId,
+        pauseAnimations = pauseRadarAnimations,
+        userLat = resolvedLat,
+        userLon = resolvedLon,
+        radarScale = radarScale,
+        expandedHeightDp = maxExpandedRadarHeight,
+        onRadarScaleChange = { radarScale = it },
+        onPlayerClick = { selectedPlayer = it },
+        onMissionClick = { selectedMission = it },
+        onCycleRadius = onCycleRadius,
+        onExpandMap = { showExpandedMap = true },
+        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+      )
 
       Spacer(modifier = Modifier.height(6.dp))
 
@@ -1364,13 +1347,7 @@ private fun MissionCard(
                 }
               }
               if (isPrivateMatch && !item.isCompletedByMe) {
-                if (disableAnimations) {
-                  ParaTiBadge()
-                } else {
-                  AnimatedVisibility(visible = true) {
-                    ParaTiBadge()
-                  }
-                }
+                ParaTiBadge()
               }
             }
             Text(
@@ -1549,27 +1526,25 @@ private fun MissionCard(
 
 @Composable
 private fun ParaTiBadge() {
-  Surface(
-    color = MaterialTheme.colorScheme.secondaryContainer,
-    shape = CircleShape,
+  Row(
+    modifier = Modifier
+      .clip(CircleShape)
+      .background(MaterialTheme.colorScheme.secondaryContainer)
+      .padding(horizontal = 6.dp, vertical = 2.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(3.dp),
   ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-      Icon(
-        imageVector = Icons.Rounded.Star,
-        contentDescription = null,
-        tint = MaterialTheme.colorScheme.onSecondaryContainer,
-        modifier = Modifier.size(10.dp),
-      )
-      Text(
-        text = "Para ti",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSecondaryContainer,
-      )
-    }
+    Icon(
+      imageVector = Icons.Rounded.Star,
+      contentDescription = null,
+      tint = MaterialTheme.colorScheme.onSecondaryContainer,
+      modifier = Modifier.size(10.dp),
+    )
+    Text(
+      text = "Para ti",
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSecondaryContainer,
+    )
   }
 }
 

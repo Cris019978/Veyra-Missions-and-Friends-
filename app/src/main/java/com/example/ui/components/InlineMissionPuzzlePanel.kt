@@ -425,13 +425,12 @@ private fun InlineWireBoard(
             INLINE_WIRE_NODES.forEach { node ->
               val isConnected = connectedIds[node.id] == true
               val isSelected = selectedLeftId == node.id
-              Surface(
-                shape = CircleShape,
-                color = node.color,
+              Box(
                 modifier = Modifier
                   .size(42.dp)
-                  .border(if (isSelected) 3.dp else 1.5.dp, Color.White, CircleShape)
                   .clip(CircleShape)
+                  .background(node.color)
+                  .border(if (isSelected) 3.dp else 1.5.dp, Color.White, CircleShape)
                   .onGloballyPositioned { coords ->
                     val pos = coords.positionInParent()
                     leftCenters[node.id] = Offset(
@@ -444,13 +443,12 @@ private fun InlineWireBoard(
                     hint = "Seleccionado ${node.label}: toca ${node.code} a la derecha"
                   }
                   .testTag("inline_wire_left_${node.id}"),
+                contentAlignment = Alignment.Center,
               ) {
-                Box(contentAlignment = Alignment.Center) {
-                  if (isConnected) {
-                    Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                  } else {
-                    Text(node.code, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = Color.White)
-                  }
+                if (isConnected) {
+                  Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                } else {
+                  Text(node.code, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = Color.White)
                 }
               }
             }
@@ -462,13 +460,12 @@ private fun InlineWireBoard(
           ) {
             rightOrder.forEach { node ->
               val isConnected = connectedIds[node.id] == true
-              Surface(
-                shape = CircleShape,
-                color = node.color,
+              Box(
                 modifier = Modifier
                   .size(42.dp)
-                  .border(1.5.dp, Color.White.copy(alpha = 0.7f), CircleShape)
                   .clip(CircleShape)
+                  .background(node.color)
+                  .border(1.5.dp, Color.White.copy(alpha = 0.7f), CircleShape)
                   .onGloballyPositioned { coords ->
                     val pos = coords.positionInParent()
                     rightCenters[node.id] = Offset(
@@ -493,13 +490,12 @@ private fun InlineWireBoard(
                     }
                   }
                   .testTag("inline_wire_right_${node.id}"),
+                contentAlignment = Alignment.Center,
               ) {
-                Box(contentAlignment = Alignment.Center) {
-                  if (isConnected) {
-                    Icon(Icons.Rounded.Bolt, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                  } else {
-                    Text(node.code, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = Color.White)
-                  }
+                if (isConnected) {
+                  Icon(Icons.Rounded.Bolt, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                } else {
+                  Text(node.code, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = Color.White)
                 }
               }
             }
@@ -570,13 +566,12 @@ private fun InlineSlidingTileBoard(
                 )
               } else {
                 val baseColor = palette[(value - 1).coerceIn(0, palette.lastIndex)]
-                Surface(
-                  color = if (inRightSpot) baseColor else baseColor.copy(alpha = 0.82f),
-                  shape = RoundedCornerShape(12.dp),
+                Box(
                   modifier = Modifier
                     .weight(1f)
                     .aspectRatio(1f)
                     .clip(RoundedCornerShape(12.dp))
+                    .background(if (inRightSpot) baseColor else baseColor.copy(alpha = 0.82f))
                     .clickable(enabled = canMove) {
                       val next = tiles.toMutableList()
                       next[blankIdx] = value
@@ -589,15 +584,14 @@ private fun InlineSlidingTileBoard(
                     }
                     .testTag("inline_puzzle_tile_$value")
                     .semantics { contentDescription = "Pieza $value" },
+                  contentAlignment = Alignment.Center,
                 ) {
-                  Box(contentAlignment = Alignment.Center) {
-                    Text(
-                      text = value.toString(),
-                      style = MaterialTheme.typography.titleLarge,
-                      fontWeight = FontWeight.ExtraBold,
-                      color = Color.White,
-                    )
-                  }
+                  Text(
+                    text = value.toString(),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color.White,
+                  )
                 }
               }
             }

@@ -247,18 +247,16 @@ fun WireConnectGameDialog(
                 WIRE_NODES.forEach { node ->
                   val isConnected = connectedIds[node.id] == true
                   val isSelected = selectedLeftId == node.id
-                  Surface(
-                    shape = CircleShape,
-                    color = node.color.copy(alpha = if (isConnected || isSelected) 1f else 0.85f),
-                    shadowElevation = 0.dp,
+                  Box(
                     modifier = Modifier
                       .size(50.dp)
+                      .clip(CircleShape)
+                      .background(node.color.copy(alpha = if (isConnected || isSelected) 1f else 0.85f))
                       .border(
                         width = if (isSelected) 3.dp else 1.5.dp,
                         color = if (isSelected) Color.White else Color.White.copy(alpha = 0.45f),
                         shape = CircleShape,
                       )
-                      .clip(CircleShape)
                       .onGloballyPositioned { coords ->
                         val pos = coords.positionInParent()
                         val w = coords.size.width.toFloat()
@@ -274,18 +272,17 @@ fun WireConnectGameDialog(
                       }
                       .testTag("wire_left_${node.id}")
                       .semantics { contentDescription = "Terminal izquierda ${node.label}" },
+                    contentAlignment = Alignment.Center,
                   ) {
-                    Box(contentAlignment = Alignment.Center) {
-                      if (isConnected) {
-                        Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
-                      } else {
-                        Text(
-                          text = node.code,
-                          style = MaterialTheme.typography.labelLarge,
-                          fontWeight = FontWeight.Bold,
-                          color = Color.White,
-                        )
-                      }
+                    if (isConnected) {
+                      Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+                    } else {
+                      Text(
+                        text = node.code,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                      )
                     }
                   }
                 }
@@ -299,17 +296,16 @@ fun WireConnectGameDialog(
               ) {
                 rightOrder.forEach { node ->
                   val isConnected = connectedIds[node.id] == true
-                  Surface(
-                    shape = CircleShape,
-                    color = node.color.copy(alpha = if (isConnected) 1f else 0.85f),
+                  Box(
                     modifier = Modifier
                       .size(50.dp)
+                      .clip(CircleShape)
+                      .background(node.color.copy(alpha = if (isConnected) 1f else 0.85f))
                       .border(
                         width = 1.5.dp,
                         color = Color.White.copy(alpha = if (isConnected) 0.95f else 0.45f),
                         shape = CircleShape,
                       )
-                      .clip(CircleShape)
                       .onGloballyPositioned { coords ->
                         val pos = coords.positionInParent()
                         val w = coords.size.width.toFloat()
@@ -337,18 +333,17 @@ fun WireConnectGameDialog(
                       }
                       .testTag("wire_right_${node.id}")
                       .semantics { contentDescription = "Terminal derecha ${node.label}" },
+                    contentAlignment = Alignment.Center,
                   ) {
-                    Box(contentAlignment = Alignment.Center) {
-                      if (isConnected) {
-                        Icon(Icons.Rounded.Bolt, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
-                      } else {
-                        Text(
-                          text = node.code,
-                          style = MaterialTheme.typography.labelLarge,
-                          fontWeight = FontWeight.Bold,
-                          color = Color.White,
-                        )
-                      }
+                    if (isConnected) {
+                      Icon(Icons.Rounded.Bolt, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+                    } else {
+                      Text(
+                        text = node.code,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                      )
                     }
                   }
                 }

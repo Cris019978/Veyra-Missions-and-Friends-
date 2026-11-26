@@ -50,6 +50,7 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,34 +83,33 @@ fun StreakScreen(
 ) {
   val streak = uiState.dailyStreak
   val disableAnimations = uiState.settings.animationTier == "low"
-  val communityPeers = buildList {
-    val seenIds = mutableSetOf<String>()
-    uiState.leaderboardPlayers.forEach { player ->
-      if (player.userId != currentUserId && seenIds.add(player.userId)) {
-        add(player)
+  val communityPeers = remember(uiState.leaderboardPlayers, uiState.nearbyPlayers, currentUserId) {
+    buildList {
+      val seenIds = mutableSetOf<String>()
+      uiState.leaderboardPlayers.forEach { player ->
+        if (player.userId != currentUserId && seenIds.add(player.userId)) {
+          add(player)
+        }
       }
-    }
-    uiState.nearbyPlayers.forEach { item ->
-      if (item.profile.userId != currentUserId && seenIds.add(item.profile.userId)) {
-        add(item.profile)
+      uiState.nearbyPlayers.forEach { item ->
+        if (item.profile.userId != currentUserId && seenIds.add(item.profile.userId)) {
+          add(item.profile)
+        }
       }
-    }
-  }.take(12)
+    }.take(12)
+  }
 
   PullToRefreshBox(
     isRefreshing = uiState.isRefreshing,
     onRefresh = onRefresh,
     modifier = modifier.fillMaxSize(),
   ) {
-    Box(
-      modifier = Modifier.fillMaxSize(),
-      contentAlignment = Alignment.TopCenter,
-    ) {
-      LazyColumn(
-        modifier = Modifier
-          .widthIn(max = 680.dp)
-          .fillMaxSize()
-          .testTag("streak_screen_list"),
+    LazyColumn(
+      modifier = Modifier
+        .align(Alignment.TopCenter)
+        .widthIn(max = 680.dp)
+        .fillMaxSize()
+        .testTag("streak_screen_list"),
         contentPadding = PaddingValues(
           start = 16.dp,
           end = 16.dp,
@@ -279,7 +279,6 @@ fun StreakScreen(
           }
         }
       }
-    }
   }
 }
 
@@ -320,20 +319,32 @@ private fun StreakHeroCard(
   val milestoneProgress = ((streak.currentStreakDays - prevMilestone).toFloat() / span.toFloat())
     .coerceIn(0f, 1f)
 
-  val containerBrush = if (streak.completedToday) {
-    Brush.linearGradient(
-      listOf(
-        MaterialTheme.colorScheme.primaryContainer,
-        MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.85f),
+  val primaryContainer = MaterialTheme.colorScheme.primaryContainer
+  val tertiaryContainer = MaterialTheme.colorScheme.tertiaryContainer
+  val surfaceContainerHigh = MaterialTheme.colorScheme.surfaceContainerHigh
+  val secondaryContainer = MaterialTheme.colorScheme.secondaryContainer
+  val containerBrush = remember(
+    streak.completedToday,
+    primaryContainer,
+    tertiaryContainer,
+    surfaceContainerHigh,
+    secondaryContainer,
+  ) {
+    if (streak.completedToday) {
+      Brush.linearGradient(
+        listOf(
+          primaryContainer,
+          tertiaryContainer.copy(alpha = 0.85f),
+        )
       )
-    )
-  } else {
-    Brush.linearGradient(
-      listOf(
-        MaterialTheme.colorScheme.surfaceContainerHigh,
-        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f),
+    } else {
+      Brush.linearGradient(
+        listOf(
+          surfaceContainerHigh,
+          secondaryContainer.copy(alpha = 0.65f),
+        )
       )
-    )
+    }
   }
 
   Card(
