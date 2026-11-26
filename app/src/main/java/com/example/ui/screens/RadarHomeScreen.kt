@@ -144,6 +144,7 @@ fun RadarHomeScreen(
   onRespawnRandomMissions: () -> Unit = {},
   onDialogVisibilityChanged: (Boolean) -> Unit = {},
   onOpenRouletteLab: (() -> Unit)? = null,
+  onOpenVeyra2Aiming: (() -> Unit)? = null,
   useExternalConfettiHost: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
@@ -373,6 +374,7 @@ fun RadarHomeScreen(
         onMissionClick = { selectedMission = it },
         onCycleRadius = onCycleRadius,
         onExpandMap = { showExpandedMap = true },
+        onOpenAimingMode = onOpenVeyra2Aiming,
         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
       )
 

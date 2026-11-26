@@ -217,6 +217,7 @@ fun RoundRadarMap(
   onMissionClick: (MissionWithDistance) -> Unit,
   onCycleRadius: () -> Unit,
   onExpandMap: () -> Unit,
+  onOpenAimingMode: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
@@ -1256,6 +1257,54 @@ fun RoundRadarMap(
             } else {
               MaterialTheme.colorScheme.onSurfaceVariant
             },
+          )
+        }
+      }
+    }
+
+    if (onOpenAimingMode != null) {
+      Spacer(modifier = Modifier.height(6.dp))
+      Surface(
+        onClick = {
+          HapticFeedbackHelper.performRadarPinTap(context)
+          onOpenAimingMode()
+        },
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = androidx.compose.foundation.BorderStroke(
+          1.2.dp,
+          primaryColor.copy(alpha = 0.65f),
+        ),
+        modifier = Modifier
+          .minimumInteractiveComponentSize()
+          .testTag("radar_veyra2_aim_dot_button")
+          .semantics { contentDescription = "Activar modo de puntería horizontal Mejora Veyra 2" },
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+        ) {
+          // Punto/retícula táctica debajo del minimapa
+          Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+              .size(18.dp)
+              .clip(CircleShape)
+              .border(1.5.dp, primaryColor, CircleShape),
+          ) {
+            Box(
+              modifier = Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.tertiary),
+            )
+          }
+          Text(
+            text = "Mira Horizontal",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = onSurface,
           )
         }
       }

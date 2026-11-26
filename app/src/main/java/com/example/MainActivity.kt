@@ -99,6 +99,8 @@ import com.example.ui.viewmodel.RadarQuestViewModel
 import com.example.util.HapticFeedbackHelper
 import com.example.util.SafeRuntimeBootstrap
 import com.example.util.VeyraNotificationManager
+import com.example.veyra2.Veyra2TacticalScreen
+import com.example.veyra2.Veyra2TacticalViewModel
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -268,6 +270,22 @@ private fun MainAppShell(
   var showNotificationsSheet by remember { mutableStateOf(false) }
   var radarModalDialogOpen by remember { mutableStateOf(false) }
   var showRouletteLab by remember { mutableStateOf(false) }
+  var showVeyra2Tactical by remember { mutableStateOf(false) }
+  val veyra2ViewModel: Veyra2TacticalViewModel = viewModel(
+    key = "veyra2_tactical_$currentUserId",
+    factory = viewModelFactory {
+      initializer {
+        Veyra2TacticalViewModel(
+          onSyncRewardsToProfile = { xpDelta, bonusLevels, titleReward ->
+            viewModel.applyRouletteRewards(xpDelta, bonusLevels)
+            if (!titleReward.isNullOrBlank()) {
+              viewModel.claimRouletteTitle(titleReward)
+            }
+          },
+        )
+      }
+    },
+  )
   val rouletteStateManager: RouletteStateManager = viewModel(
     key = "roulette_lab_$currentUserId",
     factory = viewModelFactory {
@@ -299,6 +317,7 @@ private fun MainAppShell(
   val anyOverlayModalOpen = radarModalDialogOpen ||
     showNotificationsSheet ||
     showRouletteLab ||
+    showVeyra2Tactical ||
     uiState.showOnboardingQuest ||
     uiState.queuedPromptMission != null
 
@@ -563,6 +582,10 @@ private fun MainAppShell(
                 onRespawnRandomMissions = { viewModel.respawnRandomMissions() },
                 onDialogVisibilityChanged = { radarModalDialogOpen = it },
                 onOpenRouletteLab = { showRouletteLab = true },
+                onOpenVeyra2Aiming = {
+                  veyra2ViewModel.enterLandscapeAimingMode()
+                  showVeyra2Tactical = true
+                },
                 useExternalConfettiHost = true,
               )
 
@@ -766,6 +789,13 @@ private fun MainAppShell(
         stateManager = rouletteStateManager,
         animationTier = animationTier,
         onClose = { showRouletteLab = false },
+      )
+    }
+
+    if (showVeyra2Tactical) {
+      Veyra2TacticalScreen(
+        viewModel = veyra2ViewModel,
+        onExitToMainMenu = { showVeyra2Tactical = false },
       )
     }
   }
