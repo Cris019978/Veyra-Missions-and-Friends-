@@ -244,7 +244,7 @@ fun TilePuzzleGameDialog(
                     Surface(
                       color = if (inRightSpot) baseColor else baseColor.copy(alpha = 0.80f),
                       shape = RoundedCornerShape(16.dp),
-                      shadowElevation = if (canMove) 5.dp else 1.dp,
+                      shadowElevation = 0.dp,
                       modifier = Modifier
                         .weight(1f)
                         .aspectRatio(1f)

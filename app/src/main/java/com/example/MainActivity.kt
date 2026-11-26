@@ -10,11 +10,16 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -122,6 +127,7 @@ fun AppNavigation() {
   val notificationManager = remember(context) { VeyraNotificationManager(context.applicationContext) }
   val localThemeSnapshot by localPrefs.prefsFlow.collectAsStateWithLifecycle(initialValue = ThemePrefsSnapshot())
   val authSession by authManager.sessionFlow.collectAsStateWithLifecycle()
+  val savedUsernames by authManager.savedUsernamesFlow.collectAsStateWithLifecycle()
 
   var registrationCelebrationKey by remember { mutableLongStateOf(0L) }
   var registrationCelebrationMsg by remember { mutableStateOf<String?>(null) }
@@ -140,9 +146,22 @@ fun AppNavigation() {
   }
 
   Box(modifier = Modifier.fillMaxSize()) {
-    val activeSession = authSession
-    if (activeSession != null && activeSession.isLoggedIn) {
-      val localUid = activeSession.username
+    val activeSession = authSession?.takeIf { it.isLoggedIn }
+    val disableAuthTransition = localThemeSnapshot.animationTier == "low"
+    AnimatedContent(
+      targetState = activeSession,
+      contentKey = { it?.username ?: "__auth__" },
+      transitionSpec = {
+        if (disableAuthTransition) {
+          EnterTransition.None togetherWith ExitTransition.None
+        } else {
+          fadeIn(tween(180)) togetherWith fadeOut(tween(120))
+        }
+      },
+      label = "authShellTransition",
+    ) { session ->
+      if (session != null) {
+        val localUid = session.username
       val sessionKey = "local_${localUid}"
       key(sessionKey) {
         val viewModel: RadarQuestViewModel = viewModel(
@@ -167,10 +186,10 @@ fun AppNavigation() {
                 defaultDisplayName = localUid,
                 isLocalOfflineMode = true,
                 savedAccountEmail = localUid,
-                accountRole = activeSession.role,
-                accountRoleTitle = activeSession.roleTitle,
-                initialAccountXp = activeSession.xp,
-                initialAccountLevel = activeSession.level,
+                accountRole = session.role,
+                accountRoleTitle = session.roleTitle,
+                initialAccountXp = session.xp,
+                initialAccountLevel = session.level,
                 localMissionFeedRepository = feedRepo,
                 onSyncSessionRole = { role, roleTitle -> authManager.updateActiveRole(role, roleTitle) },
                 onSystemNotify = notificationManager::postNotification,
@@ -206,8 +225,11 @@ fun AppNavigation() {
             registrationCelebrationTitle = roleTitle
           },
           renderCelebrationOverlay = false,
+          savedUsernames = savedUsernames,
+          animationTier = localThemeSnapshot.animationTier,
         )
       }
+    }
     }
 
     RegistrationCelebrationHost(
@@ -215,6 +237,7 @@ fun AppNavigation() {
       message = registrationCelebrationMsg,
       roleTitle = registrationCelebrationTitle,
       onDismiss = { registrationCelebrationMsg = null },
+      animationTier = localThemeSnapshot.animationTier,
     )
   }
 }

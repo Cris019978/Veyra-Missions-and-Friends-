@@ -488,8 +488,8 @@ private fun ClassicRouletteWheel(
       if (isLowTier) {
         wheelAngle.snapTo(wheelAngle.value + deltaToTarget + subtleJitter)
       } else {
-        val extraSpins = 360f * (if (isHighTier) 5f else 2f)
-        val durationMs = if (isHighTier) 2000 else 1050
+        val extraSpins = 360f * (if (isHighTier) 4f else 2f)
+        val durationMs = if (isHighTier) 1750 else 950
         val finalAngle = wheelAngle.value + extraSpins + deltaToTarget + subtleJitter
         wheelAngle.animateTo(
           targetValue = finalAngle,
@@ -552,7 +552,7 @@ private fun ClassicRouletteWheel(
   // OPT: Reutilizar Path del puntero y lista de colores del halo sin instanciar en cada frame.
   val pointerPath = remember { Path() }
   val haloColors = remember(pointerColor) {
-    listOf(pointerColor.copy(alpha = 0.22f), Color.Transparent)
+    listOf(pointerColor.copy(alpha = 0.15f), Color.Transparent)
   }
 
   Box(
@@ -704,14 +704,14 @@ private fun HorizontalRouletteTape(
 
       val extraCycles = when {
         isLowTier -> 1
-        isHighTier -> 5
+        isHighTier -> 4
         else -> 2
       }
       val destinationSlot = (cycleSize * extraCycles) + targetIndex
       if (isLowTier) {
         tapeOffsetPx.snapTo(destinationSlot * stridePx)
       } else {
-        val durationMs = if (isHighTier) 2000 else 1050
+        val durationMs = if (isHighTier) 1750 else 950
         tapeOffsetPx.animateTo(
           targetValue = destinationSlot * stridePx,
           animationSpec = tween(
@@ -764,17 +764,12 @@ private fun HorizontalRouletteTape(
           TapePrizeTile(
             prize = prize,
             isHighlighted = isCenteredWinner,
-            useElevation = isHighTier,
             modifier = Modifier
               .width(cardWidthDp)
               .fillMaxHeight()
               .padding(vertical = 12.dp)
               .graphicsLayer {
                 translationX = slotBasePx - offsetReader()
-                if (isHighTier && isCenteredWinner) {
-                  scaleX = 1.04f
-                  scaleY = 1.04f
-                }
               },
           )
         }
@@ -810,7 +805,6 @@ private fun HorizontalRouletteTape(
 private fun TapePrizeTile(
   prize: RoulettePrize,
   isHighlighted: Boolean,
-  useElevation: Boolean,
   modifier: Modifier = Modifier,
 ) {
   val primaryColor = MaterialTheme.colorScheme.primary
@@ -831,7 +825,7 @@ private fun TapePrizeTile(
     shape = RoundedCornerShape(14.dp),
     color = MaterialTheme.colorScheme.surface,
     border = borderStroke,
-    shadowElevation = if (useElevation && isHighlighted) 6.dp else 0.dp,
+    shadowElevation = 0.dp,
     modifier = modifier,
   ) {
     Column(

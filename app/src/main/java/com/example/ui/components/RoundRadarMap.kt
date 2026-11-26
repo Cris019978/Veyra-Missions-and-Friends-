@@ -8,7 +8,6 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.StartOffset
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -254,11 +253,11 @@ fun RoundRadarMap(
         isLowTier -> scaleProgressAnim.snapTo(target)
         isHighTier -> scaleProgressAnim.animateTo(
           targetValue = target,
-          animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 460f),
+          animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 380f),
         )
         else -> scaleProgressAnim.animateTo(
           targetValue = target,
-          animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing),
+          animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
         )
       }
     }
@@ -289,7 +288,7 @@ fun RoundRadarMap(
     }
   }
 
-  // Solo el barrido esencial se mantiene en Gama baja; extras y ondas se escalonan en Media y Alta.
+  // Gama Baja y Media solo mantienen el barrido esencial; Gama Alta añade 1 onda sonar y respiro sutil.
   val essentialTransition = if (!pauseAnimations && isBroadcasting) {
     rememberInfiniteTransition(label = "veyraEssentialSweep")
   } else {
@@ -300,7 +299,7 @@ fun RoundRadarMap(
       initialValue = 0f,
       targetValue = 360f,
       animationSpec = infiniteRepeatable(
-        animation = tween(durationMillis = if (isLowTier) 3800 else 2800, easing = LinearEasing),
+        animation = tween(durationMillis = if (isLowTier) 3800 else 3200, easing = LinearEasing),
         repeatMode = RepeatMode.Restart,
       ),
       label = "sweepAngle",
@@ -309,17 +308,17 @@ fun RoundRadarMap(
     remember { mutableFloatStateOf(45f) }
   }
 
-  val mediumTransition = if (!pauseAnimations && !isLowTier && isBroadcasting) {
-    rememberInfiniteTransition(label = "veyraMediumWave")
+  val highTransition = if (!pauseAnimations && isHighTier) {
+    rememberInfiniteTransition(label = "veyraHighExtras")
   } else {
     null
   }
-  val sonarWave1State: State<Float> = if (mediumTransition != null) {
-    mediumTransition.animateFloat(
+  val sonarWave1State: State<Float> = if (highTransition != null && isBroadcasting) {
+    highTransition.animateFloat(
       initialValue = 0.08f,
       targetValue = 1.0f,
       animationSpec = infiniteRepeatable(
-        animation = tween(durationMillis = 2700, easing = FastOutSlowInEasing),
+        animation = tween(durationMillis = 3000, easing = FastOutSlowInEasing),
         repeatMode = RepeatMode.Restart,
       ),
       label = "sonarWave1",
@@ -327,64 +326,18 @@ fun RoundRadarMap(
   } else {
     remember { mutableFloatStateOf(0f) }
   }
-
-  val highTransition = if (!pauseAnimations && isHighTier) {
-    rememberInfiniteTransition(label = "veyraHighExtras")
-  } else {
-    null
-  }
   val pulseBreathState: State<Float> = if (highTransition != null) {
     highTransition.animateFloat(
-      initialValue = 0.92f,
-      targetValue = 1.10f,
+      initialValue = 0.96f,
+      targetValue = 1.05f,
       animationSpec = infiniteRepeatable(
-        animation = tween(durationMillis = 1450, easing = FastOutSlowInEasing),
+        animation = tween(durationMillis = 1800, easing = FastOutSlowInEasing),
         repeatMode = RepeatMode.Reverse,
       ),
       label = "pulseBreath",
     )
   } else {
     remember { mutableFloatStateOf(1.0f) }
-  }
-  val outerOrbitAngleState: State<Float> = if (highTransition != null) {
-    highTransition.animateFloat(
-      initialValue = 360f,
-      targetValue = 0f,
-      animationSpec = infiniteRepeatable(
-        animation = tween(durationMillis = 16000, easing = LinearEasing),
-        repeatMode = RepeatMode.Restart,
-      ),
-      label = "outerOrbitAngle",
-    )
-  } else {
-    remember { mutableFloatStateOf(0f) }
-  }
-  val sonarWave2State: State<Float> = if (highTransition != null && isBroadcasting) {
-    highTransition.animateFloat(
-      initialValue = 0.08f,
-      targetValue = 1.0f,
-      animationSpec = infiniteRepeatable(
-        animation = tween(durationMillis = 2700, easing = FastOutSlowInEasing),
-        repeatMode = RepeatMode.Restart,
-        initialStartOffset = StartOffset(1350),
-      ),
-      label = "sonarWave2",
-    )
-  } else {
-    remember { mutableFloatStateOf(0f) }
-  }
-  val liveDotAlphaState: State<Float> = if (highTransition != null) {
-    highTransition.animateFloat(
-      initialValue = 0.38f,
-      targetValue = 1f,
-      animationSpec = infiniteRepeatable(
-        animation = tween(durationMillis = 850, easing = FastOutSlowInEasing),
-        repeatMode = RepeatMode.Reverse,
-      ),
-      label = "liveDotAlpha",
-    )
-  } else {
-    remember { mutableFloatStateOf(1f) }
   }
 
   // Precalcular vectores unitarios fuera de layout/draw: cambiar de 50 <-> 75 <-> 100 no recalcula ni recompone pines.
@@ -497,10 +450,6 @@ fun RoundRadarMap(
           ),
         )
       }
-      val shadowPxHigh = with(density) {
-        (if (radarScale == RadarScaleLevel.SCALE_100) 12.dp else 10.dp).toPx()
-      }
-
       Box(
         modifier = Modifier
           .layout { measurable, constraints ->
@@ -518,7 +467,7 @@ fun RoundRadarMap(
             val cPx = currentCornerPx()
             shape = RoundedCornerShape(cPx)
             clip = true
-            shadowElevation = if (isHighTier) shadowPxHigh else 0f
+            shadowElevation = 0f
           }
           .background(surfaceContainer)
           .testTag("round_radar_map")
@@ -695,7 +644,6 @@ fun RoundRadarMap(
         }
 
         // Precalcular recursos del Canvas fuera de DrawScope
-        val orbitDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(18f, 14f, 6f, 14f), 0f) }
         val rangeDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f) }
         val compassUnitTicks = remember(radarStyle, isLowTier) {
           if (!isLowTier && (radarStyle == "compass" || radarStyle == "neon")) {
@@ -733,9 +681,7 @@ fun RoundRadarMap(
           val maxR = min(size.width, size.height) / 2f
           val sweepAngle = sweepAngleState.value
           val sonarWave1 = sonarWave1State.value
-          val sonarWave2 = sonarWave2State.value
           val pulseBreath = pulseBreathState.value
-          val outerOrbitAngle = outerOrbitAngleState.value
           val (_, veilOuterA, veilInnerA) = interpolateRevealTriple(scaleProgressAnim.value)
 
           veilColorsBuffer[0] = surfaceContainer.copy(alpha = veilInnerA)
@@ -749,21 +695,6 @@ fun RoundRadarMap(
               radius = maxR * 1.15f,
             ),
           )
-
-          if (isHighTier) {
-            rotate(degrees = outerOrbitAngle, pivot = center) {
-              drawCircle(
-                color = tertiaryColor.copy(alpha = if (radarStyle == "neon") 0.48f else 0.28f),
-                radius = maxR - 6f,
-                center = center,
-                style = Stroke(
-                  width = 2.5f,
-                  cap = StrokeCap.Round,
-                  pathEffect = orbitDashEffect,
-                ),
-              )
-            }
-          }
 
           val ringCount = 3
           val ringColor = primaryColor.copy(alpha = if (radarStyle == "neon") 0.36f else 0.24f)
@@ -812,24 +743,14 @@ fun RoundRadarMap(
           }
 
           if (isBroadcasting) {
-            if (!isLowTier && sonarWave1 > 0f) {
+            if (isHighTier && sonarWave1 > 0f) {
               val wave1R = maxR * sonarWave1
-              val wave1Alpha = (1f - sonarWave1).coerceIn(0f, 1f) * 0.46f
+              val wave1Alpha = (1f - sonarWave1).coerceIn(0f, 1f) * 0.36f
               drawCircle(
                 color = primaryColor.copy(alpha = wave1Alpha),
                 radius = wave1R,
                 center = center,
-                style = Stroke(width = 3.0f),
-              )
-            }
-            if (isHighTier && sonarWave2 > 0f) {
-              val wave2R = maxR * sonarWave2
-              val wave2Alpha = (1f - sonarWave2).coerceIn(0f, 1f) * 0.36f
-              drawCircle(
-                color = tertiaryColor.copy(alpha = wave2Alpha),
-                radius = wave2R,
-                center = center,
-                style = Stroke(width = 2.2f),
+                style = Stroke(width = 2.5f),
               )
             }
 
@@ -969,7 +890,7 @@ fun RoundRadarMap(
                 Surface(
                   shape = CircleShape,
                   color = pinColor,
-                  shadowElevation = if (isHighTier) 4.dp else 0.dp,
+                  shadowElevation = 0.dp,
                   modifier = Modifier
                     .size(26.dp)
                     .border(
@@ -1052,7 +973,7 @@ fun RoundRadarMap(
                   Surface(
                     shape = CircleShape,
                     color = playerDotColor,
-                    shadowElevation = if (isHighTier) 4.dp else 0.dp,
+                    shadowElevation = 0.dp,
                     modifier = Modifier
                       .size(28.dp)
                       .border(
@@ -1096,14 +1017,14 @@ fun RoundRadarMap(
         Surface(
           shape = CircleShape,
           color = primaryColor,
-          shadowElevation = if (isHighTier) 6.dp else 0.dp,
+          shadowElevation = 0.dp,
           modifier = Modifier
             .align(Alignment.Center)
             .size(42.dp)
             .let { mod ->
               if (isHighTier && isBroadcasting) {
                 mod.graphicsLayer {
-                  val s = 0.96f + (pulseBreathState.value - 0.92f) * 0.28f
+                  val s = pulseBreathState.value
                   scaleX = s
                   scaleY = s
                 }
@@ -1129,7 +1050,6 @@ fun RoundRadarMap(
         if (showExpandHint) {
           RadarFloatingActionPair(
             radarScale = radarScale,
-            useElevation = false,
             onExpandMap = {
               showExpandHint = false
               onExpandMap()
@@ -1153,7 +1073,6 @@ fun RoundRadarMap(
         ) {
           RadarFloatingActionPair(
             radarScale = radarScale,
-            useElevation = isHighTier,
             onExpandMap = {
               showExpandHint = false
               onExpandMap()
@@ -1307,13 +1226,6 @@ fun RoundRadarMap(
           Box(
             modifier = Modifier
               .size(8.dp)
-              .let { mod ->
-                if (isHighTier && isBroadcasting) {
-                  mod.graphicsLayer { alpha = liveDotAlphaState.value }
-                } else {
-                  mod
-                }
-              }
               .clip(CircleShape)
               .background(
                 if (isBroadcasting) primaryColor else MaterialTheme.colorScheme.outline,
@@ -1341,7 +1253,6 @@ fun RoundRadarMap(
 @Composable
 private fun RadarFloatingActionPair(
   radarScale: RadarScaleLevel,
-  useElevation: Boolean,
   onExpandMap: () -> Unit,
   onCycleScale: () -> Unit,
   modifier: Modifier = Modifier,
@@ -1351,12 +1262,12 @@ private fun RadarFloatingActionPair(
     verticalAlignment = Alignment.CenterVertically,
     modifier = modifier,
   ) {
-    ExpandMapActionPill(useElevation = useElevation, onClick = onExpandMap)
+    ExpandMapActionPill(onClick = onExpandMap)
 
     Surface(
       shape = CircleShape,
       color = MaterialTheme.colorScheme.secondaryContainer,
-      shadowElevation = if (useElevation) 8.dp else 0.dp,
+      shadowElevation = 0.dp,
       modifier = Modifier
         .minimumInteractiveComponentSize()
         .clip(CircleShape)
@@ -1387,14 +1298,13 @@ private fun RadarFloatingActionPair(
 
 @Composable
 private fun ExpandMapActionPill(
-  useElevation: Boolean,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   Surface(
     shape = CircleShape,
     color = MaterialTheme.colorScheme.primary,
-    shadowElevation = if (useElevation) 8.dp else 0.dp,
+    shadowElevation = 0.dp,
     modifier = modifier
       .minimumInteractiveComponentSize()
       .clip(CircleShape)

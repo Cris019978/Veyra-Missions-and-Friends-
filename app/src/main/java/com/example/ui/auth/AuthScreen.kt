@@ -1,26 +1,34 @@
 package com.example.ui.auth
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,8 +41,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -73,13 +79,13 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusEvent
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -105,7 +111,6 @@ import com.example.data.local.SecretCodeSection
 import com.example.ui.components.ConfettiCelebrationOverlay
 import com.example.ui.components.RoleTitleBadge
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 private val DarkObsidian = Color(0xFF0B0E14)
 private val DarkCardSurface = Color(0xFF141923)
@@ -120,7 +125,6 @@ private val VeyraErrorText = Color(0xFFFFB4AB)
 
 private val TriforceGold = Color(0xFFFBBF24)
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun AuthScreen(
   onLogin: (username: String, pin: String) -> LocalAuthResult,
@@ -128,14 +132,17 @@ fun AuthScreen(
   onAuthenticated: () -> Unit = {},
   onRegistrationCelebration: (message: String, roleTitle: String) -> Unit = { _, _ -> },
   renderCelebrationOverlay: Boolean = true,
+  savedUsernames: List<String> = emptyList(),
+  animationTier: String = "high",
   nowMillisProvider: () -> Long = { System.currentTimeMillis() },
 ) {
   // Block system Back button while unauthenticated on the Auth screen
   BackHandler(enabled = true) {}
 
+  val isLowTier = animationTier == "low"
   val scrollState = rememberScrollState()
-  val focusScope = rememberCoroutineScope()
-  val formBringIntoViewRequester = remember { BringIntoViewRequester() }
+  val pinFocusRequester = remember { FocusRequester() }
+  val inviteFocusRequester = remember { FocusRequester() }
 
   var isRegisterMode by rememberSaveable { mutableStateOf(false) }
   var username by rememberSaveable { mutableStateOf("") }
@@ -233,6 +240,24 @@ fun AuthScreen(
     unfocusedPlaceholderColor = VeyraTextSecondary.copy(alpha = 0.6f),
     cursorColor = VeyraTeal,
   )
+  val bgBrush = remember {
+    Brush.radialGradient(
+      colors = listOf(
+        VeyraTeal.copy(alpha = 0.14f),
+        DarkObsidian,
+        Color(0xFF07090D),
+      ),
+      radius = 950f,
+    )
+  }
+  val heroScrimBrush = remember {
+    Brush.verticalGradient(
+      listOf(
+        DarkObsidian.copy(alpha = 0.2f),
+        DarkObsidian.copy(alpha = 0.92f),
+      ),
+    )
+  }
 
   Scaffold(
     containerColor = DarkObsidian,
@@ -241,40 +266,27 @@ fun AuthScreen(
     Box(
       modifier = Modifier
         .fillMaxSize()
-        .background(
-          Brush.radialGradient(
-            colors = listOf(
-              VeyraTeal.copy(alpha = 0.16f),
-              DarkObsidian,
-              Color(0xFF07090D),
-            ),
-            radius = 950f,
-          )
-        )
+        .background(bgBrush)
         .statusBarsPadding()
         .navigationBarsPadding()
         .imePadding(),
     ) {
-      BoxWithConstraints(
-        modifier = Modifier.fillMaxSize(),
+      Column(
+        modifier = Modifier
+          .fillMaxSize()
+          .verticalScroll(scrollState)
+          .testTag("auth_scrollable_container")
+          .padding(horizontal = 22.dp, vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(18.dp, Alignment.CenterVertically),
       ) {
-        val viewportHeight = maxHeight
         Column(
           modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(scrollState)
-            .testTag("auth_scrollable_container")
-            .padding(horizontal = 22.dp, vertical = 20.dp),
+            .widthIn(max = 460.dp)
+            .fillMaxWidth(),
           horizontalAlignment = Alignment.CenterHorizontally,
+          verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-          Column(
-            modifier = Modifier
-              .widthIn(max = 460.dp)
-              .fillMaxWidth()
-              .defaultMinSize(minHeight = (viewportHeight - 40.dp).coerceAtLeast(0.dp)),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterVertically),
-          ) {
         // Minimalist Dark Header Banner
         Surface(
           color = DarkCardSurface,
@@ -282,7 +294,7 @@ fun AuthScreen(
           border = BorderStroke(1.dp, DarkCardBorder),
           modifier = Modifier
             .fillMaxWidth()
-            .height(172.dp),
+            .height(158.dp),
         ) {
           Box(modifier = Modifier.fillMaxSize()) {
             Image(
@@ -295,14 +307,7 @@ fun AuthScreen(
             Box(
               modifier = Modifier
                 .fillMaxSize()
-                .background(
-                  Brush.verticalGradient(
-                    listOf(
-                      DarkObsidian.copy(alpha = 0.2f),
-                      DarkObsidian.copy(alpha = 0.92f),
-                    )
-                  )
-                )
+                .background(heroScrimBrush),
             )
             Column(
               modifier = Modifier
@@ -351,12 +356,23 @@ fun AuthScreen(
           border = BorderStroke(1.dp, DarkCardBorder),
           modifier = Modifier
             .fillMaxWidth()
-            .bringIntoViewRequester(formBringIntoViewRequester)
+            .let { mod ->
+              if (isLowTier) {
+                mod
+              } else {
+                mod.animateContentSize(
+                  animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow,
+                  ),
+                )
+              }
+            }
             .testTag("veyra_auth_card"),
         ) {
           Column(
             modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
           ) {
             // Segmented Toggle: Iniciar Sesión vs Crear Cuenta
             Surface(
@@ -374,6 +390,7 @@ fun AuthScreen(
                 AuthModePill(
                   label = stringResource(id = R.string.auth_mode_login),
                   selected = !isRegisterMode,
+                  animateColors = !isLowTier,
                   onClick = {
                     isRegisterMode = false
                     triforceTapCount = 0
@@ -388,6 +405,7 @@ fun AuthScreen(
                 AuthModePill(
                   label = stringResource(id = R.string.auth_mode_register),
                   selected = isRegisterMode,
+                  animateColors = !isLowTier,
                   onClick = {
                     isRegisterMode = true
                     errorMessage = null
@@ -404,45 +422,106 @@ fun AuthScreen(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-              Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-              ) {
-                Text(
-                  text = if (isRegisterMode) "Crea tu acceso rápido" else "Entra a tu radar",
-                  style = MaterialTheme.typography.titleLarge,
-                  fontWeight = FontWeight.Bold,
-                  color = VeyraTextPrimary,
-                )
-                Text(
-                  text = if (isRegisterMode) {
-                    "Solo elige tu @usuario único y un PIN corto (mín. 4 caracteres)."
+              AnimatedContent(
+                targetState = isRegisterMode,
+                transitionSpec = {
+                  if (isLowTier) {
+                    androidx.compose.animation.EnterTransition.None togetherWith androidx.compose.animation.ExitTransition.None
                   } else {
-                    "Ingresa tu @usuario y tu PIN guardado en este dispositivo."
-                  },
-                  style = MaterialTheme.typography.bodySmall,
-                  color = VeyraTextSecondary,
-                )
+                    (fadeIn(tween(150)) + slideInVertically(tween(160)) { it / 6 }) togetherWith
+                      fadeOut(tween(100))
+                  }
+                },
+                label = "authModeHeader",
+                modifier = Modifier.weight(1f),
+              ) { register ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                  Text(
+                    text = if (register) "Crea tu acceso rápido" else "Entra a tu radar",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = VeyraTextPrimary,
+                  )
+                  Text(
+                    text = if (register) {
+                      "Elige tu @usuario único y un PIN corto (mín. 4 caracteres)."
+                    } else {
+                      "Ingresa tu @usuario y tu PIN guardado en este dispositivo."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = VeyraTextSecondary,
+                  )
+                }
               }
 
               if (isRegisterMode) {
                 TriforceEasterEggButton(
                   tapCount = triforceTapCount,
+                  animateAlpha = !isLowTier,
                   onClick = { onTriforceTap() },
                 )
               }
             }
 
-            // Field 1: Unique Username
+            // Acceso en 1 toque para cuentas guardadas localmente (solo en Iniciar Sesión)
+            AnimatedVisibility(
+              visible = !isRegisterMode && savedUsernames.isNotEmpty(),
+              enter = fadeIn(tween(if (isLowTier) 0 else 140)) + expandVertically(tween(if (isLowTier) 0 else 160)),
+              exit = fadeOut(tween(if (isLowTier) 0 else 100)) + shrinkVertically(tween(if (isLowTier) 0 else 130)),
+            ) {
+              Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                  text = "Cuentas en este dispositivo (toca para rellenar):",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = VeyraTextSecondary,
+                )
+                Row(
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                ) {
+                  savedUsernames.forEach { saved ->
+                    val isCurrent = LocalAuthManager.normalizeUsername(username) == saved
+                    Surface(
+                      color = if (isCurrent) VeyraTeal.copy(alpha = 0.18f) else DarkInputFill,
+                      shape = CircleShape,
+                      border = BorderStroke(
+                        width = 1.dp,
+                        color = if (isCurrent) VeyraTeal else DarkCardBorder,
+                      ),
+                      modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable {
+                          username = "@$saved"
+                          errorMessage = null
+                          pinFocusRequester.requestFocus()
+                        }
+                        .testTag("auth_saved_user_chip_$saved"),
+                    ) {
+                      Text(
+                        text = "@$saved",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                        color = if (isCurrent) VeyraTeal else VeyraTextPrimary,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                      )
+                    }
+                  }
+                }
+              }
+            }
+
+            // Field 1: Unique Username (sin mutación de mayúsculas ni Regex en cada tecla)
             OutlinedTextField(
               value = username,
               onValueChange = { input ->
-                val sanitized = input
-                  .lowercase()
-                  .replace(" ", "")
-                  .replace(Regex("[^a-z0-9_@]"), "")
-                  .take(25)
-                username = sanitized
+                val cleaned = if (input.any { it.isWhitespace() }) {
+                  input.filterNot { it.isWhitespace() }
+                } else {
+                  input
+                }
+                username = cleaned.take(25)
                 if (errorMessage != null) errorMessage = null
               },
               label = { Text(stringResource(id = R.string.auth_username_label)) },
@@ -450,23 +529,37 @@ fun AuthScreen(
               leadingIcon = {
                 Icon(Icons.Rounded.AlternateEmail, contentDescription = null)
               },
+              trailingIcon = if (username.isNotEmpty()) {
+                {
+                  IconButton(
+                    onClick = {
+                      username = ""
+                      errorMessage = null
+                    },
+                    modifier = Modifier.testTag("auth_clear_username_button"),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Rounded.Close,
+                      contentDescription = "Limpiar usuario",
+                    )
+                  }
+                }
+              } else {
+                null
+              },
               singleLine = true,
               colors = textFieldColors,
               shape = RoundedCornerShape(16.dp),
               keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Ascii,
+                autoCorrectEnabled = false,
                 imeAction = ImeAction.Next,
+              ),
+              keyboardActions = KeyboardActions(
+                onNext = { pinFocusRequester.requestFocus() },
               ),
               modifier = Modifier
                 .fillMaxWidth()
-                .onFocusEvent { state ->
-                  if (state.isFocused) {
-                    focusScope.launch {
-                      delay(150L)
-                      formBringIntoViewRequester.bringIntoView()
-                    }
-                  }
-                }
                 .testTag("auth_username_input"),
             )
 
@@ -499,26 +592,31 @@ fun AuthScreen(
               shape = RoundedCornerShape(16.dp),
               keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Password,
+                autoCorrectEnabled = false,
                 imeAction = if (isRegisterMode && showInviteField) ImeAction.Next else ImeAction.Done,
               ),
               keyboardActions = KeyboardActions(
+                onNext = {
+                  if (isRegisterMode && showInviteField) {
+                    inviteFocusRequester.requestFocus()
+                  } else {
+                    submitAuth()
+                  }
+                },
                 onDone = { submitAuth() },
               ),
               modifier = Modifier
                 .fillMaxWidth()
-                .onFocusEvent { state ->
-                  if (state.isFocused) {
-                    focusScope.launch {
-                      delay(150L)
-                      formBringIntoViewRequester.bringIntoView()
-                    }
-                  }
-                }
+                .focusRequester(pinFocusRequester)
                 .testTag("auth_pin_input"),
             )
 
             // Optional expandable invite/special code inside Create Account mode
-            AnimatedVisibility(visible = isRegisterMode) {
+            AnimatedVisibility(
+              visible = isRegisterMode,
+              enter = fadeIn(tween(if (isLowTier) 0 else 150)) + expandVertically(tween(if (isLowTier) 0 else 170)),
+              exit = fadeOut(tween(if (isLowTier) 0 else 110)) + shrinkVertically(tween(if (isLowTier) 0 else 140)),
+            ) {
               Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(
                   onClick = { showInviteField = !showInviteField },
@@ -544,7 +642,11 @@ fun AuthScreen(
                   )
                 }
 
-                AnimatedVisibility(visible = showInviteField) {
+                AnimatedVisibility(
+                  visible = showInviteField,
+                  enter = fadeIn(tween(if (isLowTier) 0 else 150)) + expandVertically(tween(if (isLowTier) 0 else 170)),
+                  exit = fadeOut(tween(if (isLowTier) 0 else 110)) + shrinkVertically(tween(if (isLowTier) 0 else 140)),
+                ) {
                   OutlinedTextField(
                     value = inviteCode,
                     onValueChange = { inviteCode = it.uppercase().take(24) },
@@ -557,6 +659,7 @@ fun AuthScreen(
                     colors = textFieldColors,
                     shape = RoundedCornerShape(16.dp),
                     keyboardOptions = KeyboardOptions(
+                      autoCorrectEnabled = false,
                       imeAction = ImeAction.Done,
                     ),
                     keyboardActions = KeyboardActions(
@@ -564,21 +667,23 @@ fun AuthScreen(
                     ),
                     modifier = Modifier
                       .fillMaxWidth()
-                      .onFocusEvent { state ->
-                        if (state.isFocused) {
-                          focusScope.launch {
-                            delay(150L)
-                            formBringIntoViewRequester.bringIntoView()
-                          }
-                        }
-                      }
+                      .focusRequester(inviteFocusRequester)
                       .testTag("auth_invite_code_input"),
                   )
                 }
               }
             }
 
-            if (!errorMessage.isNullOrBlank()) {
+            AnimatedVisibility(
+              visible = !errorMessage.isNullOrBlank(),
+              enter = fadeIn(tween(if (isLowTier) 0 else 140)) + expandVertically(tween(if (isLowTier) 0 else 160)),
+              exit = fadeOut(tween(if (isLowTier) 0 else 100)) + shrinkVertically(tween(if (isLowTier) 0 else 130)),
+            ) {
+              val currentErr = errorMessage.orEmpty()
+              val cleanUser = LocalAuthManager.normalizeUsername(username)
+              val canSwitchToRegister = !isRegisterMode && cleanUser.length >= 3 && currentErr.contains("No existe")
+              val canSwitchToLogin = isRegisterMode && cleanUser.length >= 3 && currentErr.contains("ya existe")
+
               Surface(
                 color = VeyraErrorBg,
                 shape = RoundedCornerShape(14.dp),
@@ -587,12 +692,42 @@ fun AuthScreen(
                   .fillMaxWidth()
                   .testTag("veyra_auth_error_banner"),
               ) {
-                Text(
-                  text = errorMessage.orEmpty(),
-                  style = MaterialTheme.typography.bodySmall,
-                  color = VeyraErrorText,
+                Column(
                   modifier = Modifier.padding(12.dp),
-                )
+                  verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                  Text(
+                    text = currentErr,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = VeyraErrorText,
+                  )
+                  if (canSwitchToRegister || canSwitchToLogin) {
+                    Surface(
+                      color = VeyraTeal.copy(alpha = 0.18f),
+                      shape = RoundedCornerShape(10.dp),
+                      border = BorderStroke(1.dp, VeyraTeal.copy(alpha = 0.55f)),
+                      modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable {
+                          isRegisterMode = canSwitchToRegister
+                          errorMessage = null
+                        }
+                        .testTag("auth_error_quick_switch_button"),
+                    ) {
+                      Text(
+                        text = if (canSwitchToRegister) {
+                          "Crear cuenta con @$cleanUser"
+                        } else {
+                          "Iniciar sesión con @$cleanUser"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = VeyraTeal,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                      )
+                    }
+                  }
+                }
               }
             }
 
@@ -608,26 +743,42 @@ fun AuthScreen(
                 .height(54.dp)
                 .testTag("veyra_submit_auth_button"),
             ) {
-              Icon(
-                imageVector = if (isRegisterMode) Icons.Rounded.PersonAdd else Icons.AutoMirrored.Rounded.Login,
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-              )
-              Spacer(modifier = Modifier.width(8.dp))
-              Text(
-                text = if (isRegisterMode) {
-                  stringResource(id = R.string.auth_create_account_cta)
-                } else {
-                  stringResource(id = R.string.auth_submit_veyra)
+              AnimatedContent(
+                targetState = isRegisterMode,
+                transitionSpec = {
+                  if (isLowTier) {
+                    androidx.compose.animation.EnterTransition.None togetherWith androidx.compose.animation.ExitTransition.None
+                  } else {
+                    fadeIn(tween(140)) togetherWith fadeOut(tween(100))
+                  }
                 },
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-              )
+                label = "authSubmitCta",
+              ) { register ->
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.Center,
+                ) {
+                  Icon(
+                    imageVector = if (register) Icons.Rounded.PersonAdd else Icons.AutoMirrored.Rounded.Login,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                  )
+                  Spacer(modifier = Modifier.width(8.dp))
+                  Text(
+                    text = if (register) {
+                      stringResource(id = R.string.auth_create_account_cta)
+                    } else {
+                      stringResource(id = R.string.auth_submit_veyra)
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                  )
+                }
+              }
             }
           }
         }
         }
-      }
       }
 
       if (renderCelebrationOverlay) {
@@ -636,6 +787,7 @@ fun AuthScreen(
           message = standaloneCelebrationMsg,
           roleTitle = standaloneCelebrationTitle,
           onDismiss = { standaloneCelebrationMsg = null },
+          animationTier = animationTier,
         )
       }
     }
@@ -658,9 +810,19 @@ fun AuthScreen(
 @Composable
 private fun TriforceEasterEggButton(
   tapCount: Int,
+  animateAlpha: Boolean,
   onClick: () -> Unit,
 ) {
-  val alphaBoost = (0.48f + tapCount * 0.13f).coerceAtMost(1f)
+  val targetAlpha = (0.48f + tapCount * 0.13f).coerceAtMost(1f)
+  val alphaBoost = if (animateAlpha) {
+    animateFloatAsState(targetValue = targetAlpha, animationSpec = tween(120), label = "triforceAlpha").value
+  } else {
+    targetAlpha
+  }
+  val topTriangle = remember { Path() }
+  val bottomLeftTriangle = remember { Path() }
+  val bottomRightTriangle = remember { Path() }
+
   Box(
     modifier = Modifier
       .minimumInteractiveComponentSize()
@@ -680,24 +842,24 @@ private fun TriforceEasterEggButton(
       val h = size.height
       val goldColor = TriforceGold.copy(alpha = alphaBoost)
 
-      val topTriangle = Path().apply {
-        moveTo(w * 0.5f, 0f)
-        lineTo(w * 0.25f, h * 0.5f)
-        lineTo(w * 0.75f, h * 0.5f)
-        close()
-      }
-      val bottomLeftTriangle = Path().apply {
-        moveTo(w * 0.25f, h * 0.5f)
-        lineTo(0f, h)
-        lineTo(w * 0.5f, h)
-        close()
-      }
-      val bottomRightTriangle = Path().apply {
-        moveTo(w * 0.75f, h * 0.5f)
-        lineTo(w * 0.5f, h)
-        lineTo(w, h)
-        close()
-      }
+      topTriangle.rewind()
+      topTriangle.moveTo(w * 0.5f, 0f)
+      topTriangle.lineTo(w * 0.25f, h * 0.5f)
+      topTriangle.lineTo(w * 0.75f, h * 0.5f)
+      topTriangle.close()
+
+      bottomLeftTriangle.rewind()
+      bottomLeftTriangle.moveTo(w * 0.25f, h * 0.5f)
+      bottomLeftTriangle.lineTo(0f, h)
+      bottomLeftTriangle.lineTo(w * 0.5f, h)
+      bottomLeftTriangle.close()
+
+      bottomRightTriangle.rewind()
+      bottomRightTriangle.moveTo(w * 0.75f, h * 0.5f)
+      bottomRightTriangle.lineTo(w * 0.5f, h)
+      bottomRightTriangle.lineTo(w, h)
+      bottomRightTriangle.close()
+
       drawPath(path = topTriangle, color = goldColor)
       drawPath(path = bottomLeftTriangle, color = goldColor)
       drawPath(path = bottomRightTriangle, color = goldColor)
@@ -862,6 +1024,7 @@ fun RegistrationCelebrationHost(
   roleTitle: String,
   onDismiss: () -> Unit,
   modifier: Modifier = Modifier,
+  animationTier: String = "high",
 ) {
   LaunchedEffect(triggerKey, message) {
     if (triggerKey > 0L && message != null) {
@@ -884,7 +1047,7 @@ fun RegistrationCelebrationHost(
         color = DarkCardSurface.copy(alpha = 0.97f),
         shape = RoundedCornerShape(22.dp),
         border = BorderStroke(1.5.dp, TriforceGold.copy(alpha = 0.72f)),
-        shadowElevation = 14.dp,
+        shadowElevation = 0.dp,
         modifier = Modifier
           .widthIn(max = 460.dp)
           .fillMaxWidth()
@@ -935,6 +1098,7 @@ fun RegistrationCelebrationHost(
 
     ConfettiCelebrationOverlay(
       triggerKey = triggerKey,
+      animationTier = animationTier,
       modifier = Modifier.fillMaxSize(),
     )
   }
@@ -944,12 +1108,26 @@ fun RegistrationCelebrationHost(
 private fun AuthModePill(
   label: String,
   selected: Boolean,
+  animateColors: Boolean,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val targetBg = if (selected) VeyraTeal else Color.Transparent
+  val targetFg = if (selected) VeyraTealContent else VeyraTextSecondary
+  val bgColor = if (animateColors) {
+    animateColorAsState(targetValue = targetBg, animationSpec = tween(160), label = "authPillBg").value
+  } else {
+    targetBg
+  }
+  val fgColor = if (animateColors) {
+    animateColorAsState(targetValue = targetFg, animationSpec = tween(160), label = "authPillFg").value
+  } else {
+    targetFg
+  }
+
   Surface(
-    color = if (selected) VeyraTeal else Color.Transparent,
-    contentColor = if (selected) VeyraTealContent else VeyraTextSecondary,
+    color = bgColor,
+    contentColor = fgColor,
     shape = RoundedCornerShape(12.dp),
     modifier = modifier
       .height(48.dp)
@@ -961,7 +1139,7 @@ private fun AuthModePill(
         text = label,
         style = MaterialTheme.typography.labelLarge,
         fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-        color = if (selected) VeyraTealContent else VeyraTextSecondary,
+        color = fgColor,
       )
     }
   }

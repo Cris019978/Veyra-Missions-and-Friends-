@@ -604,11 +604,11 @@ private fun UnifiedRadarMapLayer(
       zoomAnim.snapTo(targetZoom)
       radiusAnim.snapTo(targetRadius)
     } else if (isHighTier) {
-      val spec = spring<Float>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 420f)
+      val spec = spring<Float>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 360f)
       launch { zoomAnim.animateTo(targetZoom, spec) }
       launch { radiusAnim.animateTo(targetRadius, spec) }
     } else {
-      val spec = tween<Float>(durationMillis = 150, easing = FastOutSlowInEasing)
+      val spec = tween<Float>(durationMillis = 140, easing = FastOutSlowInEasing)
       launch { zoomAnim.animateTo(targetZoom, spec) }
       launch { radiusAnim.animateTo(targetRadius, spec) }
     }
@@ -620,22 +620,12 @@ private fun UnifiedRadarMapLayer(
       pulseAnim.animateTo(
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-          animation = tween(durationMillis = 2200, easing = FastOutSlowInEasing),
+          animation = tween(durationMillis = 2800, easing = FastOutSlowInEasing),
           repeatMode = RepeatMode.Restart,
         ),
       )
     } else {
       pulseAnim.snapTo(0f)
-    }
-  }
-
-  val scale100Flash = remember { Animatable(0f) }
-  LaunchedEffect(uiState.activeScale, isHighTier) {
-    if (isHighTier && uiState.activeScale == MapViewScale.SCALE_100) {
-      scale100Flash.snapTo(1f)
-      scale100Flash.animateTo(0f, tween(durationMillis = 550))
-    } else {
-      scale100Flash.snapTo(0f)
     }
   }
 
@@ -712,13 +702,7 @@ private fun UnifiedRadarMapLayer(
 
   Card(
     colors = CardDefaults.cardColors(containerColor = surfaceMapBg),
-    elevation = CardDefaults.cardElevation(
-      defaultElevation = when {
-        isLowTier -> 0.dp
-        isHighTier -> if (borderTier == 2) 10.dp else 5.dp
-        else -> 2.dp
-      },
-    ),
+    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     border = BorderStroke(width = if (borderTier == 2) 2.2.dp else 1.4.dp, color = borderColor),
     shape = RoundedCornerShape(26.dp),
     modifier = modifier.testTag("map_layer_card"),
@@ -750,7 +734,6 @@ private fun UnifiedRadarMapLayer(
         val zoomNow = zoomAnim.value
         val radiusMetersNow = radiusAnim.value
         val pulseNow = pulseAnim.value
-        val flashNow = scale100Flash.value
 
         val center = Offset(size.width / 2f, size.height / 2f)
         val halfMin = size.minDimension / 2f
@@ -775,9 +758,8 @@ private fun UnifiedRadarMapLayer(
         val landmarkStrokePx = 1.2.dp.toPx()
         val landmarkTextSizePx = 9.sp.toPx()
         val landmarkTextYOffsetPx = 3.dp.toPx()
-        val pulseStrokePx = 2.dp.toPx()
+        val pulseStrokePx = 1.8.dp.toPx()
         val dashRangeStrokePx = 2.2.dp.toPx()
-        val flashStrokePx = 6.dp.toPx()
         val routeStrokePx = 1.6.dp.toPx()
         val hardMissionRadiusPx = 11.dp.toPx()
         val activeMissionRadiusPx = 9.5.dp.toPx()
@@ -898,7 +880,7 @@ private fun UnifiedRadarMapLayer(
           }
         }
 
-        // 3. Radio de Vista dinámico + pulso suave + flash de Vista 100
+        // 3. Radio de Vista dinámico + pulso suave
         drawCircle(
           color = primaryColor.copy(alpha = 0.08f),
           radius = radiusPx,
@@ -906,7 +888,7 @@ private fun UnifiedRadarMapLayer(
         )
         if (isHighTier && pulseNow > 0f) {
           drawCircle(
-            color = primaryColor.copy(alpha = (1f - pulseNow) * 0.34f),
+            color = primaryColor.copy(alpha = (1f - pulseNow) * 0.24f),
             radius = radiusPx * (0.28f + 0.72f * pulseNow),
             center = center,
             style = Stroke(width = pulseStrokePx),
@@ -921,15 +903,6 @@ private fun UnifiedRadarMapLayer(
             pathEffect = viewRangeDashEffect,
           ),
         )
-
-        if (flashNow > 0.01f) {
-          drawCircle(
-            color = secondaryColor.copy(alpha = flashNow * 0.30f),
-            radius = radiusPx * (1.0f + (1f - flashNow) * 0.16f),
-            center = center,
-            style = Stroke(width = flashStrokePx),
-          )
-        }
 
         // 4. Puntos/Misiones con revelado progresivo
         preparedMissions.forEach { prep ->

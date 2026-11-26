@@ -200,7 +200,7 @@ fun ProfileScreen(
             Surface(
               shape = MaterialTheme.shapes.extraLarge,
               tonalElevation = 4.dp,
-              shadowElevation = 6.dp,
+              shadowElevation = 0.dp,
               modifier = Modifier
                 .fillMaxWidth()
                 .height(176.dp)
@@ -328,7 +328,7 @@ fun ProfileScreen(
               Surface(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 8.dp,
+                shadowElevation = 0.dp,
                 modifier = Modifier
                   .fillMaxSize()
                   .border(4.dp, MaterialTheme.colorScheme.surface, CircleShape)
@@ -371,7 +371,7 @@ fun ProfileScreen(
               Surface(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.primary,
-                shadowElevation = 4.dp,
+                shadowElevation = 0.dp,
                 modifier = Modifier
                   .align(Alignment.BottomEnd)
                   .size(34.dp)

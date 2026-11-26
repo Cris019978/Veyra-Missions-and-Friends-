@@ -120,8 +120,8 @@ fun FloatingBottomNavBar(
     Surface(
       shape = RoundedCornerShape(34.dp),
       color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f),
-      tonalElevation = if (isLowTier) 0.dp else if (isHighTier) 8.dp else 2.dp,
-      shadowElevation = if (isHighTier) 12.dp else if (isLowTier) 0.dp else 2.dp,
+      tonalElevation = if (isLowTier) 0.dp else if (isHighTier) 4.dp else 2.dp,
+      shadowElevation = 0.dp,
       modifier = Modifier
         .widthIn(max = 560.dp)
         .fillMaxWidth()
@@ -146,12 +146,12 @@ fun FloatingBottomNavBar(
             isLowTier -> if (selected) activeBg else Color.Transparent
             isHighTier -> animateColorAsState(
               targetValue = if (selected) activeBg else Color.Transparent,
-              animationSpec = spring(stiffness = 480f),
+              animationSpec = spring(stiffness = 380f),
               label = "navPill_${item.index}",
             ).value
             else -> animateColorAsState(
               targetValue = if (selected) activeBg else Color.Transparent,
-              animationSpec = androidx.compose.animation.core.tween(durationMillis = 120),
+              animationSpec = androidx.compose.animation.core.tween(durationMillis = 110),
               label = "navPillMed_${item.index}",
             ).value
           }

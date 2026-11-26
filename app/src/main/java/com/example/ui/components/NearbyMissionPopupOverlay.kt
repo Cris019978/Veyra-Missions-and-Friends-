@@ -143,7 +143,7 @@ private fun SwipeableNearbyPopupCard(
         colors = CardDefaults.cardColors(
           containerColor = MaterialTheme.colorScheme.inverseSurface,
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         shape = MaterialTheme.shapes.large,
         modifier = Modifier.fillMaxWidth(),
       ) {

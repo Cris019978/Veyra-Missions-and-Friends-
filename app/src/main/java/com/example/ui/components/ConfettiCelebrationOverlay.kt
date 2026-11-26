@@ -66,19 +66,19 @@ fun ConfettiCelebrationOverlay(
 ) {
   val isLowTier = disableAnimations || animationTier == "low"
   val isMediumTier = !isLowTier && animationTier == "medium"
-  val particleCount = when {
-    isLowTier -> 18
-    isMediumTier -> 28
-    else -> 68
-  }
-  val animDurationMs = if (isMediumTier) 1250 else 2100
+  val animDurationMs = if (isMediumTier) 1100 else 1700
 
   var activeBurstKey by remember { mutableStateOf<Long?>(null) }
   val progress = remember { Animatable(0f) }
 
-  val particles = remember(activeBurstKey, particleCount) {
+  val particles = remember(activeBurstKey, animationTier) {
     val seed = activeBurstKey ?: return@remember emptyList()
     val rng = Random(seed * 31L + 7919L)
+    val particleCount = when {
+      isLowTier -> 14
+      isMediumTier -> rng.nextInt(18, 27)
+      else -> rng.nextInt(34, 49)
+    }
     List(particleCount) { idx ->
       // Mix of top-center fountain and mid-screen celebratory pop
       val isTopBurst = idx % 3 != 0

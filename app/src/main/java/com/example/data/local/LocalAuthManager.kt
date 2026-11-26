@@ -46,6 +46,11 @@ class LocalAuthManager(context: Context) {
   private val _sessionFlow = MutableStateFlow(readActiveSession())
   val sessionFlow: StateFlow<LocalAuthSession?> = _sessionFlow.asStateFlow()
 
+  private val _savedUsernamesFlow = MutableStateFlow(readSavedUsernames())
+  val savedUsernamesFlow: StateFlow<List<String>> = _savedUsernamesFlow.asStateFlow()
+
+  fun getSavedUsernames(): List<String> = _savedUsernamesFlow.value
+
   fun isLoggedIn(): Boolean = prefs.getBoolean(KEY_IS_LOGGED_IN, false) &&
     prefs.getString(KEY_ACTIVE_USERNAME, "").orEmpty().isNotBlank()
 
@@ -83,12 +88,14 @@ class LocalAuthManager(context: Context) {
     val initialXp = 0L
     val initialLevel = 1L
 
+    val updatedUsernames = buildUpdatedSavedUsernames(username)
     prefs.edit()
       .putString(userPinHashKey(username), pinHash)
       .putString(userRoleKey(username), role)
       .putString(userTitleKey(username), roleTitle)
       .putLong(userXpKey(username), initialXp)
       .putLong(userLevelKey(username), initialLevel)
+      .putString(KEY_SAVED_USERNAMES, updatedUsernames.joinToString(","))
       .putBoolean(KEY_IS_LOGGED_IN, true)
       .putString(KEY_ACTIVE_USERNAME, username)
       .putString(KEY_ACTIVE_PIN_HASH, pinHash)
@@ -96,7 +103,7 @@ class LocalAuthManager(context: Context) {
       .putString(KEY_ACTIVE_ROLE_TITLE, roleTitle)
       .putLong(KEY_ACTIVE_XP, initialXp)
       .putLong(KEY_ACTIVE_LEVEL, initialLevel)
-      .commit()
+      .apply()
 
     val session = LocalAuthSession(
       isLoggedIn = true,
@@ -107,6 +114,7 @@ class LocalAuthManager(context: Context) {
       xp = initialXp,
       level = initialLevel,
     )
+    _savedUsernamesFlow.value = updatedUsernames
     _sessionFlow.value = session
     return LocalAuthResult.Success(session)
   }
@@ -154,7 +162,9 @@ class LocalAuthManager(context: Context) {
     val xp = prefs.getLong(userXpKey(username), 0L)
     val level = prefs.getLong(userLevelKey(username), 1L)
 
+    val updatedUsernames = buildUpdatedSavedUsernames(username)
     prefs.edit()
+      .putString(KEY_SAVED_USERNAMES, updatedUsernames.joinToString(","))
       .putBoolean(KEY_IS_LOGGED_IN, true)
       .putString(KEY_ACTIVE_USERNAME, username)
       .putString(KEY_ACTIVE_PIN_HASH, storedHash)
@@ -162,7 +172,7 @@ class LocalAuthManager(context: Context) {
       .putString(KEY_ACTIVE_ROLE_TITLE, roleTitle)
       .putLong(KEY_ACTIVE_XP, xp)
       .putLong(KEY_ACTIVE_LEVEL, level)
-      .commit()
+      .apply()
 
     val session = LocalAuthSession(
       isLoggedIn = true,
@@ -173,6 +183,7 @@ class LocalAuthManager(context: Context) {
       xp = xp,
       level = level,
     )
+    _savedUsernamesFlow.value = updatedUsernames
     _sessionFlow.value = session
     return LocalAuthResult.Success(session)
   }
@@ -212,13 +223,37 @@ class LocalAuthManager(context: Context) {
       .remove(KEY_ACTIVE_ROLE_TITLE)
       .remove(KEY_ACTIVE_XP)
       .remove(KEY_ACTIVE_LEVEL)
-      .commit()
+      .apply()
     _sessionFlow.value = null
   }
 
   fun clearAllAccountsForTest() {
     prefs.edit().clear().commit()
+    _savedUsernamesFlow.value = emptyList()
     _sessionFlow.value = null
+  }
+
+  private fun readSavedUsernames(): List<String> {
+    val csv = prefs.getString(KEY_SAVED_USERNAMES, "").orEmpty()
+    val fromCsv = csv.split(",")
+      .map { it.trim() }
+      .filter { it.isNotBlank() && !prefs.getString(userPinHashKey(it), null).isNullOrBlank() }
+    if (fromCsv.isNotEmpty()) return fromCsv.distinct().take(4)
+
+    return prefs.all.keys
+      .asSequence()
+      .filter { it.startsWith("user_pin_hash_") }
+      .map { it.removePrefix("user_pin_hash_") }
+      .filter { it.isNotBlank() }
+      .distinct()
+      .take(4)
+      .toList()
+  }
+
+  private fun buildUpdatedSavedUsernames(latestUsername: String): List<String> {
+    val clean = normalizeUsername(latestUsername)
+    if (clean.isBlank()) return _savedUsernamesFlow.value
+    return (listOf(clean) + _savedUsernamesFlow.value.filterNot { it == clean }).take(4)
   }
 
   private fun readActiveSession(): LocalAuthSession? {
@@ -241,6 +276,7 @@ class LocalAuthManager(context: Context) {
   companion object {
     private const val PREFS_NAME = "veyra_local_auth_prefs"
     const val KEY_IS_LOGGED_IN = "isLoggedIn"
+    private const val KEY_SAVED_USERNAMES = "saved_usernames_csv"
     private const val KEY_ACTIVE_USERNAME = "active_username"
     private const val KEY_ACTIVE_PIN_HASH = "active_pin_hash"
     private const val KEY_ACTIVE_ROLE = "active_role"

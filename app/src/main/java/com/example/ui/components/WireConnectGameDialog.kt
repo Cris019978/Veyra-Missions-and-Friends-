@@ -250,7 +250,7 @@ fun WireConnectGameDialog(
                   Surface(
                     shape = CircleShape,
                     color = node.color.copy(alpha = if (isConnected || isSelected) 1f else 0.85f),
-                    shadowElevation = if (isSelected) 8.dp else 2.dp,
+                    shadowElevation = 0.dp,
                     modifier = Modifier
                       .size(50.dp)
                       .border(

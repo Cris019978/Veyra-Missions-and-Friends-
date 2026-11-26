@@ -607,7 +607,7 @@ fun ExpandedRadarMapDialog(
                 Surface(
                   shape = CircleShape,
                   color = primaryColor,
-                  shadowElevation = 6.dp,
+                  shadowElevation = 0.dp,
                   modifier = Modifier
                     .size(40.dp)
                     .border(3.dp, MaterialTheme.colorScheme.surface, CircleShape),
@@ -674,7 +674,7 @@ fun ExpandedRadarMapDialog(
                   Surface(
                     shape = CircleShape,
                     color = pinColor,
-                    shadowElevation = if (isAccepted) 8.dp else 5.dp,
+                    shadowElevation = 0.dp,
                     modifier = Modifier
                       .size(if (isAccepted) 40.dp else 34.dp)
                       .border(if (isAccepted) 3.dp else 2.dp, Color.White, CircleShape),
@@ -754,7 +754,7 @@ fun ExpandedRadarMapDialog(
                 Surface(
                   shape = CircleShape,
                   color = playerDotColor,
-                  shadowElevation = 5.dp,
+                  shadowElevation = 0.dp,
                   modifier = Modifier
                     .size(32.dp)
                     .border(2.dp, Color.White, CircleShape),
@@ -791,8 +791,8 @@ fun ExpandedRadarMapDialog(
         Surface(
           color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f),
           shape = MaterialTheme.shapes.large,
-          tonalElevation = 6.dp,
-          shadowElevation = 6.dp,
+          tonalElevation = 4.dp,
+          shadowElevation = 0.dp,
           modifier = Modifier
             .align(Alignment.TopCenter)
             .fillMaxWidth()
