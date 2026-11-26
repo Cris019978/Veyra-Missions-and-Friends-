@@ -158,7 +158,9 @@ fun RadarHomeScreen(
   var showCreateMissionDialog by remember { mutableStateOf(false) }
   var localCelebrationTrigger by remember { mutableLongStateOf(0L) }
 
-  val disableDecorAnimations = uiState.settings.animationTier == "low"
+  val animationTier = uiState.settings.animationTier
+  val disableDecorAnimations = animationTier == "low"
+  val isHighTier = animationTier != "low" && animationTier != "medium"
 
   val isModalOpen = selectedMission != null ||
     selectedPlayer != null ||
@@ -769,6 +771,7 @@ fun RadarHomeScreen(
                 isSelected = selectedCategory == "all",
                 isPrivateFavorite = false,
                 disableAnimations = disableDecorAnimations,
+                useLayoutTransition = isHighTier,
                 onClick = { selectedCategory = "all" },
               )
             }
@@ -785,6 +788,7 @@ fun RadarHomeScreen(
                   isSelected = selectedCategory == "for_you",
                   isPrivateFavorite = true,
                   disableAnimations = disableDecorAnimations,
+                  useLayoutTransition = isHighTier,
                   onClick = { selectedCategory = "for_you" },
                 )
               }
@@ -800,6 +804,7 @@ fun RadarHomeScreen(
                 isSelected = selectedCategory == "timed_1min",
                 isPrivateFavorite = false,
                 disableAnimations = disableDecorAnimations,
+                useLayoutTransition = isHighTier,
                 onClick = { selectedCategory = "timed_1min" },
               )
             }
@@ -819,6 +824,7 @@ fun RadarHomeScreen(
                 isSelected = selectedCategory == cat.key,
                 isPrivateFavorite = cat.key in favoriteCategories,
                 disableAnimations = disableDecorAnimations,
+                useLayoutTransition = isHighTier,
                 onClick = { selectedCategory = cat.key },
               )
             }
@@ -893,6 +899,7 @@ fun RadarHomeScreen(
       ConfettiCelebrationOverlay(
         triggerKey = localCelebrationTrigger,
         disableAnimations = disableDecorAnimations,
+        animationTier = animationTier,
       )
     }
   }
@@ -1044,6 +1051,7 @@ private fun MissionCategoryCard(
   isSelected: Boolean,
   isPrivateFavorite: Boolean,
   disableAnimations: Boolean,
+  useLayoutTransition: Boolean = !disableAnimations,
   onClick: () -> Unit,
 ) {
   val bg = if (disableAnimations) {
@@ -1051,6 +1059,7 @@ private fun MissionCategoryCard(
   } else {
     animateColorAsState(
       targetValue = if (isSelected) accentColor else MaterialTheme.colorScheme.surfaceContainerHigh,
+      animationSpec = androidx.compose.animation.core.tween(durationMillis = if (useLayoutTransition) 220 else 110),
       label = "catBg",
     ).value
   }
@@ -1059,6 +1068,7 @@ private fun MissionCategoryCard(
   } else {
     animateColorAsState(
       targetValue = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurface,
+      animationSpec = androidx.compose.animation.core.tween(durationMillis = if (useLayoutTransition) 220 else 110),
       label = "catFg",
     ).value
   }
@@ -1066,9 +1076,9 @@ private fun MissionCategoryCard(
   Surface(
     color = bg,
     shape = RoundedCornerShape(26.dp),
-    tonalElevation = if (isSelected) 4.dp else 1.dp,
+    tonalElevation = if (disableAnimations) 0.dp else if (isSelected) 4.dp else 1.dp,
     modifier = Modifier
-      .let { if (disableAnimations) it else it.animateContentSize() }
+      .let { if (useLayoutTransition) it.animateContentSize() else it }
       .border(
         width = if (!isSelected && isPrivateFavorite) 1.5.dp else 0.dp,
         color = if (!isSelected && isPrivateFavorite) accentColor.copy(alpha = 0.55f) else Color.Transparent,

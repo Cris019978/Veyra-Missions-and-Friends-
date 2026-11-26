@@ -54,9 +54,9 @@ enum class CornerStyleOption(val key: String, val label: String) {
 }
 
 enum class AnimationTierOption(val key: String, val label: String, val desc: String) {
-  LOW("low", "Gama baja", "Desactiva extras; solo radar esencial"),
-  MEDIUM("medium", "Gama media", "Pocas animaciones suaves y ligeras"),
-  HIGH("high", "Gama alta", "Todas las animaciones fluidas");
+  LOW("low", "Gama baja", "Sin transiciones ni sombras; solo barrido esencial"),
+  MEDIUM("medium", "Gama media", "Transiciones rápidas sin sombras ni extras"),
+  HIGH("high", "Gama alta", "Físicas spring, halos, ondas dobles y confeti full");
 
   companion object {
     fun fromKey(key: String): AnimationTierOption = entries.firstOrNull { it.key == key } ?: HIGH

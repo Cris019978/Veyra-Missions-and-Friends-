@@ -529,6 +529,7 @@ fun SocialFeedScreen(
         ConfettiCelebrationOverlay(
           triggerKey = localCelebrationTrigger,
           disableAnimations = uiState.settings.animationTier == "low",
+          animationTier = uiState.settings.animationTier,
         )
       }
     }

@@ -243,7 +243,8 @@ private fun MainAppShell(
       initializer { RouletteStateManager() }
     },
   )
-  val disableAnimations = uiState.settings.animationTier == "low"
+  val animationTier = uiState.settings.animationTier
+  val disableAnimations = animationTier == "low"
   val gestureNavEnabled = uiState.settings.gestureNavEnabled
 
   val anyOverlayModalOpen = radarModalDialogOpen ||
@@ -274,10 +275,13 @@ private fun MainAppShell(
   val selectTab: (Int) -> Unit = { targetPage ->
     showStyleInProfile = false
     scope.launch {
-      if (disableAnimations) {
-        pagerState.scrollToPage(targetPage)
-      } else {
-        pagerState.animateScrollToPage(targetPage)
+      when (animationTier) {
+        "low" -> pagerState.scrollToPage(targetPage)
+        "medium" -> pagerState.animateScrollToPage(
+          page = targetPage,
+          animationSpec = androidx.compose.animation.core.tween(durationMillis = 160),
+        )
+        else -> pagerState.animateScrollToPage(targetPage)
       }
     }
   }
@@ -616,6 +620,7 @@ private fun MainAppShell(
                 FloatingBottomNavBar(
                   selectedTab = pagerState.currentPage,
                   disableAnimations = true,
+                  animationTier = animationTier,
                   onSelectTab = selectTab,
                   modifier = Modifier.align(Alignment.BottomCenter),
                 )
@@ -630,6 +635,7 @@ private fun MainAppShell(
                 FloatingBottomNavBar(
                   selectedTab = pagerState.currentPage,
                   disableAnimations = false,
+                  animationTier = animationTier,
                   onSelectTab = selectTab,
                 )
               }
@@ -638,6 +644,7 @@ private fun MainAppShell(
           ConfettiCelebrationOverlay(
             triggerKey = uiState.celebrationEventId,
             disableAnimations = disableAnimations,
+            animationTier = animationTier,
             modifier = Modifier.fillMaxSize(),
           )
         }
@@ -691,6 +698,7 @@ private fun MainAppShell(
       }
       RouletteTestScreen(
         stateManager = rouletteStateManager,
+        animationTier = animationTier,
         onClose = { showRouletteLab = false },
       )
     }

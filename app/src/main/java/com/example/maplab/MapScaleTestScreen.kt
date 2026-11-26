@@ -3,14 +3,10 @@ package com.example.maplab
 import android.graphics.Paint
 import android.graphics.Typeface
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -80,10 +76,10 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -121,6 +117,7 @@ fun MapScaleTestScreen(
   stateManager: MapScaleStateManager,
   onClose: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
+  animationTier: String = "high",
 ) {
   val uiState by stateManager.uiState.collectAsStateWithLifecycle()
 
@@ -141,6 +138,7 @@ fun MapScaleTestScreen(
     onReset = stateManager::resetAll,
     onClose = onClose,
     modifier = modifier,
+    animationTier = animationTier,
   )
 }
 
@@ -162,7 +160,11 @@ fun MapScaleTestScreenContent(
   onReset: () -> Unit,
   onClose: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
+  animationTier: String = "high",
 ) {
+  val isLowTier = animationTier == "low"
+  val isHighTier = animationTier != "low" && animationTier != "medium"
+
   val missionsInRadiusCount = remember(
     uiState.missions,
     uiState.playerPosition,
@@ -177,32 +179,36 @@ fun MapScaleTestScreenContent(
     }
   }
 
-  // OPT: Mantener animatedRevealState como State<Float> + lambda lectora para evitar recomponer toda la pantalla por frame.
-  val animatedRevealState = animateFloatAsState(
-    targetValue = uiState.mapRevealProgress,
-    animationSpec = if (uiState.isSlidingBetween50And75) {
-      tween(durationMillis = 45, easing = LinearEasing)
+  // Camino crítico unificado: durante el arrastre táctil responde 1:1 directo al dedo (snapTo),
+  // y al soltar o pulsar botones desacelera limpio con una sola animación sin cadenas competidoras.
+  val revealAnim = remember { Animatable(uiState.mapRevealProgress) }
+  LaunchedEffect(uiState.mapRevealProgress, uiState.isGestureDragging, animationTier) {
+    val target = uiState.mapRevealProgress
+    if (uiState.isGestureDragging || isLowTier) {
+      revealAnim.snapTo(target)
+    } else if (isHighTier) {
+      revealAnim.animateTo(
+        targetValue = target,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 420f),
+      )
     } else {
-      spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
-    },
-    label = "layerRevealProgress",
-  )
-  val revealProvider: () -> Float = remember(animatedRevealState) { { animatedRevealState.value } }
+      revealAnim.animateTo(
+        targetValue = target,
+        animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing),
+      )
+    }
+  }
+  val revealProvider: () -> Float = remember(revealAnim) { { revealAnim.value } }
 
-  // OPT: derivedStateOf solo dispara cambio de color cuando se cruza el umbral 0.72f hacia Vista 100.
-  val isWideMode by remember(animatedRevealState) {
-    derivedStateOf { animatedRevealState.value > 0.72f }
+  val isWideMode by remember(revealAnim) {
+    derivedStateOf { revealAnim.value > 0.72f }
   }
 
-  val mainChromeBg by animateColorAsState(
-    targetValue = if (isWideMode) {
-      MaterialTheme.colorScheme.surfaceContainerLowest
-    } else {
-      MaterialTheme.colorScheme.background
-    },
-    animationSpec = tween(durationMillis = 240),
-    label = "mainChromeDepth",
-  )
+  val mainChromeBg = if (isWideMode) {
+    MaterialTheme.colorScheme.surfaceContainerLowest
+  } else {
+    MaterialTheme.colorScheme.background
+  }
 
   Surface(
     color = mainChromeBg,
@@ -245,22 +251,6 @@ fun MapScaleTestScreenContent(
           val midStageHeight = 330.dp.coerceAtMost(maxHeight * 0.92f)
           val maxStageHeight = maxHeight
 
-          val rawReveal = uiState.mapRevealProgress
-          val targetHeight = if (rawReveal <= 0.50f) {
-            val t = (rawReveal / 0.50f).coerceIn(0f, 1f)
-            minStageHeight + (midStageHeight - minStageHeight) * t
-          } else {
-            val t = ((rawReveal - 0.50f) / 0.50f).coerceIn(0f, 1f)
-            midStageHeight + (maxStageHeight - midStageHeight) * t
-          }
-
-          // OPT: Leer animatedCardHeightState dentro de Modifier.layout evita recomposiciones de UnifiedRadarMapLayer al escalar.
-          val animatedCardHeightState = animateDpAsState(
-            targetValue = targetHeight,
-            animationSpec = tween(durationMillis = 70, easing = LinearEasing),
-            label = "radarCardHeight",
-          )
-
           // Marco sutil del espacio de exploración para distinguir visualmente la zona del mapa
           Surface(
             shape = RoundedCornerShape(28.dp),
@@ -271,6 +261,7 @@ fun MapScaleTestScreenContent(
 
           UnifiedRadarMapLayer(
             uiState = uiState,
+            animationTier = animationTier,
             revealProvider = revealProvider,
             onDragStarted = onDragStarted,
             onDragDelta = onDragDelta,
@@ -281,7 +272,15 @@ fun MapScaleTestScreenContent(
             modifier = Modifier
               .fillMaxWidth()
               .layout { measurable, constraints ->
-                val targetPx = animatedCardHeightState.value.roundToPx().coerceIn(0, constraints.maxHeight)
+                val revealNow = revealProvider()
+                val heightDp = if (revealNow <= 0.50f) {
+                  val t = (revealNow / 0.50f).coerceIn(0f, 1f)
+                  minStageHeight + (midStageHeight - minStageHeight) * t
+                } else {
+                  val t = ((revealNow - 0.50f) / 0.50f).coerceIn(0f, 1f)
+                  midStageHeight + (maxStageHeight - midStageHeight) * t
+                }
+                val targetPx = heightDp.roundToPx().coerceIn(0, constraints.maxHeight)
                 val placeable = measurable.measure(constraints.copy(minHeight = targetPx, maxHeight = targetPx))
                 layout(placeable.width, targetPx) {
                   placeable.placeRelative(0, 0)
@@ -293,22 +292,38 @@ fun MapScaleTestScreenContent(
         // =====================================================================
         // PANEL DEBUG DISCRETO (Desplegable sin estorbar la exploración)
         // =====================================================================
-        androidx.compose.animation.AnimatedVisibility(
-          visible = uiState.debugPanelExpanded,
-          enter = fadeIn(tween(180)) + expandVertically(tween(220)),
-          exit = fadeOut(tween(150)) + shrinkVertically(tween(180)),
-        ) {
-          DiscreetDebugDrawer(
-            uiState = uiState,
-            missionsInRadiusCount = missionsInRadiusCount,
-            onForceScale = onForceScale,
-            onSimulateStep = onSimulateStep,
-            onSpawnNearMission = onSpawnNearMission,
-            onSpawnHardMission = onSpawnHardMission,
-            onShuffleMissions = onShuffleMissions,
-            onReset = onReset,
-            onCloseDebug = onToggleDebugPanel,
-          )
+        if (isLowTier) {
+          if (uiState.debugPanelExpanded) {
+            DiscreetDebugDrawer(
+              uiState = uiState,
+              missionsInRadiusCount = missionsInRadiusCount,
+              onForceScale = onForceScale,
+              onSimulateStep = onSimulateStep,
+              onSpawnNearMission = onSpawnNearMission,
+              onSpawnHardMission = onSpawnHardMission,
+              onShuffleMissions = onShuffleMissions,
+              onReset = onReset,
+              onCloseDebug = onToggleDebugPanel,
+            )
+          }
+        } else {
+          androidx.compose.animation.AnimatedVisibility(
+            visible = uiState.debugPanelExpanded,
+            enter = fadeIn(tween(150)) + expandVertically(tween(180)),
+            exit = fadeOut(tween(120)) + shrinkVertically(tween(150)),
+          ) {
+            DiscreetDebugDrawer(
+              uiState = uiState,
+              missionsInRadiusCount = missionsInRadiusCount,
+              onForceScale = onForceScale,
+              onSimulateStep = onSimulateStep,
+              onSpawnNearMission = onSpawnNearMission,
+              onSpawnHardMission = onSpawnHardMission,
+              onShuffleMissions = onShuffleMissions,
+              onReset = onReset,
+              onCloseDebug = onToggleDebugPanel,
+            )
+          }
         }
 
         // =====================================================================
@@ -561,6 +576,7 @@ private data class PreparedMapLandmark(
 @Composable
 private fun UnifiedRadarMapLayer(
   uiState: MapScaleUiState,
+  animationTier: String,
   revealProvider: () -> Float,
   onDragStarted: () -> Unit,
   onDragDelta: (Float, Float) -> Unit,
@@ -570,47 +586,59 @@ private fun UnifiedRadarMapLayer(
   onRestoreToggleButton: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  // OPT: Guardar animaciones como State<Float> para leerlas exclusivamente dentro de Canvas DrawScope.
-  val animatedZoomState = animateFloatAsState(
-    targetValue = uiState.effectiveZoomFactor,
-    animationSpec = if (uiState.isSlidingBetween50And75) {
-      tween(durationMillis = 45, easing = LinearEasing)
+  val isLowTier = animationTier == "low"
+  val isHighTier = animationTier != "low" && animationTier != "medium"
+
+  // Respuesta inmediata 1:1 en arrastre; una sola transición al soltar o alternar.
+  val zoomAnim = remember { Animatable(uiState.effectiveZoomFactor) }
+  val radiusAnim = remember { Animatable(uiState.effectiveViewRadiusMeters.toFloat()) }
+  LaunchedEffect(
+    uiState.effectiveZoomFactor,
+    uiState.effectiveViewRadiusMeters,
+    uiState.isGestureDragging,
+    animationTier,
+  ) {
+    val targetZoom = uiState.effectiveZoomFactor
+    val targetRadius = uiState.effectiveViewRadiusMeters.toFloat()
+    if (uiState.isGestureDragging || isLowTier) {
+      zoomAnim.snapTo(targetZoom)
+      radiusAnim.snapTo(targetRadius)
+    } else if (isHighTier) {
+      val spec = spring<Float>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 420f)
+      launch { zoomAnim.animateTo(targetZoom, spec) }
+      launch { radiusAnim.animateTo(targetRadius, spec) }
     } else {
-      spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
-    },
-    label = "mapZoomAnim",
-  )
-
-  val animatedRadiusState = animateFloatAsState(
-    targetValue = uiState.effectiveViewRadiusMeters.toFloat(),
-    animationSpec = if (uiState.isSlidingBetween50And75) {
-      tween(durationMillis = 45, easing = LinearEasing)
-    } else {
-      spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
-    },
-    label = "mapRadiusAnim",
-  )
-
-  val pulseAnim = remember { Animatable(0f) }
-  LaunchedEffect(Unit) {
-    pulseAnim.animateTo(
-      targetValue = 1f,
-      animationSpec = infiniteRepeatable(
-        animation = tween(durationMillis = 2200, easing = FastOutSlowInEasing),
-        repeatMode = RepeatMode.Restart,
-      ),
-    )
-  }
-
-  val scale100Flash = remember { Animatable(0f) }
-  LaunchedEffect(uiState.activeScale) {
-    if (uiState.activeScale == MapViewScale.SCALE_100) {
-      scale100Flash.snapTo(1f)
-      scale100Flash.animateTo(0f, tween(durationMillis = 650))
+      val spec = tween<Float>(durationMillis = 150, easing = FastOutSlowInEasing)
+      launch { zoomAnim.animateTo(targetZoom, spec) }
+      launch { radiusAnim.animateTo(targetRadius, spec) }
     }
   }
 
-  // OPT: derivedStateOf para el nivel discreto de borde y porcentaje entero sin recomponer el árbol en cada frame.
+  val pulseAnim = remember { Animatable(0f) }
+  LaunchedEffect(isHighTier) {
+    if (isHighTier) {
+      pulseAnim.animateTo(
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+          animation = tween(durationMillis = 2200, easing = FastOutSlowInEasing),
+          repeatMode = RepeatMode.Restart,
+        ),
+      )
+    } else {
+      pulseAnim.snapTo(0f)
+    }
+  }
+
+  val scale100Flash = remember { Animatable(0f) }
+  LaunchedEffect(uiState.activeScale, isHighTier) {
+    if (isHighTier && uiState.activeScale == MapViewScale.SCALE_100) {
+      scale100Flash.snapTo(1f)
+      scale100Flash.animateTo(0f, tween(durationMillis = 550))
+    } else {
+      scale100Flash.snapTo(0f)
+    }
+  }
+
   val borderTier by remember(revealProvider) {
     derivedStateOf {
       val r = revealProvider()
@@ -625,15 +653,11 @@ private fun UnifiedRadarMapLayer(
     derivedStateOf { (revealProvider() * 100f).toInt() }
   }
 
-  val borderColor by animateColorAsState(
-    targetValue = when (borderTier) {
-      2 -> MaterialTheme.colorScheme.primary
-      1 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
-      else -> MaterialTheme.colorScheme.outlineVariant
-    },
-    animationSpec = tween(durationMillis = 220),
-    label = "mapBorderColor",
-  )
+  val borderColor = when (borderTier) {
+    2 -> MaterialTheme.colorScheme.primary
+    1 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+    else -> MaterialTheme.colorScheme.outlineVariant
+  }
 
   val primaryColor = MaterialTheme.colorScheme.primary
   val secondaryColor = MaterialTheme.colorScheme.secondary
@@ -688,7 +712,13 @@ private fun UnifiedRadarMapLayer(
 
   Card(
     colors = CardDefaults.cardColors(containerColor = surfaceMapBg),
-    elevation = CardDefaults.cardElevation(defaultElevation = if (borderTier == 2) 10.dp else 5.dp),
+    elevation = CardDefaults.cardElevation(
+      defaultElevation = when {
+        isLowTier -> 0.dp
+        isHighTier -> if (borderTier == 2) 10.dp else 5.dp
+        else -> 2.dp
+      },
+    ),
     border = BorderStroke(width = if (borderTier == 2) 2.2.dp else 1.4.dp, color = borderColor),
     shape = RoundedCornerShape(26.dp),
     modifier = modifier.testTag("map_layer_card"),
@@ -716,10 +746,9 @@ private fun UnifiedRadarMapLayer(
           .fillMaxSize()
           .testTag("map_lab_canvas"),
       ) {
-        // OPT: Lectura diferida de estados animados exclusivamente en fase de dibujo.
         val revealNow = revealProvider()
-        val zoomNow = animatedZoomState.value
-        val radiusMetersNow = animatedRadiusState.value
+        val zoomNow = zoomAnim.value
+        val radiusMetersNow = radiusAnim.value
         val pulseNow = pulseAnim.value
         val flashNow = scale100Flash.value
 
@@ -875,12 +904,14 @@ private fun UnifiedRadarMapLayer(
           radius = radiusPx,
           center = center,
         )
-        drawCircle(
-          color = primaryColor.copy(alpha = (1f - pulseNow) * 0.34f),
-          radius = radiusPx * (0.28f + 0.72f * pulseNow),
-          center = center,
-          style = Stroke(width = pulseStrokePx),
-        )
+        if (isHighTier && pulseNow > 0f) {
+          drawCircle(
+            color = primaryColor.copy(alpha = (1f - pulseNow) * 0.34f),
+            radius = radiusPx * (0.28f + 0.72f * pulseNow),
+            center = center,
+            style = Stroke(width = pulseStrokePx),
+          )
+        }
         drawCircle(
           color = primaryColor.copy(alpha = 0.85f),
           radius = radiusPx,
@@ -1111,14 +1142,7 @@ private fun UnifiedRadarMapLayer(
 
       // Botón dinámico de alternar vistas: se oculta/minimiza al deslizar entre 50 y 75,
       // y reaparece automáticamente al activar la Vista 100 (jalando hacia abajo).
-      androidx.compose.animation.AnimatedVisibility(
-        visible = uiState.isToggleButtonVisible,
-        enter = fadeIn(tween(220)) + scaleIn(initialScale = 0.82f, animationSpec = tween(220)),
-        exit = fadeOut(tween(180)) + scaleOut(targetScale = 0.78f, animationSpec = tween(180)),
-        modifier = Modifier
-          .align(Alignment.BottomEnd)
-          .padding(12.dp),
-      ) {
+      val renderToggleButton: @Composable () -> Unit = {
         FilledTonalButton(
           onClick = onCycleScaleFromButton,
           shape = CircleShape,
@@ -1141,15 +1165,30 @@ private fun UnifiedRadarMapLayer(
         }
       }
 
-      // Indicador discreto cuando el botón cedió protagonismo al gesto 50 <-> 75
-      androidx.compose.animation.AnimatedVisibility(
-        visible = !uiState.isToggleButtonVisible,
-        enter = fadeIn(tween(200)),
-        exit = fadeOut(tween(150)),
-        modifier = Modifier
-          .align(Alignment.TopEnd)
-          .padding(10.dp),
-      ) {
+      if (isLowTier) {
+        if (uiState.isToggleButtonVisible) {
+          Box(
+            modifier = Modifier
+              .align(Alignment.BottomEnd)
+              .padding(12.dp),
+          ) {
+            renderToggleButton()
+          }
+        }
+      } else {
+        androidx.compose.animation.AnimatedVisibility(
+          visible = uiState.isToggleButtonVisible,
+          enter = fadeIn(tween(180)) + scaleIn(initialScale = 0.85f, animationSpec = tween(180)),
+          exit = fadeOut(tween(140)) + scaleOut(targetScale = 0.80f, animationSpec = tween(140)),
+          modifier = Modifier
+            .align(Alignment.BottomEnd)
+            .padding(12.dp),
+        ) {
+          renderToggleButton()
+        }
+      }
+
+      val renderGesturePill: @Composable () -> Unit = {
         Surface(
           onClick = onRestoreToggleButton,
           shape = CircleShape,
@@ -1173,6 +1212,29 @@ private fun UnifiedRadarMapLayer(
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           }
+        }
+      }
+
+      if (isLowTier) {
+        if (!uiState.isToggleButtonVisible) {
+          Box(
+            modifier = Modifier
+              .align(Alignment.TopEnd)
+              .padding(10.dp),
+          ) {
+            renderGesturePill()
+          }
+        }
+      } else {
+        androidx.compose.animation.AnimatedVisibility(
+          visible = !uiState.isToggleButtonVisible,
+          enter = fadeIn(tween(160)),
+          exit = fadeOut(tween(120)),
+          modifier = Modifier
+            .align(Alignment.TopEnd)
+            .padding(10.dp),
+        ) {
+          renderGesturePill()
         }
       }
     }

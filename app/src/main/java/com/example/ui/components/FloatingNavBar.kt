@@ -68,7 +68,10 @@ fun FloatingBottomNavBar(
   disableAnimations: Boolean,
   onSelectTab: (Int) -> Unit,
   modifier: Modifier = Modifier,
+  animationTier: String = if (disableAnimations) "low" else "high",
 ) {
+  val isLowTier = disableAnimations || animationTier == "low"
+  val isHighTier = !isLowTier && animationTier != "medium"
   val destinations = listOf(
     FloatingNavDestination(
       index = 0,
@@ -117,8 +120,8 @@ fun FloatingBottomNavBar(
     Surface(
       shape = RoundedCornerShape(34.dp),
       color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f),
-      tonalElevation = 8.dp,
-      shadowElevation = 12.dp,
+      tonalElevation = if (isLowTier) 0.dp else if (isHighTier) 8.dp else 2.dp,
+      shadowElevation = if (isHighTier) 12.dp else if (isLowTier) 0.dp else 2.dp,
       modifier = Modifier
         .widthIn(max = 560.dp)
         .fillMaxWidth()
@@ -139,13 +142,17 @@ fun FloatingBottomNavBar(
         destinations.forEach { item ->
           val selected = selectedTab == item.index
           val activeBg = MaterialTheme.colorScheme.primaryContainer
-          val pillColor = if (disableAnimations) {
-            if (selected) activeBg else Color.Transparent
-          } else {
-            animateColorAsState(
+          val pillColor = when {
+            isLowTier -> if (selected) activeBg else Color.Transparent
+            isHighTier -> animateColorAsState(
               targetValue = if (selected) activeBg else Color.Transparent,
               animationSpec = spring(stiffness = 480f),
               label = "navPill_${item.index}",
+            ).value
+            else -> animateColorAsState(
+              targetValue = if (selected) activeBg else Color.Transparent,
+              animationSpec = androidx.compose.animation.core.tween(durationMillis = 120),
+              label = "navPillMed_${item.index}",
             ).value
           }
           val iconTint = if (selected) {

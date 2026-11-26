@@ -62,14 +62,24 @@ fun ConfettiCelebrationOverlay(
   disableAnimations: Boolean = false,
   onFinished: () -> Unit = {},
   modifier: Modifier = Modifier,
+  animationTier: String = if (disableAnimations) "low" else "high",
 ) {
+  val isLowTier = disableAnimations || animationTier == "low"
+  val isMediumTier = !isLowTier && animationTier == "medium"
+  val particleCount = when {
+    isLowTier -> 18
+    isMediumTier -> 28
+    else -> 68
+  }
+  val animDurationMs = if (isMediumTier) 1250 else 2100
+
   var activeBurstKey by remember { mutableStateOf<Long?>(null) }
   val progress = remember { Animatable(0f) }
 
-  val particles = remember(activeBurstKey) {
+  val particles = remember(activeBurstKey, particleCount) {
     val seed = activeBurstKey ?: return@remember emptyList()
     val rng = Random(seed * 31L + 7919L)
-    List(68) { idx ->
+    List(particleCount) { idx ->
       // Mix of top-center fountain and mid-screen celebratory pop
       val isTopBurst = idx % 3 != 0
       val angleDeg = if (isTopBurst) {
@@ -105,14 +115,14 @@ fun ConfettiCelebrationOverlay(
   LaunchedEffect(triggerKey) {
     if (triggerKey <= 0L) return@LaunchedEffect
     activeBurstKey = triggerKey
-    if (disableAnimations) {
+    if (isLowTier) {
       progress.snapTo(0.28f)
-      delay(950L)
+      delay(800L)
     } else {
       progress.snapTo(0f)
       progress.animateTo(
         targetValue = 1f,
-        animationSpec = tween(durationMillis = 2100, easing = LinearEasing),
+        animationSpec = tween(durationMillis = animDurationMs, easing = LinearEasing),
       )
     }
     activeBurstKey = null
@@ -121,7 +131,7 @@ fun ConfettiCelebrationOverlay(
 
   if (activeBurstKey != null) {
     val t = progress.value
-    val durationSec = 2.1f * t
+    val durationSec = (animDurationMs / 1000f) * t
     val fadeAlpha = when {
       t < 0.72f -> 1f
       else -> (1f - (t - 0.72f) / 0.28f).coerceIn(0f, 1f)

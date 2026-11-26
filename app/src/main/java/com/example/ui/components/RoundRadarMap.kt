@@ -3,15 +3,13 @@ package com.example.ui.components
 import android.os.Build
 import android.view.View
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.StartOffset
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
@@ -36,7 +34,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -56,12 +53,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -76,6 +76,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -97,6 +98,7 @@ import com.example.data.model.PlayerProfile
 import com.example.data.remote.OsmSafePlaceFinder
 import com.example.util.GeoUtils
 import com.example.util.HapticFeedbackHelper
+import kotlinx.coroutines.launch
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
@@ -149,6 +151,50 @@ enum class RadarScaleLevel(
   }
 }
 
+private fun RadarScaleLevel.toProgress(): Float = when (this) {
+  RadarScaleLevel.SCALE_50 -> 0f
+  RadarScaleLevel.SCALE_75 -> 0.5f
+  RadarScaleLevel.SCALE_100 -> 1f
+}
+
+private fun lerpFloat(start: Float, end: Float, fraction: Float): Float {
+  return start + (end - start) * fraction
+}
+
+private fun interpolateRevealTriple(progress: Float): Triple<Float, Float, Float> {
+  val p = progress.coerceIn(0f, 1f)
+  return if (p <= 0.5f) {
+    val t = p / 0.5f
+    Triple(
+      lerpFloat(RadarScaleLevel.SCALE_50.osmRevealAlpha, RadarScaleLevel.SCALE_75.osmRevealAlpha, t),
+      lerpFloat(RadarScaleLevel.SCALE_50.veilOuterAlpha, RadarScaleLevel.SCALE_75.veilOuterAlpha, t),
+      lerpFloat(RadarScaleLevel.SCALE_50.veilInnerAlpha, RadarScaleLevel.SCALE_75.veilInnerAlpha, t),
+    )
+  } else {
+    val t = (p - 0.5f) / 0.5f
+    Triple(
+      lerpFloat(RadarScaleLevel.SCALE_75.osmRevealAlpha, RadarScaleLevel.SCALE_100.osmRevealAlpha, t),
+      lerpFloat(RadarScaleLevel.SCALE_75.veilOuterAlpha, RadarScaleLevel.SCALE_100.veilOuterAlpha, t),
+      lerpFloat(RadarScaleLevel.SCALE_75.veilInnerAlpha, RadarScaleLevel.SCALE_100.veilInnerAlpha, t),
+    )
+  }
+}
+
+@Immutable
+private data class PlottedMissionSpec(
+  val item: MissionWithDistance,
+  val unitX: Float,
+  val unitY: Float,
+)
+
+@Immutable
+private data class PlottedPlayerSpec(
+  val item: NearbyPlayerItem,
+  val unitX: Float,
+  val unitY: Float,
+  val dotColor: Color,
+)
+
 @Composable
 fun RoundRadarMap(
   myProfile: PlayerProfile?,
@@ -174,6 +220,8 @@ fun RoundRadarMap(
 ) {
   val context = LocalContext.current
   val lifecycleOwner = LocalLifecycleOwner.current
+  val scope = rememberCoroutineScope()
+  val density = LocalDensity.current
   val isRobolectric = remember { Build.FINGERPRINT.contains("robolectric", ignoreCase = true) }
 
   val primaryColor = MaterialTheme.colorScheme.primary
@@ -188,6 +236,7 @@ fun RoundRadarMap(
 
   var showExpandHint by remember { mutableStateOf(false) }
   var isDragging50To75 by remember { mutableStateOf(false) }
+  var isDraggingGesture by remember { mutableStateOf(false) }
   var lastAppliedOsmSignature by remember { mutableStateOf<Triple<Double, Double, Double>?>(null) }
   var osmMapView by remember { mutableStateOf<MapView?>(null) }
   var isOsmAttachedAndReady by remember { mutableStateOf(false) }
@@ -195,59 +244,25 @@ fun RoundRadarMap(
   val currentScaleState by rememberUpdatedState(radarScale)
   val currentOnScaleChange by rememberUpdatedState(onRadarScaleChange)
 
-  // Animación fluida del tamaño, forma y revelado de OpenStreetMap según escala 50 / 75 / 100
-  val targetHeightDp = when (radarScale) {
-    RadarScaleLevel.SCALE_50 -> 212.dp
-    RadarScaleLevel.SCALE_75 -> 284.dp
-    RadarScaleLevel.SCALE_100 -> expandedHeightDp.coerceAtLeast(320.dp)
+  // Un solo driver de progreso [0f=50, 0.5f=75, 1f=100]:
+  // durante el arrastre sigue directo 1:1 al dedo (snapTo), y al soltar desacelera limpio sin animaciones compitiendo.
+  val scaleProgressAnim = remember { Animatable(radarScale.toProgress()) }
+  LaunchedEffect(radarScale, isDraggingGesture, animationTier) {
+    if (!isDraggingGesture) {
+      val target = radarScale.toProgress()
+      when {
+        isLowTier -> scaleProgressAnim.snapTo(target)
+        isHighTier -> scaleProgressAnim.animateTo(
+          targetValue = target,
+          animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 460f),
+        )
+        else -> scaleProgressAnim.animateTo(
+          targetValue = target,
+          animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing),
+        )
+      }
+    }
   }
-  val animatedHeightDp by animateDpAsState(
-    targetValue = targetHeightDp,
-    animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
-    label = "radarHeightAnim",
-  )
-
-  val targetCornerDp = when (radarScale) {
-    RadarScaleLevel.SCALE_50 -> 106.dp
-    RadarScaleLevel.SCALE_75 -> 142.dp
-    RadarScaleLevel.SCALE_100 -> 26.dp
-  }
-  val animatedCornerDp by animateDpAsState(
-    targetValue = targetCornerDp,
-    animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
-    label = "radarCornerAnim",
-  )
-
-  // OPT: Conservar State<Float> sin delegar 'by' para leerlos solo en graphicsLayer/DrawScope sin recomponer pines.
-  val animatedOsmAlphaState = animateFloatAsState(
-    targetValue = radarScale.osmRevealAlpha,
-    animationSpec = tween(durationMillis = 280),
-    label = "osmRevealAlphaAnim",
-  )
-  val animatedVeilOuterAlphaState = animateFloatAsState(
-    targetValue = radarScale.veilOuterAlpha,
-    animationSpec = tween(durationMillis = 280),
-    label = "veilOuterAlphaAnim",
-  )
-  val animatedVeilInnerAlphaState = animateFloatAsState(
-    targetValue = radarScale.veilInnerAlpha,
-    animationSpec = tween(durationMillis = 280),
-    label = "veilInnerAlphaAnim",
-  )
-  val lupaButtonAlphaState = animateFloatAsState(
-    targetValue = if (isDragging50To75 && radarScale != RadarScaleLevel.SCALE_100) 0.25f else 1.0f,
-    animationSpec = tween(durationMillis = 160),
-    label = "lupaButtonAlphaAnim",
-  )
-  val borderColor by animateColorAsState(
-    targetValue = if (radarScale == RadarScaleLevel.SCALE_100) {
-      primaryColor
-    } else {
-      primaryColor.copy(alpha = 0.72f)
-    },
-    animationSpec = tween(durationMillis = 220),
-    label = "radarBorderColor",
-  )
 
   DisposableEffect(lifecycleOwner, osmMapView, pauseAnimations) {
     val map = osmMapView
@@ -274,15 +289,18 @@ fun RoundRadarMap(
     }
   }
 
-  // Keep animation drivers as State<Float> so only DrawScope / graphicsLayer / derivedStateOf
-  // read them, preventing 60fps recompositions of all radar mission pins and player dots.
-  val essentialTransition = if (!pauseAnimations) rememberInfiniteTransition(label = "veyraEssentialSweep") else null
+  // Solo el barrido esencial se mantiene en Gama baja; extras y ondas se escalonan en Media y Alta.
+  val essentialTransition = if (!pauseAnimations && isBroadcasting) {
+    rememberInfiniteTransition(label = "veyraEssentialSweep")
+  } else {
+    null
+  }
   val sweepAngleState: State<Float> = if (essentialTransition != null) {
     essentialTransition.animateFloat(
       initialValue = 0f,
       targetValue = 360f,
       animationSpec = infiniteRepeatable(
-        animation = tween(durationMillis = if (isLowTier) 3400 else 2800, easing = LinearEasing),
+        animation = tween(durationMillis = if (isLowTier) 3800 else 2800, easing = LinearEasing),
         repeatMode = RepeatMode.Restart,
       ),
       label = "sweepAngle",
@@ -291,7 +309,11 @@ fun RoundRadarMap(
     remember { mutableFloatStateOf(45f) }
   }
 
-  val mediumTransition = if (!pauseAnimations && !isLowTier) rememberInfiniteTransition(label = "veyraMediumWave") else null
+  val mediumTransition = if (!pauseAnimations && !isLowTier && isBroadcasting) {
+    rememberInfiniteTransition(label = "veyraMediumWave")
+  } else {
+    null
+  }
   val sonarWave1State: State<Float> = if (mediumTransition != null) {
     mediumTransition.animateFloat(
       initialValue = 0.08f,
@@ -305,8 +327,14 @@ fun RoundRadarMap(
   } else {
     remember { mutableFloatStateOf(0f) }
   }
-  val pulseBreathState: State<Float> = if (mediumTransition != null) {
-    mediumTransition.animateFloat(
+
+  val highTransition = if (!pauseAnimations && isHighTier) {
+    rememberInfiniteTransition(label = "veyraHighExtras")
+  } else {
+    null
+  }
+  val pulseBreathState: State<Float> = if (highTransition != null) {
+    highTransition.animateFloat(
       initialValue = 0.92f,
       targetValue = 1.10f,
       animationSpec = infiniteRepeatable(
@@ -318,8 +346,6 @@ fun RoundRadarMap(
   } else {
     remember { mutableFloatStateOf(1.0f) }
   }
-
-  val highTransition = if (!pauseAnimations && isHighTier) rememberInfiniteTransition(label = "veyraHighExtras") else null
   val outerOrbitAngleState: State<Float> = if (highTransition != null) {
     highTransition.animateFloat(
       initialValue = 360f,
@@ -333,7 +359,7 @@ fun RoundRadarMap(
   } else {
     remember { mutableFloatStateOf(0f) }
   }
-  val sonarWave2State: State<Float> = if (highTransition != null) {
+  val sonarWave2State: State<Float> = if (highTransition != null && isBroadcasting) {
     highTransition.animateFloat(
       initialValue = 0.08f,
       targetValue = 1.0f,
@@ -361,760 +387,844 @@ fun RoundRadarMap(
     remember { mutableFloatStateOf(1f) }
   }
 
-  val plottedMissions = remember(missions) { missions.take(10) }
-  val plottedPlayers = remember(nearbyPlayers) { nearbyPlayers.take(8) }
+  // Precalcular vectores unitarios fuera de layout/draw: cambiar de 50 <-> 75 <-> 100 no recalcula ni recompone pines.
+  val plottedMissions = remember(missions, searchRadiusMeters) {
+    missions.take(10).map { item ->
+      val normalizedDist = (item.distanceMeters / searchRadiusMeters.toFloat()).coerceIn(0.18f, 0.84f)
+      val angleRad = Math.toRadians((item.bearingDegrees - 90f).toDouble())
+      val factor = 0.80f * normalizedDist
+      PlottedMissionSpec(
+        item = item,
+        unitX = (factor * cos(angleRad)).toFloat(),
+        unitY = (factor * sin(angleRad)).toFloat(),
+      )
+    }
+  }
+  val plottedPlayers = remember(nearbyPlayers, searchRadiusMeters, primaryColor) {
+    nearbyPlayers.take(8).mapIndexed { idx, playerItem ->
+      val normalizedDist = if (playerItem.distanceMeters > 0f) {
+        (playerItem.distanceMeters / searchRadiusMeters.toFloat()).coerceIn(0.20f, 0.84f)
+      } else {
+        0.38f + (idx * 0.08f).coerceAtMost(0.42f)
+      }
+      val bearing = if (playerItem.distanceMeters > 0f) {
+        playerItem.bearingDegrees
+      } else {
+        (idx * 55f) + 25f
+      }
+      val angleRad = Math.toRadians((bearing - 90f).toDouble())
+      val factor = 0.80f * normalizedDist
+      val dotColor = runCatching {
+        Color(android.graphics.Color.parseColor(playerItem.profile.avatarColorHex))
+      }.getOrElse { primaryColor }
+      PlottedPlayerSpec(
+        item = playerItem,
+        unitX = (factor * cos(angleRad)).toFloat(),
+        unitY = (factor * sin(angleRad)).toFloat(),
+        dotColor = dotColor,
+      )
+    }
+  }
 
   Column(
     modifier = modifier.fillMaxWidth(),
     horizontalAlignment = Alignment.CenterHorizontally,
   ) {
-    // Contenedor exterior adaptable para animar suavemente ancho de círculo (50/75) -> panorama amplio (100)
     BoxWithConstraints(
       modifier = Modifier
         .fillMaxWidth()
         .padding(horizontal = 12.dp),
       contentAlignment = Alignment.Center,
     ) {
-      val maxContainerWidthDp = maxWidth
-      val targetWidthDp = when (radarScale) {
-        RadarScaleLevel.SCALE_50 -> 212.dp.coerceAtMost(maxContainerWidthDp)
-        RadarScaleLevel.SCALE_75 -> 284.dp.coerceAtMost(maxContainerWidthDp)
-        RadarScaleLevel.SCALE_100 -> maxContainerWidthDp
+      val maxContainerWidthPx = with(density) { maxWidth.toPx() }
+      val size50Px = with(density) { 212.dp.toPx() }.coerceAtMost(maxContainerWidthPx)
+      val size75Px = with(density) { 284.dp.toPx() }.coerceAtMost(maxContainerWidthPx)
+      val height100Px = with(density) { expandedHeightDp.coerceAtLeast(320.dp).toPx() }
+      val corner50Px = size50Px / 2f
+      val corner75Px = size75Px / 2f
+      val corner100Px = with(density) { 26.dp.toPx() }
+
+      val currentBoxSizePx: () -> Pair<Float, Float> = remember(
+        scaleProgressAnim,
+        size50Px,
+        size75Px,
+        maxContainerWidthPx,
+        height100Px,
+      ) {
+        {
+          val p = scaleProgressAnim.value.coerceIn(0f, 1f)
+          if (p <= 0.5f) {
+            val t = p / 0.5f
+            val w = lerpFloat(size50Px, size75Px, t)
+            w to w
+          } else {
+            val t = (p - 0.5f) / 0.5f
+            val w = lerpFloat(size75Px, maxContainerWidthPx, t)
+            val h = lerpFloat(size75Px, height100Px, t)
+            w to h
+          }
+        }
       }
-      val animatedWidthDp by animateDpAsState(
-        targetValue = targetWidthDp,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
-        label = "radarWidthAnim",
-      )
+      val currentRadarRadiusPx: () -> Float = remember(currentBoxSizePx) {
+        {
+          val (w, h) = currentBoxSizePx()
+          min(w, h) / 2f
+        }
+      }
+      val currentCornerPx: () -> Float = remember(scaleProgressAnim, corner50Px, corner75Px, corner100Px) {
+        {
+          val p = scaleProgressAnim.value.coerceIn(0f, 1f)
+          if (p <= 0.5f) {
+            lerpFloat(corner50Px, corner75Px, p / 0.5f)
+          } else {
+            lerpFloat(corner75Px, corner100Px, (p - 0.5f) / 0.5f)
+          }
+        }
+      }
 
-      val radarShape = RoundedCornerShape(animatedCornerDp)
+      val borderStrokeColor = if (radarScale == RadarScaleLevel.SCALE_100) {
+        primaryColor
+      } else {
+        primaryColor.copy(alpha = 0.72f)
+      }
+      val highBorderBrush = remember(borderStrokeColor, tertiaryColor, secondaryColor) {
+        Brush.sweepGradient(
+          listOf(
+            borderStrokeColor,
+            tertiaryColor.copy(alpha = 0.65f),
+            secondaryColor.copy(alpha = 0.45f),
+            borderStrokeColor,
+          ),
+        )
+      }
+      val shadowPxHigh = with(density) {
+        (if (radarScale == RadarScaleLevel.SCALE_100) 12.dp else 10.dp).toPx()
+      }
 
-      BoxWithConstraints(
+      Box(
         modifier = Modifier
-          .width(animatedWidthDp)
-          .height(animatedHeightDp)
-          .testTag("round_radar_map"),
+          .layout { measurable, constraints ->
+            val (wPx, hPx) = currentBoxSizePx()
+            val wInt = wPx.roundToInt().coerceIn(0, constraints.maxWidth)
+            val hInt = hPx.roundToInt().coerceIn(0, constraints.maxHeight)
+            val placeable = measurable.measure(
+              constraints.copy(minWidth = wInt, maxWidth = wInt, minHeight = hInt, maxHeight = hInt),
+            )
+            layout(wInt, hInt) {
+              placeable.placeRelative(0, 0)
+            }
+          }
+          .graphicsLayer {
+            val cPx = currentCornerPx()
+            shape = RoundedCornerShape(cPx)
+            clip = true
+            shadowElevation = if (isHighTier) shadowPxHigh else 0f
+          }
+          .background(surfaceContainer)
+          .testTag("round_radar_map")
+          .pointerInput(Unit) {
+            var dragDx = 0f
+            var dragDy = 0f
+            var handledVertical = false
+            var startScale = RadarScaleLevel.SCALE_75
+            detectDragGestures(
+              onDragStart = {
+                dragDx = 0f
+                dragDy = 0f
+                handledVertical = false
+                startScale = currentScaleState
+                isDraggingGesture = true
+              },
+              onDragEnd = {
+                if (!handledVertical && startScale != RadarScaleLevel.SCALE_100) {
+                  val curProgress = scaleProgressAnim.value
+                  val target = when {
+                    abs(dragDx) >= 56f -> if (startScale == RadarScaleLevel.SCALE_50) {
+                      RadarScaleLevel.SCALE_75
+                    } else {
+                      RadarScaleLevel.SCALE_50
+                    }
+                    curProgress < 0.25f -> RadarScaleLevel.SCALE_50
+                    else -> RadarScaleLevel.SCALE_75
+                  }
+                  if (target != currentScaleState) {
+                    currentOnScaleChange(target)
+                  }
+                }
+                isDragging50To75 = false
+                isDraggingGesture = false
+              },
+              onDragCancel = {
+                isDragging50To75 = false
+                isDraggingGesture = false
+              },
+              onDrag = { change, amount ->
+                change.consume()
+                dragDx += amount.x
+                dragDy += amount.y
+                if (abs(dragDy) > abs(dragDx) * 1.15f) {
+                  if (startScale != RadarScaleLevel.SCALE_100 && dragDy > 0f) {
+                    val baseP = startScale.toProgress()
+                    val previewP = lerpFloat(baseP, 1f, (dragDy / 120f).coerceIn(0f, 1f))
+                    scope.launch { scaleProgressAnim.snapTo(previewP) }
+                    if (dragDy >= 105f && !handledVertical) {
+                      handledVertical = true
+                      isDragging50To75 = false
+                      currentOnScaleChange(RadarScaleLevel.SCALE_100)
+                    }
+                  } else if (startScale == RadarScaleLevel.SCALE_100 && dragDy < 0f) {
+                    val previewP = lerpFloat(1f, 0.5f, (abs(dragDy) / 100f).coerceIn(0f, 1f))
+                    scope.launch { scaleProgressAnim.snapTo(previewP) }
+                    if (dragDy <= -80f && !handledVertical) {
+                      handledVertical = true
+                      currentOnScaleChange(RadarScaleLevel.SCALE_75)
+                    }
+                  }
+                } else if (startScale != RadarScaleLevel.SCALE_100 && abs(dragDx) >= 8f) {
+                  if (abs(dragDx) >= 16f) {
+                    isDragging50To75 = true
+                  }
+                  val travelFraction = (abs(dragDx) / 150f).coerceIn(0f, 1f)
+                  val liveP = if (startScale == RadarScaleLevel.SCALE_50) {
+                    lerpFloat(0f, 0.5f, travelFraction)
+                  } else {
+                    lerpFloat(0.5f, 0f, travelFraction)
+                  }
+                  scope.launch { scaleProgressAnim.snapTo(liveP) }
+                }
+              },
+            )
+          }
+          .clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onClick = { showExpandHint = !showExpandHint },
+          ),
         contentAlignment = Alignment.Center,
       ) {
-        val density = LocalDensity.current
-        val minDimPx = with(density) { min(maxWidth.toPx(), maxHeight.toPx()) }
-        val radarRadiusPx = minDimPx / 2f
+        // Capa estética de OpenStreetMap integrada dentro del mismo radar:
+        // conforme expande 50 -> 75 -> 100 revela más terreno real alrededor del jugador.
+        if (!isRobolectric) {
+          val baseZoom = when {
+            searchRadiusMeters <= 600L -> 16.4
+            searchRadiusMeters <= 2500L -> 15.2
+            searchRadiusMeters <= 6000L -> 13.9
+            else -> 12.6
+          }
+          val targetZoom = (baseZoom + radarScale.osmZoomOffset).coerceIn(10.5, 18.5)
 
-        Surface(
-          shape = radarShape,
-          tonalElevation = if (radarScale == RadarScaleLevel.SCALE_100) 10.dp else 8.dp,
-          shadowElevation = if (radarScale == RadarScaleLevel.SCALE_100) 14.dp else 12.dp,
-          color = surfaceContainer,
-          modifier = Modifier
-            .fillMaxSize()
-            .border(
-              width = if (radarScale == RadarScaleLevel.SCALE_100) 2.2.dp else 2.5.dp,
-              brush = Brush.sweepGradient(
-                listOf(
-                  borderColor,
-                  tertiaryColor.copy(alpha = 0.65f),
-                  secondaryColor.copy(alpha = 0.45f),
-                  borderColor,
-                ),
-              ),
-              shape = radarShape,
-            ),
-        ) {
-          Box(
-            modifier = Modifier
-              .fillMaxSize()
-              .clip(radarShape)
-              .pointerInput(Unit) {
-                var dragDx = 0f
-                var dragDy = 0f
-                var handledDownward = false
-                detectDragGestures(
-                  onDragStart = {
-                    dragDx = 0f
-                    dragDy = 0f
-                    handledDownward = false
-                  },
-                  onDragEnd = {
-                    if (!handledDownward && abs(dragDx) >= 56f && currentScaleState != RadarScaleLevel.SCALE_100) {
-                      val next = if (currentScaleState == RadarScaleLevel.SCALE_50) {
-                        RadarScaleLevel.SCALE_75
-                      } else {
-                        RadarScaleLevel.SCALE_50
-                      }
-                      currentOnScaleChange(next)
-                    }
-                    isDragging50To75 = false
-                  },
-                  onDragCancel = {
-                    isDragging50To75 = false
-                  },
-                  onDrag = { change, amount ->
-                    change.consume()
-                    dragDx += amount.x
-                    dragDy += amount.y
-                    if (abs(dragDy) > abs(dragDx) * 1.15f) {
-                      if (dragDy >= 110f && !handledDownward && currentScaleState != RadarScaleLevel.SCALE_100) {
-                        handledDownward = true
-                        isDragging50To75 = false
-                        currentOnScaleChange(RadarScaleLevel.SCALE_100)
-                      } else if (dragDy <= -85f && !handledDownward && currentScaleState == RadarScaleLevel.SCALE_100) {
-                        handledDownward = true
-                        currentOnScaleChange(RadarScaleLevel.SCALE_75)
-                      }
-                    } else if (abs(dragDx) >= 16f && currentScaleState != RadarScaleLevel.SCALE_100) {
-                      isDragging50To75 = true
-                    }
-                  },
-                )
-              }
-              .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = { showExpandHint = !showExpandHint },
-              ),
-          ) {
-            // Capa estética de OpenStreetMap integrada dentro del mismo radar:
-            // conforme expande 50 -> 75 -> 100 revela más terreno real alrededor del jugador.
-            if (!isRobolectric) {
-              val baseZoom = when {
-                searchRadiusMeters <= 600L -> 16.4
-                searchRadiusMeters <= 2500L -> 15.2
-                searchRadiusMeters <= 6000L -> 13.9
-                else -> 12.6
-              }
-              val targetZoom = (baseZoom + radarScale.osmZoomOffset).coerceIn(10.5, 18.5)
-
-              AndroidView(
-                factory = { ctx ->
-                  OsmSafePlaceFinder.configureOsmdroid(ctx)
-                  MapView(ctx).apply {
-                    setTileSource(TileSourceFactory.MAPNIK)
-                    setMultiTouchControls(false)
-                    zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
-                    isTilesScaledToDpi = true
-                    isEnabled = false
-                    isClickable = false
-                    isFocusable = false
-                    setOnTouchListener { _, _ -> false }
-                    minZoomLevel = 4.0
-                    maxZoomLevel = 19.5
-                    controller.setZoom(targetZoom)
-                    controller.setCenter(GeoPoint(userLat, userLon))
-                    addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
-                      override fun onViewAttachedToWindow(v: View) {
-                        v.post {
-                          val mv = v as? MapView ?: return@post
-                          if (mv.isAttachedToWindow && isOsmMapRepositoryReady(mv)) {
-                            isOsmAttachedAndReady = true
-                          }
-                        }
-                      }
-
-                      override fun onViewDetachedFromWindow(v: View) {
-                        isOsmAttachedAndReady = false
-                        lastAppliedOsmSignature = null
-                      }
-                    })
-                    osmMapView = this
-                  }
-                },
-                onRelease = { map ->
-                  isOsmAttachedAndReady = false
-                  lastAppliedOsmSignature = null
-                  if (osmMapView === map) {
-                    osmMapView = null
-                  }
-                  runCatching {
-                    map.overlays.clear()
-                    map.onPause()
-                    map.onDetach()
-                  }
-                },
-                update = { map ->
-                  if (pauseAnimations) return@AndroidView
-                  if (!isOsmAttachedAndReady || !isOsmMapRepositoryReady(map)) {
-                    map.post {
-                      if (map.isAttachedToWindow && isOsmMapRepositoryReady(map) && !isOsmAttachedAndReady) {
+          AndroidView(
+            factory = { ctx ->
+              OsmSafePlaceFinder.configureOsmdroid(ctx)
+              MapView(ctx).apply {
+                setTileSource(TileSourceFactory.MAPNIK)
+                setMultiTouchControls(false)
+                zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
+                isTilesScaledToDpi = true
+                isEnabled = false
+                isClickable = false
+                isFocusable = false
+                setOnTouchListener { _, _ -> false }
+                minZoomLevel = 4.0
+                maxZoomLevel = 19.5
+                controller.setZoom(targetZoom)
+                controller.setCenter(GeoPoint(userLat, userLon))
+                addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                  override fun onViewAttachedToWindow(v: View) {
+                    v.post {
+                      val mv = v as? MapView ?: return@post
+                      if (mv.isAttachedToWindow && isOsmMapRepositoryReady(mv)) {
                         isOsmAttachedAndReady = true
                       }
                     }
-                    return@AndroidView
                   }
-                  val signature = Triple(userLat, userLon, targetZoom)
-                  if (lastAppliedOsmSignature != signature) {
-                    lastAppliedOsmSignature = signature
-                    runCatching {
-                      map.controller.animateTo(GeoPoint(userLat, userLon), targetZoom, 380L)
-                    }
+
+                  override fun onViewDetachedFromWindow(v: View) {
+                    isOsmAttachedAndReady = false
+                    lastAppliedOsmSignature = null
                   }
-                },
-                modifier = Modifier
-                  .fillMaxSize()
-                  // OPT: Lectura diferida de alfa en graphicsLayer sin recomponer AndroidView.
-                  .graphicsLayer { alpha = animatedOsmAlphaState.value },
-              )
-            }
-
-            // OPT: Precalcular PathEffects, ángulos de brújula y paletas del radar fuera de DrawScope (60fps).
-            val orbitDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(18f, 14f, 6f, 14f), 0f) }
-            val rangeDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f) }
-            val compassUnitTicks = remember(radarStyle) {
-              if (radarStyle == "compass" || radarStyle == "neon") {
-                val step = if (radarStyle == "compass") 15 else 30
-                (0 until 360 step step).map { deg ->
-                  val rad = Math.toRadians(deg.toDouble())
-                  Triple(cos(rad).toFloat(), sin(rad).toFloat(), deg % 45 == 0)
-                }
-              } else {
-                emptyList()
+                })
+                osmMapView = this
               }
-            }
-            val sweepStops = remember(primaryColor, radarStyle) {
-              arrayOf(
-                0.0f to primaryColor.copy(alpha = if (radarStyle == "neon") 0.42f else 0.24f),
-                0.18f to primaryColor.copy(alpha = 0.08f),
-                0.24f to Color.Transparent,
-                1.0f to Color.Transparent,
-              )
-            }
-            val veilColorsBuffer = remember { ArrayList<Color>(3).apply { add(Color.Transparent); add(Color.Transparent); add(Color.Transparent) } }
-            val veilMidColor = remember(primaryColor, radarStyle) {
-              primaryColor.copy(alpha = if (radarStyle == "neon") 0.14f else 0.08f)
-            }
-
-            // Capa estética del radar: velo progresivo sobre OSM + anillos + barrido
-            Canvas(modifier = Modifier.fillMaxSize()) {
-              val center = Offset(size.width / 2f, size.height / 2f)
-              val maxR = min(size.width, size.height) / 2f
-              val sweepAngle = sweepAngleState.value
-              val sonarWave1 = sonarWave1State.value
-              val sonarWave2 = sonarWave2State.value
-              val pulseBreath = pulseBreathState.value
-              val outerOrbitAngle = outerOrbitAngleState.value
-
-              // OPT: Reutilizar lista de 3 colores para el velo radial sin instanciar listOf en cada frame.
-              veilColorsBuffer[0] = surfaceContainer.copy(alpha = animatedVeilInnerAlphaState.value)
-              veilColorsBuffer[1] = veilMidColor
-              veilColorsBuffer[2] = surfaceContainer.copy(alpha = animatedVeilOuterAlphaState.value)
-
-              drawRect(
-                brush = Brush.radialGradient(
-                  colors = veilColorsBuffer,
-                  center = center,
-                  radius = maxR * 1.15f,
-                ),
-              )
-
-              // Counter-rotating outer orbital ring (High tier only)
-              if (isHighTier) {
-                rotate(degrees = outerOrbitAngle, pivot = center) {
-                  drawCircle(
-                    color = tertiaryColor.copy(alpha = if (radarStyle == "neon") 0.48f else 0.28f),
-                    radius = maxR - 6f,
-                    center = center,
-                    style = Stroke(
-                      width = 2.5f,
-                      cap = StrokeCap.Round,
-                      pathEffect = orbitDashEffect,
-                    ),
-                  )
-                }
+            },
+            onRelease = { map ->
+              isOsmAttachedAndReady = false
+              lastAppliedOsmSignature = null
+              if (osmMapView === map) {
+                osmMapView = null
               }
-
-              // Concentric range rings
-              val ringCount = 3
-              val ringColor = primaryColor.copy(alpha = if (radarStyle == "neon") 0.36f else 0.24f)
-              for (i in 1..ringCount) {
-                val r = maxR * (i / 3.25f)
-                drawCircle(
-                  color = ringColor,
-                  radius = r,
-                  center = center,
-                  style = Stroke(
-                    width = if (i == ringCount) 2f else 1.4f,
-                    pathEffect = if (radarStyle == "classic" && i < ringCount) rangeDashEffect else null,
-                  ),
-                )
+              runCatching {
+                map.overlays.clear()
+                map.onPause()
+                map.onDetach()
               }
-
-              // Crosshair lines
-              val crosshairColor = outlineVariant.copy(alpha = 0.42f)
-              drawLine(
-                color = crosshairColor,
-                start = Offset(center.x, center.y - maxR + 14f),
-                end = Offset(center.x, center.y + maxR - 14f),
-                strokeWidth = 1.2f,
-              )
-              drawLine(
-                color = crosshairColor,
-                start = Offset(center.x - maxR + 14f, center.y),
-                end = Offset(center.x + maxR - 14f, center.y),
-                strokeWidth = 1.2f,
-              )
-
-              // OPT: Usar vectores unitarios precalculados para marcas de brújula sin trigonometría por frame.
-              if (compassUnitTicks.isNotEmpty()) {
-                val outer = maxR - 10f
-                val majorInner = maxR - 22f
-                val minorInner = maxR - 15f
-                val majorColor = primaryColor.copy(alpha = 0.72f)
-                val minorColor = primaryColor.copy(alpha = 0.32f)
-                compassUnitTicks.forEach { (cosVal, sinVal, isMajor) ->
-                  val inner = if (isMajor) majorInner else minorInner
-                  drawLine(
-                    color = if (isMajor) majorColor else minorColor,
-                    start = Offset(center.x + inner * cosVal, center.y + inner * sinVal),
-                    end = Offset(center.x + outer * cosVal, center.y + outer * sinVal),
-                    strokeWidth = if (isMajor) 2.2f else 1.2f,
-                  )
+            },
+            update = { map ->
+              if (pauseAnimations || isDraggingGesture) return@AndroidView
+              if (!isOsmAttachedAndReady || !isOsmMapRepositoryReady(map)) {
+                map.post {
+                  if (map.isAttachedToWindow && isOsmMapRepositoryReady(map) && !isOsmAttachedAndReady) {
+                    isOsmAttachedAndReady = true
+                  }
                 }
+                return@AndroidView
               }
-
-              if (isBroadcasting) {
-                if (!isLowTier && sonarWave1 > 0f) {
-                  val wave1R = maxR * sonarWave1
-                  val wave1Alpha = (1f - sonarWave1).coerceIn(0f, 1f) * 0.46f
-                  drawCircle(
-                    color = primaryColor.copy(alpha = wave1Alpha),
-                    radius = wave1R,
-                    center = center,
-                    style = Stroke(width = 3.0f),
-                  )
-                }
-                if (isHighTier && sonarWave2 > 0f) {
-                  val wave2R = maxR * sonarWave2
-                  val wave2Alpha = (1f - sonarWave2).coerceIn(0f, 1f) * 0.36f
-                  drawCircle(
-                    color = tertiaryColor.copy(alpha = wave2Alpha),
-                    radius = wave2R,
-                    center = center,
-                    style = Stroke(width = 2.2f),
-                  )
-                }
-
-                rotate(degrees = sweepAngle, pivot = center) {
-                  if (!isLowTier) {
-                    drawArc(
-                      brush = Brush.sweepGradient(
-                        colorStops = sweepStops,
-                        center = center,
-                      ),
-                      startAngle = -80f,
-                      sweepAngle = 82f,
-                      useCenter = true,
-                      topLeft = Offset(center.x - maxR, center.y - maxR),
-                      size = androidx.compose.ui.geometry.Size(maxR * 2f, maxR * 2f),
+              val signature = Triple(userLat, userLon, targetZoom)
+              if (lastAppliedOsmSignature != signature) {
+                lastAppliedOsmSignature = signature
+                runCatching {
+                  if (isLowTier) {
+                    map.controller.setZoom(targetZoom)
+                    map.controller.setCenter(GeoPoint(userLat, userLon))
+                  } else {
+                    map.controller.animateTo(
+                      GeoPoint(userLat, userLon),
+                      targetZoom,
+                      if (isHighTier) 280L else 150L,
                     )
                   }
-                  drawLine(
-                    color = primaryColor.copy(alpha = if (isLowTier) 0.72f else 0.92f),
-                    start = center,
-                    end = Offset(center.x + maxR - 8f, center.y),
-                    strokeWidth = if (isLowTier) 2.5f else 3f,
-                    cap = StrokeCap.Round,
-                  )
                 }
               }
+            },
+            modifier = Modifier
+              .fillMaxSize()
+              .graphicsLayer {
+                alpha = interpolateRevealTriple(scaleProgressAnim.value).first
+              },
+          )
+        }
 
-              // Center beacon aura
+        // Precalcular recursos del Canvas fuera de DrawScope
+        val orbitDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(18f, 14f, 6f, 14f), 0f) }
+        val rangeDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f) }
+        val compassUnitTicks = remember(radarStyle, isLowTier) {
+          if (!isLowTier && (radarStyle == "compass" || radarStyle == "neon")) {
+            val step = if (radarStyle == "compass") 15 else 30
+            (0 until 360 step step).map { deg ->
+              val rad = Math.toRadians(deg.toDouble())
+              Triple(cos(rad).toFloat(), sin(rad).toFloat(), deg % 45 == 0)
+            }
+          } else {
+            emptyList()
+          }
+        }
+        val sweepStops = remember(primaryColor, radarStyle) {
+          arrayOf(
+            0.0f to primaryColor.copy(alpha = if (radarStyle == "neon") 0.42f else 0.24f),
+            0.18f to primaryColor.copy(alpha = 0.08f),
+            0.24f to Color.Transparent,
+            1.0f to Color.Transparent,
+          )
+        }
+        val veilColorsBuffer = remember {
+          ArrayList<Color>(3).apply {
+            add(Color.Transparent)
+            add(Color.Transparent)
+            add(Color.Transparent)
+          }
+        }
+        val veilMidColor = remember(primaryColor, radarStyle) {
+          primaryColor.copy(alpha = if (radarStyle == "neon") 0.14f else 0.08f)
+        }
+
+        // Capa estética del radar + borde en un solo Canvas ligero
+        Canvas(modifier = Modifier.fillMaxSize()) {
+          val center = Offset(size.width / 2f, size.height / 2f)
+          val maxR = min(size.width, size.height) / 2f
+          val sweepAngle = sweepAngleState.value
+          val sonarWave1 = sonarWave1State.value
+          val sonarWave2 = sonarWave2State.value
+          val pulseBreath = pulseBreathState.value
+          val outerOrbitAngle = outerOrbitAngleState.value
+          val (_, veilOuterA, veilInnerA) = interpolateRevealTriple(scaleProgressAnim.value)
+
+          veilColorsBuffer[0] = surfaceContainer.copy(alpha = veilInnerA)
+          veilColorsBuffer[1] = veilMidColor
+          veilColorsBuffer[2] = surfaceContainer.copy(alpha = veilOuterA)
+
+          drawRect(
+            brush = Brush.radialGradient(
+              colors = veilColorsBuffer,
+              center = center,
+              radius = maxR * 1.15f,
+            ),
+          )
+
+          if (isHighTier) {
+            rotate(degrees = outerOrbitAngle, pivot = center) {
               drawCircle(
-                color = primaryColor.copy(alpha = 0.22f),
-                radius = 27f * pulseBreath,
+                color = tertiaryColor.copy(alpha = if (radarStyle == "neon") 0.48f else 0.28f),
+                radius = maxR - 6f,
                 center = center,
+                style = Stroke(
+                  width = 2.5f,
+                  cap = StrokeCap.Round,
+                  pathEffect = orbitDashEffect,
+                ),
+              )
+            }
+          }
+
+          val ringCount = 3
+          val ringColor = primaryColor.copy(alpha = if (radarStyle == "neon") 0.36f else 0.24f)
+          for (i in 1..ringCount) {
+            val r = maxR * (i / 3.25f)
+            drawCircle(
+              color = ringColor,
+              radius = r,
+              center = center,
+              style = Stroke(
+                width = if (i == ringCount) 2f else 1.4f,
+                pathEffect = if (radarStyle == "classic" && i < ringCount) rangeDashEffect else null,
+              ),
+            )
+          }
+
+          val crosshairColor = outlineVariant.copy(alpha = 0.42f)
+          drawLine(
+            color = crosshairColor,
+            start = Offset(center.x, center.y - maxR + 14f),
+            end = Offset(center.x, center.y + maxR - 14f),
+            strokeWidth = 1.2f,
+          )
+          drawLine(
+            color = crosshairColor,
+            start = Offset(center.x - maxR + 14f, center.y),
+            end = Offset(center.x + maxR - 14f, center.y),
+            strokeWidth = 1.2f,
+          )
+
+          if (compassUnitTicks.isNotEmpty()) {
+            val outer = maxR - 10f
+            val majorInner = maxR - 22f
+            val minorInner = maxR - 15f
+            val majorColor = primaryColor.copy(alpha = 0.72f)
+            val minorColor = primaryColor.copy(alpha = 0.32f)
+            compassUnitTicks.forEach { (cosVal, sinVal, isMajor) ->
+              val inner = if (isMajor) majorInner else minorInner
+              drawLine(
+                color = if (isMajor) majorColor else minorColor,
+                start = Offset(center.x + inner * cosVal, center.y + inner * sinVal),
+                end = Offset(center.x + outer * cosVal, center.y + outer * sinVal),
+                strokeWidth = if (isMajor) 2.2f else 1.2f,
+              )
+            }
+          }
+
+          if (isBroadcasting) {
+            if (!isLowTier && sonarWave1 > 0f) {
+              val wave1R = maxR * sonarWave1
+              val wave1Alpha = (1f - sonarWave1).coerceIn(0f, 1f) * 0.46f
+              drawCircle(
+                color = primaryColor.copy(alpha = wave1Alpha),
+                radius = wave1R,
+                center = center,
+                style = Stroke(width = 3.0f),
+              )
+            }
+            if (isHighTier && sonarWave2 > 0f) {
+              val wave2R = maxR * sonarWave2
+              val wave2Alpha = (1f - sonarWave2).coerceIn(0f, 1f) * 0.36f
+              drawCircle(
+                color = tertiaryColor.copy(alpha = wave2Alpha),
+                radius = wave2R,
+                center = center,
+                style = Stroke(width = 2.2f),
               )
             }
 
-            // Cardinal markers N / E / S / O
-            Text(
-              text = "N",
-              style = MaterialTheme.typography.labelSmall,
-              fontWeight = FontWeight.Bold,
-              color = primaryColor,
-              modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 8.dp),
-            )
-            Text(
-              text = "S",
-              style = MaterialTheme.typography.labelSmall,
-              color = onSurface.copy(alpha = 0.68f),
-              modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 8.dp),
-            )
-            Text(
-              text = "O",
-              style = MaterialTheme.typography.labelSmall,
-              color = onSurface.copy(alpha = 0.68f),
-              modifier = Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = 10.dp),
-            )
-            Text(
-              text = "E",
-              style = MaterialTheme.typography.labelSmall,
-              color = onSurface.copy(alpha = 0.68f),
-              modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 10.dp),
-            )
+            rotate(degrees = sweepAngle, pivot = center) {
+              if (!isLowTier) {
+                drawArc(
+                  brush = Brush.sweepGradient(
+                    colorStops = sweepStops,
+                    center = center,
+                  ),
+                  startAngle = -80f,
+                  sweepAngle = 82f,
+                  useCenter = true,
+                  topLeft = Offset(center.x - maxR, center.y - maxR),
+                  size = androidx.compose.ui.geometry.Size(maxR * 2f, maxR * 2f),
+                )
+              }
+              drawLine(
+                color = primaryColor.copy(alpha = if (isLowTier) 0.72f else 0.92f),
+                start = center,
+                end = Offset(center.x + maxR - 8f, center.y),
+                strokeWidth = if (isLowTier) 2.5f else 3f,
+                cap = StrokeCap.Round,
+              )
+            }
+          }
 
-            // Mission pins plotted on the radar
-            plottedMissions.forEach { item ->
-              androidx.compose.runtime.key(item.mission.id) {
-                val (dx, dy) = remember(item.distanceMeters, item.bearingDegrees, searchRadiusMeters, radarRadiusPx) {
-                  val normalizedDist = (item.distanceMeters / searchRadiusMeters.toFloat()).coerceIn(0.18f, 0.84f)
-                  val angleRad = Math.toRadians((item.bearingDegrees - 90f).toDouble())
-                  val rPx = (radarRadiusPx * 0.80f) * normalizedDist
-                  (rPx * cos(angleRad)).roundToInt() to (rPx * sin(angleRad)).roundToInt()
-                }
+          drawCircle(
+            color = primaryColor.copy(alpha = 0.22f),
+            radius = 27f * pulseBreath,
+            center = center,
+          )
+        }
 
-                val isAccepted = item.mission.id == activeAcceptedMissionId
-                val isSwept by remember(item.bearingDegrees, isHighTier, isBroadcasting) {
-                  derivedStateOf {
-                    isHighTier && isBroadcasting && isAngleNearSweep(item.bearingDegrees, sweepAngleState.value)
-                  }
-                }
-                val pinScaleValue = if (isHighTier) {
-                  val animScale by animateFloatAsState(
-                    targetValue = when {
-                      isAccepted -> 1.22f
-                      isSwept && !item.isCompletedByMe -> 1.22f
-                      !item.isCompletedByMe -> 1.0f
-                      else -> 0.88f
-                    },
-                    animationSpec = spring(dampingRatio = 0.58f, stiffness = 420f),
-                    label = "missionPinScale",
-                  )
-                  animScale
-                } else {
-                  if (isAccepted) 1.12f else if (item.isCompletedByMe) 0.90f else 1.0f
-                }
+        // Borde ligero separado (sin SweepGradient shader en Media/Baja)
+        Box(
+          modifier = Modifier
+            .fillMaxSize()
+            .let { baseMod ->
+              val cPx = currentCornerPx()
+              val shape = RoundedCornerShape(cPx)
+              val borderWidth = if (radarScale == RadarScaleLevel.SCALE_100) 2.2.dp else 2.dp
+              if (isHighTier) {
+                baseMod.border(width = borderWidth, brush = highBorderBrush, shape = shape)
+              } else {
+                baseMod.border(width = 1.5.dp, color = borderStrokeColor, shape = shape)
+              }
+            },
+        )
 
-                val pinColor = remember(item.isCompletedByMe, item.mission.category, primaryColor, secondaryColor, tertiaryColor) {
-                  if (item.isCompletedByMe) {
-                    secondaryColor.copy(alpha = 0.60f)
-                  } else {
-                    MissionIcons.accentColorForMission(item.mission, primaryColor, tertiaryColor)
-                  }
-                }
-                val pinIcon = remember(item.mission.iconKey, item.mission.missionType, item.mission.category) {
-                  MissionIcons.iconForMission(item.mission)
-                }
-                val currentItem by rememberUpdatedState(item)
+        // Cardinal markers N / E / S / O
+        Text(
+          text = "N",
+          style = MaterialTheme.typography.labelSmall,
+          fontWeight = FontWeight.Bold,
+          color = primaryColor,
+          modifier = Modifier
+            .align(Alignment.TopCenter)
+            .padding(top = 8.dp),
+        )
+        Text(
+          text = "S",
+          style = MaterialTheme.typography.labelSmall,
+          color = onSurface.copy(alpha = 0.68f),
+          modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = 8.dp),
+        )
+        Text(
+          text = "O",
+          style = MaterialTheme.typography.labelSmall,
+          color = onSurface.copy(alpha = 0.68f),
+          modifier = Modifier
+            .align(Alignment.CenterStart)
+            .padding(start = 10.dp),
+        )
+        Text(
+          text = "E",
+          style = MaterialTheme.typography.labelSmall,
+          color = onSurface.copy(alpha = 0.68f),
+          modifier = Modifier
+            .align(Alignment.CenterEnd)
+            .padding(end = 10.dp),
+        )
 
+        // Mission pins: offset dinámico sin recomponer ni lanzar 10 springs por cada barrido
+        plottedMissions.forEach { spec ->
+          val item = spec.item
+          key(item.mission.id) {
+            val isAccepted = item.mission.id == activeAcceptedMissionId
+            val pinColor = remember(item.isCompletedByMe, item.mission.category, primaryColor, secondaryColor, tertiaryColor) {
+              if (item.isCompletedByMe) {
+                secondaryColor.copy(alpha = 0.60f)
+              } else {
+                MissionIcons.accentColorForMission(item.mission, primaryColor, tertiaryColor)
+              }
+            }
+            val pinIcon = remember(item.mission.iconKey, item.mission.missionType, item.mission.category) {
+              MissionIcons.iconForMission(item.mission)
+            }
+            val currentItem by rememberUpdatedState(item)
+            val pinScale = when {
+              isAccepted -> 1.15f
+              item.isCompletedByMe -> 0.88f
+              else -> 1.0f
+            }
+
+            Box(
+              modifier = Modifier
+                .align(Alignment.Center)
+                .offset {
+                  val rPx = currentRadarRadiusPx()
+                  IntOffset((spec.unitX * rPx).roundToInt(), (spec.unitY * rPx).roundToInt())
+                }
+                .size(48.dp)
+                .graphicsLayer {
+                  scaleX = pinScale
+                  scaleY = pinScale
+                }
+                .clickable {
+                  HapticFeedbackHelper.performRadarPinTap(context)
+                  onMissionClick(currentItem)
+                }
+                .testTag("radar_mission_pin_${item.mission.id}")
+                .semantics { contentDescription = "Misión ${item.mission.title}" },
+              contentAlignment = Alignment.Center,
+            ) {
+              if (!item.isCompletedByMe && item.isWithinProximity) {
                 Box(
                   modifier = Modifier
-                    .align(Alignment.Center)
-                    .offset { IntOffset(dx, dy) }
-                    .size(48.dp)
-                    .graphicsLayer {
-                      scaleX = pinScaleValue
-                      scaleY = pinScaleValue
-                    }
-                    .clickable {
-                      HapticFeedbackHelper.performRadarPinTap(context)
-                      onMissionClick(currentItem)
-                    }
-                    .testTag("radar_mission_pin_${item.mission.id}")
-                    .semantics { contentDescription = "Misión ${item.mission.title}" },
-                  contentAlignment = Alignment.Center,
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(pinColor.copy(alpha = 0.34f)),
+                )
+              }
+              Box(contentAlignment = Alignment.TopEnd) {
+                Surface(
+                  shape = CircleShape,
+                  color = pinColor,
+                  shadowElevation = if (isHighTier) 4.dp else 0.dp,
+                  modifier = Modifier
+                    .size(26.dp)
+                    .border(
+                      width = if (item.isWithinProximity) 2.dp else 1.4.dp,
+                      color = Color.White.copy(alpha = if (item.isWithinProximity) 1f else 0.78f),
+                      shape = CircleShape,
+                    ),
                 ) {
-                  if (!item.isCompletedByMe && (isSwept || item.isWithinProximity)) {
+                  Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                      imageVector = pinIcon,
+                      contentDescription = null,
+                      tint = Color.White,
+                      modifier = Modifier.size(14.dp),
+                    )
+                  }
+                }
+                if (!item.isWithinProximity && !item.isCompletedByMe) {
+                  Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.size(12.dp),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Rounded.Lock,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.onSurface,
+                      modifier = Modifier.padding(2.dp),
+                    )
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Nearby online players plotted on the radar
+        plottedPlayers.forEach { spec ->
+          val playerItem = spec.item
+          key(playerItem.profile.userId) {
+            val currentPlayerItem by rememberUpdatedState(playerItem)
+            val playerDotColor = spec.dotColor
+
+            Box(
+              modifier = Modifier
+                .align(Alignment.Center)
+                .offset {
+                  val rPx = currentRadarRadiusPx()
+                  IntOffset((spec.unitX * rPx).roundToInt(), (spec.unitY * rPx).roundToInt())
+                }
+                .size(48.dp)
+                .clickable {
+                  HapticFeedbackHelper.performRadarPinTap(context)
+                  onPlayerClick(currentPlayerItem)
+                }
+                .testTag("radar_player_dot_${playerItem.profile.userId}"),
+              contentAlignment = Alignment.Center,
+            ) {
+              Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(contentAlignment = Alignment.Center) {
+                  if (playerItem.profile.seekingHelp) {
                     Box(
                       modifier = Modifier
                         .size(34.dp)
-                        .clip(CircleShape)
-                        .background(pinColor.copy(alpha = if (item.isWithinProximity) 0.34f else 0.24f)),
-                    )
-                  }
-                  Box(contentAlignment = Alignment.TopEnd) {
-                    Surface(
-                      shape = CircleShape,
-                      color = pinColor,
-                      shadowElevation = 4.dp,
-                      modifier = Modifier
-                        .size(26.dp)
-                        .border(
-                          width = if (item.isWithinProximity) 2.dp else 1.4.dp,
-                          color = Color.White.copy(alpha = if (item.isWithinProximity) 1f else 0.78f),
-                          shape = CircleShape,
-                        ),
-                    ) {
-                      Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                          imageVector = pinIcon,
-                          contentDescription = null,
-                          tint = Color.White,
-                          modifier = Modifier.size(14.dp),
-                        )
-                      }
-                    }
-                    if (!item.isWithinProximity && !item.isCompletedByMe) {
-                      Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.surface,
-                        modifier = Modifier.size(12.dp),
-                      ) {
-                        Icon(
-                          imageVector = Icons.Rounded.Lock,
-                          contentDescription = null,
-                          tint = MaterialTheme.colorScheme.onSurface,
-                          modifier = Modifier.padding(2.dp),
-                        )
-                      }
-                    }
-                  }
-                }
-              }
-            }
-
-            // Nearby online players plotted on the radar
-            plottedPlayers.forEachIndexed { idx, playerItem ->
-              androidx.compose.runtime.key(playerItem.profile.userId) {
-                val (dx, dy, bearing) = remember(playerItem.distanceMeters, playerItem.bearingDegrees, idx, searchRadiusMeters, radarRadiusPx) {
-                  val normalizedDist = if (playerItem.distanceMeters > 0f) {
-                    (playerItem.distanceMeters / searchRadiusMeters.toFloat()).coerceIn(0.20f, 0.84f)
-                  } else {
-                    0.38f + (idx * 0.08f).coerceAtMost(0.42f)
-                  }
-                  val b = if (playerItem.distanceMeters > 0f) {
-                    playerItem.bearingDegrees
-                  } else {
-                    (idx * 55f) + 25f
-                  }
-                  val angleRad = Math.toRadians((b - 90f).toDouble())
-                  val rPx = (radarRadiusPx * 0.80f) * normalizedDist
-                  Triple((rPx * cos(angleRad)).roundToInt(), (rPx * sin(angleRad)).roundToInt(), b)
-                }
-
-                val isSwept by remember(bearing, isHighTier, isBroadcasting) {
-                  derivedStateOf {
-                    isHighTier && isBroadcasting && isAngleNearSweep(bearing, sweepAngleState.value)
-                  }
-                }
-                val dotScaleValue = if (isHighTier) {
-                  val animScale by animateFloatAsState(
-                    targetValue = if (isSwept || playerItem.profile.seekingHelp) 1.15f else 1.0f,
-                    animationSpec = spring(dampingRatio = 0.58f, stiffness = 400f),
-                    label = "playerDotScale",
-                  )
-                  animScale
-                } else {
-                  1.0f
-                }
-
-                val playerDotColor = remember(playerItem.profile.avatarColorHex, primaryColor) {
-                  runCatching {
-                    Color(android.graphics.Color.parseColor(playerItem.profile.avatarColorHex))
-                  }.getOrElse { primaryColor }
-                }
-                val currentPlayerItem by rememberUpdatedState(playerItem)
-
-                Box(
-                  modifier = Modifier
-                    .align(Alignment.Center)
-                    .offset { IntOffset(dx, dy) }
-                    .size(48.dp)
-                    .graphicsLayer {
-                      scaleX = dotScaleValue
-                      scaleY = dotScaleValue
-                    }
-                    .clickable {
-                      HapticFeedbackHelper.performRadarPinTap(context)
-                      onPlayerClick(currentPlayerItem)
-                    }
-                    .testTag("radar_player_dot_${playerItem.profile.userId}"),
-                  contentAlignment = Alignment.Center,
-                ) {
-                  Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(contentAlignment = Alignment.Center) {
-                      if (playerItem.profile.seekingHelp || isSwept) {
-                        Box(
-                          modifier = Modifier
-                            .size(34.dp)
-                            .graphicsLayer {
+                        .let { mod ->
+                          if (isHighTier) {
+                            mod.graphicsLayer {
                               val b = pulseBreathState.value
                               scaleX = b
                               scaleY = b
                             }
-                            .clip(CircleShape)
-                            .background(
-                              (if (playerItem.profile.seekingHelp) tertiaryColor else playerDotColor)
-                                .copy(alpha = 0.28f),
-                            ),
-                        )
-                      }
-                      Surface(
-                        shape = CircleShape,
-                        color = playerDotColor,
-                        shadowElevation = 4.dp,
-                        modifier = Modifier
-                          .size(28.dp)
-                          .border(
-                            width = 2.dp,
-                            color = if (playerItem.profile.seekingHelp) tertiaryColor else Color.White,
-                            shape = CircleShape,
-                          ),
-                      ) {
-                        Box(contentAlignment = Alignment.Center) {
-                          Icon(
-                            imageVector = if (playerItem.profile.seekingHelp) {
-                              Icons.Rounded.VolunteerActivism
-                            } else {
-                              Icons.Rounded.Person
-                            },
-                            contentDescription = playerItem.profile.callsign,
-                            tint = Color.White,
-                            modifier = Modifier.size(15.dp),
-                          )
+                          } else {
+                            mod
+                          }
                         }
-                      }
-                    }
-                    Surface(
-                      color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-                      shape = RoundedCornerShape(6.dp),
-                    ) {
-                      Text(
-                        text = playerItem.profile.callsign.take(8),
-                        style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                        .clip(CircleShape)
+                        .background(tertiaryColor.copy(alpha = 0.28f)),
+                    )
+                  }
+                  Surface(
+                    shape = CircleShape,
+                    color = playerDotColor,
+                    shadowElevation = if (isHighTier) 4.dp else 0.dp,
+                    modifier = Modifier
+                      .size(28.dp)
+                      .border(
+                        width = 2.dp,
+                        color = if (playerItem.profile.seekingHelp) tertiaryColor else Color.White,
+                        shape = CircleShape,
+                      ),
+                  ) {
+                    Box(contentAlignment = Alignment.Center) {
+                      Icon(
+                        imageVector = if (playerItem.profile.seekingHelp) {
+                          Icons.Rounded.VolunteerActivism
+                        } else {
+                          Icons.Rounded.Person
+                        },
+                        contentDescription = playerItem.profile.callsign,
+                        tint = Color.White,
+                        modifier = Modifier.size(15.dp),
                       )
                     }
                   }
                 }
+                Surface(
+                  color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                  shape = RoundedCornerShape(6.dp),
+                ) {
+                  Text(
+                    text = playerItem.profile.callsign.take(8),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                  )
+                }
               }
             }
+          }
+        }
 
-            // Center User Avatar Marker
-            Surface(
-              shape = CircleShape,
-              color = primaryColor,
-              shadowElevation = 6.dp,
-              modifier = Modifier
-                .align(Alignment.Center)
-                .size(42.dp)
-                .graphicsLayer {
-                  val s = if (!isLowTier && isBroadcasting) 0.96f + (pulseBreathState.value - 0.92f) * 0.28f else 1f
+        // Center User Avatar Marker
+        Surface(
+          shape = CircleShape,
+          color = primaryColor,
+          shadowElevation = if (isHighTier) 6.dp else 0.dp,
+          modifier = Modifier
+            .align(Alignment.Center)
+            .size(42.dp)
+            .let { mod ->
+              if (isHighTier && isBroadcasting) {
+                mod.graphicsLayer {
+                  val s = 0.96f + (pulseBreathState.value - 0.92f) * 0.28f
                   scaleX = s
                   scaleY = s
                 }
-                .border(3.dp, MaterialTheme.colorScheme.surface, CircleShape),
-            ) {
-              Box(contentAlignment = Alignment.Center) {
-                Icon(
-                  imageVector = if (hasLocationPermission) Icons.Rounded.MyLocation else Icons.Rounded.Explore,
-                  contentDescription = myProfile?.callsign ?: "Tú",
-                  tint = MaterialTheme.colorScheme.onPrimary,
-                  modifier = Modifier.size(20.dp),
-                )
+              } else {
+                mod
               }
             }
-
+            .border(3.dp, MaterialTheme.colorScheme.surface, CircleShape),
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = if (hasLocationPermission) Icons.Rounded.MyLocation else Icons.Rounded.Explore,
+              contentDescription = myProfile?.callsign ?: "Tú",
+              tint = MaterialTheme.colorScheme.onPrimary,
+              modifier = Modifier.size(20.dp),
+            )
           }
         }
       }
 
-        // Barra flotante al tocar el radar: "Expandir mapa" + segundo botón de Lupa (50/75/100) totalmente separados
-        // Ubicada en el contenedor exterior para no recortarse cuando el radar está en vista 50 (212.dp)
-        if (isLowTier) {
-          if (showExpandHint) {
-            RadarFloatingActionPair(
-              radarScale = radarScale,
-              onExpandMap = {
-                showExpandHint = false
-                onExpandMap()
-              },
-              onCycleScale = {
-                onRadarScaleChange(radarScale.nextScale())
-              },
-              modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 16.dp),
-            )
-          }
-        } else {
-          androidx.compose.animation.AnimatedVisibility(
-            visible = showExpandHint,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier
-              .align(Alignment.BottomCenter)
-              .padding(bottom = 16.dp),
-          ) {
-            RadarFloatingActionPair(
-              radarScale = radarScale,
-              onExpandMap = {
-                showExpandHint = false
-                onExpandMap()
-              },
-              onCycleScale = {
-                onRadarScaleChange(radarScale.nextScale())
-              },
-            )
-          }
-        }
-
-        // Botones de esquina superior derecha separados sin superponerse:
-        // [Lupa 50/75/100]  +  [Expandir mapa]
-        Row(
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-          verticalAlignment = Alignment.CenterVertically,
-          modifier = Modifier
-            .align(Alignment.TopEnd)
-            .padding(4.dp),
-        ) {
-          FilledTonalIconButton(
-            onClick = {
-              isDragging50To75 = false
-              onRadarScaleChange(radarScale.nextScale())
-            },
-            modifier = Modifier
-              .graphicsLayer { alpha = lupaButtonAlphaState.value }
-              .minimumInteractiveComponentSize()
-              .testTag("radar_scale_lupa_button"),
-          ) {
-            Box(contentAlignment = Alignment.Center) {
-              Icon(
-                imageVector = Icons.Rounded.Search,
-                contentDescription = "Encoger o expandir vista del radar (${radarScale.level})",
-              )
-              Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                  .align(Alignment.BottomEnd)
-                  .padding(2.dp),
-              ) {
-                Text(
-                  text = radarScale.level.toString(),
-                  style = MaterialTheme.typography.labelSmall,
-                  fontSize = 8.sp,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.onPrimary,
-                  modifier = Modifier.padding(horizontal = 3.dp),
-                )
-              }
-            }
-          }
-
-          FilledTonalIconButton(
-            onClick = {
+      // Barra flotante al tocar el radar: "Expandir mapa" + segundo botón de Lupa (50/75/100) totalmente separados
+      if (isLowTier) {
+        if (showExpandHint) {
+          RadarFloatingActionPair(
+            radarScale = radarScale,
+            useElevation = false,
+            onExpandMap = {
               showExpandHint = false
               onExpandMap()
             },
+            onCycleScale = {
+              onRadarScaleChange(radarScale.nextScale())
+            },
             modifier = Modifier
-              .minimumInteractiveComponentSize()
-              .testTag("radar_expand_button"),
-          ) {
+              .align(Alignment.BottomCenter)
+              .padding(bottom = 16.dp),
+          )
+        }
+      } else {
+        androidx.compose.animation.AnimatedVisibility(
+          visible = showExpandHint,
+          enter = fadeIn(tween(150)),
+          exit = fadeOut(tween(120)),
+          modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = 16.dp),
+        ) {
+          RadarFloatingActionPair(
+            radarScale = radarScale,
+            useElevation = isHighTier,
+            onExpandMap = {
+              showExpandHint = false
+              onExpandMap()
+            },
+            onCycleScale = {
+              onRadarScaleChange(radarScale.nextScale())
+            },
+          )
+        }
+      }
+
+      // Botones de esquina superior derecha separados sin superponerse:
+      // [Lupa 50/75/100]  +  [Expandir mapa]
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+          .align(Alignment.TopEnd)
+          .padding(4.dp),
+      ) {
+        FilledTonalIconButton(
+          onClick = {
+            isDragging50To75 = false
+            onRadarScaleChange(radarScale.nextScale())
+          },
+          modifier = Modifier
+            .graphicsLayer {
+              alpha = if (isDragging50To75 && radarScale != RadarScaleLevel.SCALE_100) 0.25f else 1f
+            }
+            .minimumInteractiveComponentSize()
+            .testTag("radar_scale_lupa_button"),
+        ) {
+          Box(contentAlignment = Alignment.Center) {
             Icon(
-              imageVector = Icons.Rounded.OpenInFull,
-              contentDescription = "Expandir mapa del radar",
+              imageVector = Icons.Rounded.Search,
+              contentDescription = "Encoger o expandir vista del radar (${radarScale.level})",
             )
+            Surface(
+              shape = CircleShape,
+              color = MaterialTheme.colorScheme.primary,
+              modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(2.dp),
+            ) {
+              Text(
+                text = radarScale.level.toString(),
+                style = MaterialTheme.typography.labelSmall,
+                fontSize = 8.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.padding(horizontal = 3.dp),
+              )
+            }
           }
         }
+
+        FilledTonalIconButton(
+          onClick = {
+            showExpandHint = false
+            onExpandMap()
+          },
+          modifier = Modifier
+            .minimumInteractiveComponentSize()
+            .testTag("radar_expand_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Rounded.OpenInFull,
+            contentDescription = "Expandir mapa del radar",
+          )
+        }
+      }
     }
 
     Spacer(modifier = Modifier.height(10.dp))
@@ -1197,8 +1307,12 @@ fun RoundRadarMap(
           Box(
             modifier = Modifier
               .size(8.dp)
-              .graphicsLayer {
-                alpha = if (isBroadcasting) liveDotAlphaState.value else 1f
+              .let { mod ->
+                if (isHighTier && isBroadcasting) {
+                  mod.graphicsLayer { alpha = liveDotAlphaState.value }
+                } else {
+                  mod
+                }
               }
               .clip(CircleShape)
               .background(
@@ -1227,6 +1341,7 @@ fun RoundRadarMap(
 @Composable
 private fun RadarFloatingActionPair(
   radarScale: RadarScaleLevel,
+  useElevation: Boolean,
   onExpandMap: () -> Unit,
   onCycleScale: () -> Unit,
   modifier: Modifier = Modifier,
@@ -1236,12 +1351,12 @@ private fun RadarFloatingActionPair(
     verticalAlignment = Alignment.CenterVertically,
     modifier = modifier,
   ) {
-    ExpandMapActionPill(onClick = onExpandMap)
+    ExpandMapActionPill(useElevation = useElevation, onClick = onExpandMap)
 
     Surface(
       shape = CircleShape,
       color = MaterialTheme.colorScheme.secondaryContainer,
-      shadowElevation = 8.dp,
+      shadowElevation = if (useElevation) 8.dp else 0.dp,
       modifier = Modifier
         .minimumInteractiveComponentSize()
         .clip(CircleShape)
@@ -1272,13 +1387,14 @@ private fun RadarFloatingActionPair(
 
 @Composable
 private fun ExpandMapActionPill(
+  useElevation: Boolean,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   Surface(
     shape = CircleShape,
     color = MaterialTheme.colorScheme.primary,
-    shadowElevation = 8.dp,
+    shadowElevation = if (useElevation) 8.dp else 0.dp,
     modifier = modifier
       .minimumInteractiveComponentSize()
       .clip(CircleShape)
@@ -1304,10 +1420,4 @@ private fun ExpandMapActionPill(
       )
     }
   }
-}
-
-private fun isAngleNearSweep(bearingDeg: Float, sweepDeg: Float): Boolean {
-  val canvasBearing = (bearingDeg - 90f + 360f) % 360f
-  val diff = abs(((sweepDeg - canvasBearing + 540f) % 360f) - 180f)
-  return diff < 34f
 }

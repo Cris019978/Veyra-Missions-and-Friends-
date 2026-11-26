@@ -115,6 +115,7 @@ fun RouletteTestScreen(
   stateManager: RouletteStateManager,
   onClose: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
+  animationTier: String = "high",
 ) {
   val uiState by stateManager.uiState.collectAsStateWithLifecycle()
 
@@ -128,6 +129,7 @@ fun RouletteTestScreen(
     onReset = stateManager::resetAll,
     onClose = onClose,
     modifier = modifier,
+    animationTier = animationTier,
   )
 }
 
@@ -143,6 +145,7 @@ fun RouletteTestScreenContent(
   onReset: () -> Unit,
   onClose: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
+  animationTier: String = "high",
 ) {
   val prizes = remember(uiState.prizeProbabilities) {
     if (uiState.prizeProbabilities.isNotEmpty()) {
@@ -243,6 +246,7 @@ fun RouletteTestScreenContent(
                   targetIndex = uiState.pendingTargetPrizeIndex,
                   lastWonPrizeId = uiState.lastWonRecord?.prize?.id,
                   isSpinning = uiState.isSpinning,
+                  animationTier = animationTier,
                 )
 
                 RouletteDisplayView.HORIZONTAL -> HorizontalRouletteTape(
@@ -251,6 +255,7 @@ fun RouletteTestScreenContent(
                   targetIndex = uiState.pendingTargetPrizeIndex,
                   lastWonPrizeId = uiState.lastWonRecord?.prize?.id,
                   isSpinning = uiState.isSpinning,
+                  animationTier = animationTier,
                 )
               }
 
@@ -313,6 +318,7 @@ fun RouletteTestScreenContent(
         item(key = "debug_panel") {
           RouletteDebugPanel(
             uiState = uiState,
+            animationTier = animationTier,
             onToggleExpand = onToggleDebugPanel,
             onSpinInstant = onSpinInstant,
             onSimulate10 = { onSimulateBatch(10) },
@@ -465,26 +471,34 @@ private fun ClassicRouletteWheel(
   targetIndex: Int,
   lastWonPrizeId: String?,
   isSpinning: Boolean,
+  animationTier: String = "high",
 ) {
+  val isLowTier = animationTier == "low"
+  val isHighTier = animationTier != "low" && animationTier != "medium"
   val wheelAngle = remember { Animatable(0f) }
 
-  LaunchedEffect(spinNonce) {
+  LaunchedEffect(spinNonce, animationTier) {
     if (spinNonce > 0L && prizes.isNotEmpty()) {
       val sweep = 360f / prizes.size
       val desiredMod = ((360f - (targetIndex * sweep)) % 360f + 360f) % 360f
       val currentMod = ((wheelAngle.value % 360f) + 360f) % 360f
       val deltaToTarget = ((desiredMod - currentMod) + 360f) % 360f
-      val extraSpins = 360f * 5f
       val subtleJitter = (((spinNonce % 5L).toInt() - 2) * (sweep * 0.11f))
-      val finalAngle = wheelAngle.value + extraSpins + deltaToTarget + subtleJitter
 
-      wheelAngle.animateTo(
-        targetValue = finalAngle,
-        animationSpec = tween(
-          durationMillis = 2100,
-          easing = CubicBezierEasing(0.10f, 0.88f, 0.18f, 1.0f),
-        ),
-      )
+      if (isLowTier) {
+        wheelAngle.snapTo(wheelAngle.value + deltaToTarget + subtleJitter)
+      } else {
+        val extraSpins = 360f * (if (isHighTier) 5f else 2f)
+        val durationMs = if (isHighTier) 2000 else 1050
+        val finalAngle = wheelAngle.value + extraSpins + deltaToTarget + subtleJitter
+        wheelAngle.animateTo(
+          targetValue = finalAngle,
+          animationSpec = tween(
+            durationMillis = durationMs,
+            easing = CubicBezierEasing(0.10f, 0.90f, 0.18f, 1.0f),
+          ),
+        )
+      }
     }
   }
 
@@ -627,17 +641,18 @@ private fun ClassicRouletteWheel(
     Canvas(modifier = Modifier.size(284.dp)) {
       val radius = size.minDimension / 2f - 14.dp.toPx()
       val center = Offset(size.width / 2f, size.height / 2f)
-      val haloRadius = radius + 16.dp.toPx()
-
-      drawCircle(
-        brush = Brush.radialGradient(
-          colors = haloColors,
-          center = center,
+      if (isHighTier) {
+        val haloRadius = radius + 16.dp.toPx()
+        drawCircle(
+          brush = Brush.radialGradient(
+            colors = haloColors,
+            center = center,
+            radius = haloRadius,
+          ),
           radius = haloRadius,
-        ),
-        radius = haloRadius,
-        center = center,
-      )
+          center = center,
+        )
+      }
 
       val hubRadius = 26.dp.toPx()
       drawCircle(color = hubBg, radius = hubRadius, center = center)
@@ -669,41 +684,53 @@ private fun HorizontalRouletteTape(
   targetIndex: Int,
   lastWonPrizeId: String?,
   isSpinning: Boolean,
+  animationTier: String = "high",
 ) {
+  val isLowTier = animationTier == "low"
+  val isHighTier = animationTier != "low" && animationTier != "medium"
   val density = LocalDensity.current
   val cardWidthDp = 126.dp
   val cardSpacingDp = 10.dp
   val stridePx = remember(density) { with(density) { (cardWidthDp + cardSpacingDp).toPx() } }
   val cardWidthPx = remember(density) { with(density) { cardWidthDp.toPx() } }
   val cycleSize = prizes.size.coerceAtLeast(1)
-  val totalSlots = cycleSize * 7
   val tapeOffsetPx = remember(cycleSize) { Animatable(cycleSize * stridePx) }
 
-  LaunchedEffect(spinNonce) {
+  LaunchedEffect(spinNonce, animationTier) {
     if (spinNonce > 0L && prizes.isNotEmpty()) {
       val currentSlotNormalized = ((tapeOffsetPx.value / stridePx).roundToInt() % cycleSize + cycleSize) % cycleSize
       val resetSlot = cycleSize + currentSlotNormalized
       tapeOffsetPx.snapTo(resetSlot * stridePx)
 
-      val destinationSlot = (cycleSize * 5) + targetIndex
-      tapeOffsetPx.animateTo(
-        targetValue = destinationSlot * stridePx,
-        animationSpec = tween(
-          durationMillis = 2100,
-          easing = CubicBezierEasing(0.10f, 0.90f, 0.16f, 1.0f),
-        ),
-      )
+      val extraCycles = when {
+        isLowTier -> 1
+        isHighTier -> 5
+        else -> 2
+      }
+      val destinationSlot = (cycleSize * extraCycles) + targetIndex
+      if (isLowTier) {
+        tapeOffsetPx.snapTo(destinationSlot * stridePx)
+      } else {
+        val durationMs = if (isHighTier) 2000 else 1050
+        tapeOffsetPx.animateTo(
+          targetValue = destinationSlot * stridePx,
+          animationSpec = tween(
+            durationMillis = durationMs,
+            easing = CubicBezierEasing(0.10f, 0.90f, 0.18f, 1.0f),
+          ),
+        )
+      }
     }
   }
 
-  // OPT: derivedStateOf solo invalida cuando el carril cruza al siguiente ítem en lugar de hacerlo cada frame.
-  val centerSlotIndex by remember(stridePx, totalSlots) {
+  // Pool fijo de 9 ranuras recicladas: nunca agrega ni destruye nodos Composable durante el giro.
+  val poolSize = 9
+  val halfPool = poolSize / 2
+  val centerSlotIndex by remember(stridePx) {
     derivedStateOf {
-      (tapeOffsetPx.value / stridePx).roundToInt().coerceIn(0, totalSlots - 1)
+      (tapeOffsetPx.value / stridePx).roundToInt()
     }
   }
-  val firstVisible = (centerSlotIndex - 4).coerceAtLeast(0)
-  val lastVisible = (centerSlotIndex + 4).coerceAtMost(totalSlots - 1)
   val offsetReader: () -> Float = remember(tapeOffsetPx) { { tapeOffsetPx.value } }
 
   Column(
@@ -724,21 +751,31 @@ private fun HorizontalRouletteTape(
       val viewportWidthPx = with(density) { maxWidth.toPx() }
       val viewportCenterShiftPx = (viewportWidthPx - cardWidthPx) / 2f
 
-      for (slotIdx in firstVisible..lastVisible) {
-        // OPT: key(slotIdx) y lectura de offsetReader() dentro de graphicsLayer mueven las tarjetas a 60fps sin recomponerlas.
-        key(slotIdx) {
-          val prize = prizes[slotIdx % cycleSize]
+      for (poolIdx in 0 until poolSize) {
+        key(poolIdx) {
+          val approxMod = ((centerSlotIndex % poolSize) + poolSize) % poolSize
+          val delta = ((poolIdx - approxMod + halfPool + poolSize) % poolSize) - halfPool
+          val slotIdx = centerSlotIndex + delta
+          val prizeIdx = ((slotIdx % cycleSize) + cycleSize) % cycleSize
+          val prize = prizes[prizeIdx]
           val isCenteredWinner = !isSpinning && lastWonPrizeId == prize.id && slotIdx == centerSlotIndex
           val slotBasePx = slotIdx * stridePx + viewportCenterShiftPx
 
           TapePrizeTile(
             prize = prize,
             isHighlighted = isCenteredWinner,
+            useElevation = isHighTier,
             modifier = Modifier
               .width(cardWidthDp)
               .fillMaxHeight()
               .padding(vertical = 12.dp)
-              .graphicsLayer { translationX = slotBasePx - offsetReader() },
+              .graphicsLayer {
+                translationX = slotBasePx - offsetReader()
+                if (isHighTier && isCenteredWinner) {
+                  scaleX = 1.04f
+                  scaleY = 1.04f
+                }
+              },
           )
         }
       }
@@ -773,10 +810,10 @@ private fun HorizontalRouletteTape(
 private fun TapePrizeTile(
   prize: RoulettePrize,
   isHighlighted: Boolean,
+  useElevation: Boolean,
   modifier: Modifier = Modifier,
 ) {
   val primaryColor = MaterialTheme.colorScheme.primary
-  // OPT: Cachear BorderStroke, etiqueta superior e ícono evita asignaciones repetidas al entrar en ventana.
   val borderStroke = remember(isHighlighted, prize.isHighRisk, prize.rarity, primaryColor) {
     val borderColor = when {
       isHighlighted -> primaryColor
@@ -794,7 +831,7 @@ private fun TapePrizeTile(
     shape = RoundedCornerShape(14.dp),
     color = MaterialTheme.colorScheme.surface,
     border = borderStroke,
-    shadowElevation = if (isHighlighted) 6.dp else 1.dp,
+    shadowElevation = if (useElevation && isHighlighted) 6.dp else 0.dp,
     modifier = modifier,
   ) {
     Column(
@@ -1098,12 +1135,14 @@ private fun SpinMissionsCard(missions: List<RouletteSpinMission>) {
 @Composable
 private fun RouletteDebugPanel(
   uiState: RouletteUiState,
+  animationTier: String = "high",
   onToggleExpand: () -> Unit,
   onSpinInstant: () -> Unit,
   onSimulate10: () -> Unit,
   onSimulate50: () -> Unit,
   onReset: () -> Unit,
 ) {
+  val isLowTier = animationTier == "low"
   Card(
     colors = CardDefaults.cardColors(
       containerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -1199,7 +1238,7 @@ private fun RouletteDebugPanel(
         }
       }
 
-      AnimatedVisibility(visible = uiState.debugPanelExpanded) {
+      val renderDebugBody: @Composable () -> Unit = {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
           HorizontalDivider()
           Text(
@@ -1209,7 +1248,6 @@ private fun RouletteDebugPanel(
           )
 
           uiState.prizeProbabilities.forEach { snap ->
-            // OPT: key estable por ID de premio en la lista de probabilidades.
             key(snap.prize.id) {
               ProbabilityRow(snapshot = snap)
             }
@@ -1232,7 +1270,6 @@ private fun RouletteDebugPanel(
             val visibleHistory = remember(uiState.spinHistory) { uiState.spinHistory.take(12) }
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
               visibleHistory.forEach { rec ->
-                // OPT: key por número de giro + formateo recordado por entrada.
                 key(rec.spinNumber) {
                   val metaText = remember(rec.winningProbabilityPercent, rec.bonusFloorXp, rec.wasSimulatedBatch) {
                     buildString {
@@ -1264,6 +1301,16 @@ private fun RouletteDebugPanel(
               }
             }
           }
+        }
+      }
+
+      if (isLowTier) {
+        if (uiState.debugPanelExpanded) {
+          renderDebugBody()
+        }
+      } else {
+        AnimatedVisibility(visible = uiState.debugPanelExpanded) {
+          renderDebugBody()
         }
       }
     }
