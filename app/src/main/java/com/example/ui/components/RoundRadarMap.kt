@@ -43,6 +43,7 @@ import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.VolunteerActivism
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
@@ -212,6 +213,9 @@ fun RoundRadarMap(
   userLon: Double = myProfile?.longitude?.takeIf { it != 0.0 } ?: -99.1332,
   radarScale: RadarScaleLevel = RadarScaleLevel.SCALE_75,
   expandedHeightDp: Dp = 420.dp,
+  isMapOpen: Boolean = true,
+  onOpenMapRequested: () -> Unit = {},
+  onCloseMapRequested: (() -> Unit)? = null,
   onRadarScaleChange: (RadarScaleLevel) -> Unit = {},
   onPlayerClick: (NearbyPlayerItem) -> Unit,
   onMissionClick: (MissionWithDistance) -> Unit,
@@ -244,6 +248,8 @@ fun RoundRadarMap(
   var isOsmAttachedAndReady by remember { mutableStateOf(false) }
 
   val currentScaleState by rememberUpdatedState(radarScale)
+  val currentIsMapOpen by rememberUpdatedState(isMapOpen)
+  val currentOnOpenMapRequested by rememberUpdatedState(onOpenMapRequested)
   val currentOnScaleChange by rememberUpdatedState(onRadarScaleChange)
 
   // Un solo driver de progreso [0f=50, 0.5f=75, 1f=100]:
@@ -343,17 +349,34 @@ fun RoundRadarMap(
     remember { mutableFloatStateOf(1.0f) }
   }
 
-  // Precalcular vectores unitarios fuera de layout/draw: cambiar de 50 <-> 75 <-> 100 no recalcula ni recompone pines.
-  val plottedMissions = remember(missions, searchRadiusMeters) {
-    missions.take(10).map { item ->
-      val normalizedDist = (item.distanceMeters / searchRadiusMeters.toFloat()).coerceIn(0.18f, 0.84f)
-      val angleRad = Math.toRadians((item.bearingDegrees - 90f).toDouble())
-      val factor = 0.80f * normalizedDist
-      PlottedMissionSpec(
-        item = item,
-        unitX = (factor * cos(angleRad)).toFloat(),
-        unitY = (factor * sin(angleRad)).toFloat(),
-      )
+  // Dibujado diferido: solo dibuja marcadores cuando el mapa está abierto, aplicando el mismo filtro < 2km y tope de 14 pines.
+  val plottedMissions = remember(missions, searchRadiusMeters, isMapOpen, radarScale, activeAcceptedMissionId) {
+    if (!isMapOpen) {
+      emptyList()
+    } else {
+      val scaleLimitMeters = when (radarScale) {
+        RadarScaleLevel.SCALE_50 -> 350f
+        RadarScaleLevel.SCALE_75 -> 900f
+        RadarScaleLevel.SCALE_100 -> 2000f
+      }
+      missions
+        .asSequence()
+        .filter { item ->
+          item.distanceMeters < 2000f &&
+            (item.mission.id == activeAcceptedMissionId || item.distanceMeters <= scaleLimitMeters)
+        }
+        .take(14)
+        .map { item ->
+          val normalizedDist = (item.distanceMeters / searchRadiusMeters.toFloat()).coerceIn(0.18f, 0.84f)
+          val angleRad = Math.toRadians((item.bearingDegrees - 90f).toDouble())
+          val factor = 0.80f * normalizedDist
+          PlottedMissionSpec(
+            item = item,
+            unitX = (factor * cos(angleRad)).toFloat(),
+            unitY = (factor * sin(angleRad)).toFloat(),
+          )
+        }
+        .toList()
     }
   }
   val plottedPlayers = remember(nearbyPlayers, searchRadiusMeters, primaryColor) {
@@ -493,6 +516,9 @@ fun RoundRadarMap(
                 handledVertical = false
                 startScale = currentScaleState
                 isDraggingGesture = true
+                if (!currentIsMapOpen) {
+                  currentOnOpenMapRequested()
+                }
               },
               onDragEnd = {
                 if (!handledVertical && startScale != RadarScaleLevel.SCALE_100) {
@@ -557,7 +583,13 @@ fun RoundRadarMap(
           .clickable(
             interactionSource = remember { MutableInteractionSource() },
             indication = null,
-            onClick = { showExpandHint = !showExpandHint },
+            onClick = {
+              if (!isMapOpen) {
+                onOpenMapRequested()
+              } else {
+                showExpandHint = !showExpandHint
+              }
+            },
           ),
         contentAlignment = Alignment.Center,
       ) {
@@ -1062,16 +1094,40 @@ fun RoundRadarMap(
         }
       }
 
+      if (!isMapOpen) {
+        Surface(
+          onClick = onOpenMapRequested,
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+          border = androidx.compose.foundation.BorderStroke(1.dp, primaryColor.copy(alpha = 0.5f)),
+          modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = 14.dp)
+            .minimumInteractiveComponentSize()
+            .testTag("radar_closed_open_prompt"),
+        ) {
+          Text(
+            text = "Mapa cerrado • Toca para abrir (${missions.size})",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = primaryColor,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+          )
+        }
+      }
+
       // Barra flotante al tocar el radar: "Expandir mapa" + segundo botón de Lupa (50/75/100) totalmente separados
       if (isLowTier) {
-        if (showExpandHint) {
+        if (showExpandHint && isMapOpen) {
           RadarFloatingActionPair(
             radarScale = radarScale,
             onExpandMap = {
               showExpandHint = false
+              onOpenMapRequested()
               onExpandMap()
             },
             onCycleScale = {
+              onOpenMapRequested()
               onRadarScaleChange(radarScale.nextScale())
             },
             modifier = Modifier
@@ -1081,7 +1137,7 @@ fun RoundRadarMap(
         }
       } else {
         androidx.compose.animation.AnimatedVisibility(
-          visible = showExpandHint,
+          visible = showExpandHint && isMapOpen,
           enter = fadeIn(tween(150)),
           exit = fadeOut(tween(120)),
           modifier = Modifier
@@ -1092,11 +1148,32 @@ fun RoundRadarMap(
             radarScale = radarScale,
             onExpandMap = {
               showExpandHint = false
+              onOpenMapRequested()
               onExpandMap()
             },
             onCycleScale = {
+              onOpenMapRequested()
               onRadarScaleChange(radarScale.nextScale())
             },
+          )
+        }
+      }
+
+      if (isMapOpen && onCloseMapRequested != null) {
+        FilledTonalIconButton(
+          onClick = {
+            showExpandHint = false
+            onCloseMapRequested()
+          },
+          modifier = Modifier
+            .align(Alignment.TopStart)
+            .padding(4.dp)
+            .minimumInteractiveComponentSize()
+            .testTag("radar_close_map_pins_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Rounded.VisibilityOff,
+            contentDescription = "Cerrar pines del mapa",
           )
         }
       }
@@ -1113,7 +1190,11 @@ fun RoundRadarMap(
         FilledTonalIconButton(
           onClick = {
             isDragging50To75 = false
-            onRadarScaleChange(radarScale.nextScale())
+            if (!isMapOpen) {
+              onOpenMapRequested()
+            } else {
+              onRadarScaleChange(radarScale.nextScale())
+            }
           },
           modifier = Modifier
             .graphicsLayer {
@@ -1146,6 +1227,7 @@ fun RoundRadarMap(
         FilledTonalIconButton(
           onClick = {
             showExpandHint = false
+            onOpenMapRequested()
             onExpandMap()
           },
           modifier = Modifier

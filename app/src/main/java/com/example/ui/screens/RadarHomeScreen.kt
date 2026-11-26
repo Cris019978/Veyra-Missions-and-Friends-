@@ -153,6 +153,7 @@ fun RadarHomeScreen(
   var selectedPlayer by remember { mutableStateOf<NearbyPlayerItem?>(null) }
   var selectedMission by remember { mutableStateOf<MissionWithDistance?>(null) }
   var showExpandedMap by remember { mutableStateOf(false) }
+  var isMainMapOpen by remember { mutableStateOf(false) }
   var radarScale by remember { mutableStateOf(RadarScaleLevel.SCALE_75) }
   var activeMissionPlayTarget by remember { mutableStateOf<Mission?>(null) }
   var showCreateMissionDialog by remember { mutableStateOf(false) }
@@ -369,11 +370,20 @@ fun RadarHomeScreen(
         userLon = resolvedLon,
         radarScale = radarScale,
         expandedHeightDp = maxExpandedRadarHeight,
-        onRadarScaleChange = { radarScale = it },
+        isMapOpen = isMainMapOpen,
+        onOpenMapRequested = { isMainMapOpen = true },
+        onCloseMapRequested = { isMainMapOpen = false },
+        onRadarScaleChange = {
+          isMainMapOpen = true
+          radarScale = it
+        },
         onPlayerClick = { selectedPlayer = it },
         onMissionClick = { selectedMission = it },
         onCycleRadius = onCycleRadius,
-        onExpandMap = { showExpandedMap = true },
+        onExpandMap = {
+          isMainMapOpen = true
+          showExpandedMap = true
+        },
         onOpenAimingMode = onOpenVeyra2Aiming,
         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
       )

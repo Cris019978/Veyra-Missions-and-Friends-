@@ -187,8 +187,11 @@ fun ExpandedRadarMapDialog(
   val surfaceBg = MaterialTheme.colorScheme.surfaceContainerLowest
   val gridColor = MaterialTheme.colorScheme.outlineVariant
 
-  val activeMission = remember(missions, activeAcceptedMissionId) {
-    missions.firstOrNull { it.mission.id == activeAcceptedMissionId }
+  val activeDrawnMissions = remember(missions) {
+    missions.filter { it.distanceMeters < 2000f }.take(14)
+  }
+  val activeMission = remember(activeDrawnMissions, activeAcceptedMissionId) {
+    activeDrawnMissions.firstOrNull { it.mission.id == activeAcceptedMissionId }
   }
   val playerGeoPoint = remember(userLat, userLon) { GeoPoint(userLat, userLon) }
 
@@ -216,7 +219,7 @@ fun ExpandedRadarMapDialog(
       searchRadiusMeters = searchRadiusMeters,
       activeAcceptedMissionId = activeAcceptedMissionId,
       hasLocationPermission = hasLocationPermission,
-      missionsSignature = missions.map {
+      missionsSignature = activeDrawnMissions.map {
         MissionOverlaySig(
           id = it.mission.id,
           lat = it.mission.latitude,
@@ -354,7 +357,7 @@ fun ExpandedRadarMapDialog(
               }?.let { map.overlays.add(it) }
 
               // Proximity circles + mission markers
-              missions.forEach { item ->
+              activeDrawnMissions.forEach { item ->
                 val mPoint = GeoPoint(item.mission.latitude, item.mission.longitude)
                 val isAccepted = item.mission.id == activeAcceptedMissionId
                 val accentColor = when {
@@ -563,7 +566,7 @@ fun ExpandedRadarMapDialog(
                 )
               }
 
-              missions.forEach { item ->
+              activeDrawnMissions.forEach { item ->
                 val angleRad = Math.toRadians((item.bearingDegrees - 90f).toDouble())
                 val distPx = (item.distanceMeters * pxPerMeter).coerceAtLeast(24f)
                 val mx = mapCenter.x + (distPx * cos(angleRad)).toFloat()
@@ -637,7 +640,7 @@ fun ExpandedRadarMapDialog(
             }
 
             // Plotted Missions on vector view
-            missions.forEach { item ->
+            activeDrawnMissions.forEach { item ->
               val angleRad = Math.toRadians((item.bearingDegrees - 90f).toDouble())
               val distPx = (item.distanceMeters * pxPerMeter).coerceAtLeast(24f)
               val dx = (panOffset.x + distPx * cos(angleRad)).roundToInt()

@@ -2,7 +2,9 @@ package com.example.veyra2
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.model.MissionWithDistance
 import com.example.maplab.MapGestureThresholds
+import com.example.util.GeoUtils
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,21 +20,19 @@ import kotlin.math.sin
 import kotlin.random.Random
 
 /**
- * ViewModel autocontenido para "Mejora Veyra 2":
- * - Conserva puntos marcados, rutas, misiones y recompensas al rotar a horizontal.
- * - Separa completamente el estado físico efímero del mapa ([PhysicalMapMission]) del
- *   libro mayor inmutable de recompensas ([PlayerRewardsLedger]).
- * - Difiere el dibujado de marcadores hasta abrir el mapa (0 pines en [Veyra2MapMode.CLOSED_MINIMAP]).
- * - Recicla misiones >= 2 km (tocadas o no) sin borrar jamás recompensas ganadas, y genera nuevas al avanzar.
- *
- * TODO [GPS / Sensores / Persistencia Local]:
- * 1. Conectar `LocationTracker.observeLocationUpdates()` a [onRealGpsUpdated].
- * 2. Conectar `Sensor.TYPE_ROTATION_VECTOR` a [onSensorHeadingUpdated].
- * 3. Persistir [PlayerRewardsLedger], objetivos y rutas en Room/DataStore.
+ * ViewModel de "Mejora Veyra 2" sincronizado bidireccionalmente con las misiones del mapa principal:
+ * - Proyecta y sincroniza `RadarQuestUiState.missions` con la retícula horizontal, ruta y zoom.
+ * - Aplica exactamente la misma regla de borrado por distancia (>= 2 km, tocada o no) y
+ *   dibujado diferido hasta abrir el mapa (`CLOSED_MINIMAP` = 0 pines en Canvas).
+ * - Conserva todas las recompensas en [PlayerRewardsLedger] y sincroniza reclamos/objetivos
+ *   de vuelta con `RadarQuestViewModel`.
  */
 class Veyra2TacticalViewModel(
   private val random: Random = Random.Default,
   private val onSyncRewardsToProfile: (xpDelta: Long, bonusLevels: Int, titleReward: String?) -> Unit = { _, _, _ -> },
+  private val onClaimMainMission: (missionId: String) -> Unit = {},
+  private val onPinMainMission: (missionId: String) -> Unit = {},
+  private val onSimulatedWalkGpsDelta: (dxMeters: Float, dyMeters: Float) -> Unit = { _, _ -> },
 ) : ViewModel() {
 
   private val _uiState = MutableStateFlow(createInitialState())
@@ -42,6 +42,13 @@ class Veyra2TacticalViewModel(
   private var targetCounter = 1
   private var routeCounter = 1
   private var walkSpawnAccumulatorMeters = 0f
+
+  private var hasSyncedMainMap = false
+  private var gpsAnchorCoords: Pair<Double, Double>? = null
+  private val locallyTouchedIds = mutableSetOf<String>()
+  private val locallyInspectedIds = mutableSetOf<String>()
+  private val locallyPinnedIds = mutableSetOf<String>()
+  private val knownPrunedIds = mutableSetOf<String>()
 
   private var accumulatedDx = 0f
   private var accumulatedDy = 0f
@@ -115,11 +122,192 @@ class Veyra2TacticalViewModel(
       title = "Límite Perimetral",
       summary = "Misión al borde del umbral de 2 km",
       difficulty = Veyra2MissionDifficulty.HIGH_DIFFICULTY,
-      position = Veyra2Coordinate(origin.xMeters - 1480f, origin.yMeters - 920f), // ~1742m (< 2km)
+      position = Veyra2Coordinate(origin.xMeters - 1480f, origin.yMeters - 920f),
       xpReward = 780L,
       spawnedAtSeq = 5L,
     ),
   )
+
+  // ===========================================================================
+  // SINCRONIZACIÓN EN VIVO CON LAS MISIONES DEL MAPA PRINCIPAL
+  // ===========================================================================
+
+  /**
+   * Sincroniza las misiones del mapa principal (`RadarQuestUiState.missions`) dentro del estado
+   * táctico de Veyra 2, manteniendo las misiones locales/debug vivas y aplicando exactamente el mismo
+   * reciclaje físico (>= 2 km) sin tocar las recompensas acumuladas.
+   */
+  fun syncMainMapMissions(
+    missions: List<MissionWithDistance>,
+    playerLat: Double,
+    playerLon: Double,
+    activeAcceptedMissionId: String? = null,
+  ) {
+    val hasValidGps = playerLat != 0.0 || playerLon != 0.0
+    if (hasValidGps && gpsAnchorCoords == null) {
+      gpsAnchorCoords = playerLat to playerLon
+    }
+    val anchor = gpsAnchorCoords
+
+    val projectedPlayer = if (hasValidGps && anchor != null) {
+      projectLatLonToMeters(anchor.first, anchor.second, playerLat, playerLon)
+    } else {
+      _uiState.value.playerPosition
+    }
+
+    hasSyncedMainMap = true
+
+    _uiState.update { cur ->
+      val prevPlayer = cur.playerPosition
+      val playerDeltaX = projectedPlayer.xMeters - prevPlayer.xMeters
+      val playerDeltaY = projectedPlayer.yMeters - prevPlayer.yMeters
+      val nextCamera = if (hypot(playerDeltaX, playerDeltaY) > 0.5f) {
+        Veyra2Coordinate(
+          xMeters = cur.cameraCenter.xMeters + playerDeltaX,
+          yMeters = cur.cameraCenter.yMeters + playerDeltaY,
+        )
+      } else {
+        cur.cameraCenter
+      }
+
+      val threshold = cur.recycleThresholdMeters
+      var prunedUntouched = 0
+      var prunedTouchedOrClaimed = 0
+      val mainProjected = ArrayList<PhysicalMapMission>(missions.size)
+      var updatedLedger = cur.rewardsLedger
+
+      missions.forEach { item ->
+        val m = item.mission
+        val coord = if (anchor != null && (m.latitude != 0.0 || m.longitude != 0.0)) {
+          projectLatLonToMeters(anchor.first, anchor.second, m.latitude, m.longitude)
+        } else {
+          val rad = Math.toRadians(item.bearingDegrees.toDouble())
+          Veyra2Coordinate(
+            xMeters = projectedPlayer.xMeters + (item.distanceMeters * sin(rad)).toFloat(),
+            yMeters = projectedPlayer.yMeters + (-item.distanceMeters * cos(rad)).toFloat(),
+          )
+        }
+
+        val distFromPlayer = hypot(coord.xMeters - projectedPlayer.xMeters, coord.yMeters - projectedPlayer.yMeters)
+        val isClaimed = item.isCompletedByMe || (m.id in updatedLedger.claimedMissionIds)
+        val isTouched = isClaimed || (m.id in locallyTouchedIds) || (m.id == activeAcceptedMissionId)
+        val isInspected = isClaimed || (m.id in locallyInspectedIds)
+        val isPinned = (m.id == activeAcceptedMissionId) || (m.id in locallyPinnedIds)
+
+        if (isClaimed && m.id !in updatedLedger.claimedMissionIds) {
+          updatedLedger = updatedLedger.copy(
+            claimedMissionIds = updatedLedger.claimedMissionIds + m.id,
+          )
+        }
+
+        if (distFromPlayer >= threshold) {
+          if (knownPrunedIds.add(m.id)) {
+            if (isTouched || isInspected || isPinned || isClaimed) {
+              prunedTouchedOrClaimed++
+            } else {
+              prunedUntouched++
+            }
+          }
+        } else {
+          knownPrunedIds.remove(m.id)
+          val difficulty = when {
+            m.xpReward >= 220L || m.timeLimitSeconds > 0 -> Veyra2MissionDifficulty.HIGH_DIFFICULTY
+            m.xpReward >= 130L || m.missionType in setOf("wires", "puzzle", "memory") -> Veyra2MissionDifficulty.TACTICAL
+            else -> Veyra2MissionDifficulty.NORMAL
+          }
+          mainProjected.add(
+            PhysicalMapMission(
+              id = m.id,
+              title = m.title,
+              summary = m.description.ifBlank { m.placeLabel },
+              difficulty = difficulty,
+              position = coord,
+              xpReward = m.xpReward,
+              hasBeenTouched = isTouched,
+              hasBeenInspected = isInspected,
+              isPinnedTarget = isPinned,
+              isClaimed = isClaimed,
+              isFromMainMap = true,
+              latitude = m.latitude,
+              longitude = m.longitude,
+            ),
+          )
+        }
+      }
+
+      // Conservar misiones generadas por debug o caminata local que no hayan sido recicladas
+      val localExtras = cur.missionsInMemory.filter { existing ->
+        !existing.isFromMainMap &&
+          !existing.id.startsWith("v2_near_") &&
+          !existing.id.startsWith("v2_mid_") &&
+          !existing.id.startsWith("v2_high_") &&
+          !existing.id.startsWith("v2_edge_")
+      }.filter { extra ->
+        val d = hypot(extra.position.xMeters - projectedPlayer.xMeters, extra.position.yMeters - projectedPlayer.yMeters)
+        if (d >= threshold) {
+          if (knownPrunedIds.add(extra.id)) {
+            if (extra.hasBeenTouched || extra.hasBeenInspected || extra.isPinnedTarget || extra.isClaimed) {
+              prunedTouchedOrClaimed++
+            } else {
+              prunedUntouched++
+            }
+          }
+          false
+        } else {
+          true
+        }
+      }
+
+      val combined = (mainProjected + localExtras)
+        .distinctBy { it.id }
+        .sortedBy {
+          hypot(it.position.xMeters - projectedPlayer.xMeters, it.position.yMeters - projectedPlayer.yMeters)
+        }
+        .take(Veyra2TacticalUiState.MAX_MEMORY_MISSIONS)
+
+      val nextLedger = updatedLedger.copy(
+        recycledUntouchedCount = updatedLedger.recycledUntouchedCount + prunedUntouched,
+        recycledTouchedOrClaimedCount = updatedLedger.recycledTouchedOrClaimedCount + prunedTouchedOrClaimed,
+      )
+      val drawn = computeDrawnMissions(
+        missions = combined,
+        playerPos = projectedPlayer,
+        mapMode = cur.mapMode,
+        recycleThresholdMeters = threshold,
+      )
+
+      cur.copy(
+        playerPosition = projectedPlayer,
+        cameraCenter = nextCamera,
+        missionsInMemory = combined,
+        drawnMissions = drawn,
+        rewardsLedger = nextLedger,
+        selectedMissionId = cur.selectedMissionId?.takeIf { id -> combined.any { it.id == id } }
+          ?: combined.firstOrNull()?.id,
+        missionUnderReticleId = if (cur.mapMode.isMapOpen) {
+          findClosestMissionToPoint(drawn, nextCamera, snapRadiusMeters(cur.aimZoomFactor))
+        } else {
+          null
+        },
+        lastEventLog = "Sincronizado: ${combined.size} misiones (${drawn.size} dibujadas)",
+      )
+    }
+  }
+
+  private fun projectLatLonToMeters(
+    anchorLat: Double,
+    anchorLon: Double,
+    targetLat: Double,
+    targetLon: Double,
+  ): Veyra2Coordinate {
+    val dist = GeoUtils.distanceMeters(anchorLat, anchorLon, targetLat, targetLon)
+    if (dist < 0.01f) return Veyra2Coordinate(0f, 0f)
+    val bearingRad = Math.toRadians(GeoUtils.bearingDegrees(anchorLat, anchorLon, targetLat, targetLon).toDouble())
+    return Veyra2Coordinate(
+      xMeters = (dist * sin(bearingRad)).toFloat(),
+      yMeters = (-dist * cos(bearingRad)).toFloat(),
+    )
+  }
 
   // ===========================================================================
   // ENTRADA / SALIDA DEL MODO HORIZONTAL ("Preparing an Air Strike") Y VISTAS
@@ -200,7 +388,7 @@ class Veyra2TacticalViewModel(
   }
 
   // ===========================================================================
-  // GESTOS DE ESCALA (50 <-> 75 <-> 100) SIN ROMPER ARQUITECTURA EXISTENTE
+  // GESTOS DE ESCALA (50 <-> 75 <-> 100)
   // ===========================================================================
 
   fun onScaleDragStarted() {
@@ -414,11 +602,8 @@ class Veyra2TacticalViewModel(
     }
   }
 
-  /**
-   * Marca el punto exacto bajo la retícula central; si hay una misión bajo la mira,
-   * también marca la misión como tocada/fijada sin perder sincronía.
-   */
   fun markTargetAtReticle() {
+    var pinnedMainId: String? = null
     _uiState.update { cur ->
       val targetPos = cur.cameraCenter
       val snappedMission = cur.drawnMissions.firstOrNull { it.id == cur.missionUnderReticleId }
@@ -432,6 +617,11 @@ class Veyra2TacticalViewModel(
       )
 
       val updatedMemory = if (snappedMission != null) {
+        locallyTouchedIds.add(snappedMission.id)
+        locallyPinnedIds.add(snappedMission.id)
+        if (snappedMission.isFromMainMap) {
+          pinnedMainId = snappedMission.id
+        }
         cur.missionsInMemory.map { m ->
           if (m.id == snappedMission.id) {
             m.copy(hasBeenTouched = true, isPinnedTarget = true)
@@ -456,11 +646,9 @@ class Veyra2TacticalViewModel(
         lastEventLog = "Objetivo marcado: ${marker.label} (${targetPos.xMeters.toInt()}m, ${targetPos.yMeters.toInt()}m)",
       )
     }
+    pinnedMainId?.let(onPinMainMission)
   }
 
-  /**
-   * Traza un nuevo punto de ruta en la coordenada exacta bajo la retícula central.
-   */
   fun addRouteWaypointAtReticle() {
     _uiState.update { cur ->
       val nextIdx = cur.routePoints.size + 1
@@ -478,6 +666,7 @@ class Veyra2TacticalViewModel(
   }
 
   fun clearAimedMarksAndRoute() {
+    locallyPinnedIds.clear()
     _uiState.update {
       it.copy(
         markedTargets = emptyList(),
@@ -488,10 +677,12 @@ class Veyra2TacticalViewModel(
   }
 
   // ===========================================================================
-  // INSPECCIÓN Y RECOMPENSAS INMUTABLES (SEPARADAS DEL ESTADO FÍSICO DEL MAPA)
+  // INSPECCIÓN Y RECOMPENSAS INMUTABLES (SINCRONIZADAS CON PERFIL PRINCIPAL)
   // ===========================================================================
 
   fun inspectMission(missionId: String) {
+    locallyTouchedIds.add(missionId)
+    locallyInspectedIds.add(missionId)
     _uiState.update { cur ->
       val updated = cur.missionsInMemory.map { m ->
         if (m.id == missionId) m.copy(hasBeenTouched = true, hasBeenInspected = true) else m
@@ -516,11 +707,6 @@ class Veyra2TacticalViewModel(
     }
   }
 
-  /**
-   * Reclama la recompensa de una misión en el [PlayerRewardsLedger] inmutable.
-   * Aunque luego el marcador físico se elimine por alejarse >= 2 km, la recompensa
-   * permanece intacta y [claimedMissionIds] impide duplicados.
-   */
   fun claimMissionReward(missionId: String): Boolean {
     val current = _uiState.value
     val target = current.missionsInMemory.firstOrNull { it.id == missionId } ?: return false
@@ -530,6 +716,9 @@ class Veyra2TacticalViewModel(
       }
       return false
     }
+
+    locallyTouchedIds.add(missionId)
+    locallyInspectedIds.add(missionId)
 
     _uiState.update { cur ->
       val updatedMissions = cur.missionsInMemory.map { m ->
@@ -568,7 +757,11 @@ class Veyra2TacticalViewModel(
       )
     }
 
-    onSyncRewardsToProfile(target.xpReward, target.bonusLevelsReward, target.titleReward)
+    if (target.isFromMainMap) {
+      onClaimMainMission(missionId)
+    } else {
+      onSyncRewardsToProfile(target.xpReward, target.bonusLevelsReward, target.titleReward)
+    }
     return true
   }
 
@@ -576,13 +769,6 @@ class Veyra2TacticalViewModel(
   // MOVIMIENTO, RECICLAJE DINÁMICO (>= 2 KM) Y SPAWN SIN SATURAR CANVAS
   // ===========================================================================
 
-  /**
-   * Simula o recibe desplazamiento real del jugador en metros:
-   * 1. Actualiza posición del jugador (y mueve la cámara junto con él para no perderlo).
-   * 2. Recicla/borra del mapa TODA misión >= [recycleThresholdMeters] (tocada, reclamada o sin tocar),
-   *    conservando al 100% las recompensas en [PlayerRewardsLedger].
-   * 3. Si el jugador caminó >= [Veyra2TacticalUiState.SPAWN_WALK_STEP_METERS], genera nuevas misiones locales.
-   */
   fun movePlayerByMeters(dxMeters: Float, dyMeters: Float) {
     val stepDist = hypot(dxMeters, dyMeters)
     if (stepDist <= 0.01f) return
@@ -599,7 +785,6 @@ class Veyra2TacticalViewModel(
       )
       val heading = ((Math.toDegrees(atan2(dxMeters.toDouble(), (-dyMeters).toDouble())).toFloat()) + 360f) % 360f
 
-      // 1. Reciclaje físico por distancia >= threshold (default 2000m)
       val threshold = cur.recycleThresholdMeters
       val surviving = ArrayList<PhysicalMapMission>(cur.missionsInMemory.size)
       var prunedUntouched = 0
@@ -611,6 +796,7 @@ class Veyra2TacticalViewModel(
           mission.position.yMeters - nextPlayer.yMeters,
         )
         if (dist >= threshold) {
+          knownPrunedIds.add(mission.id)
           if (mission.hasBeenTouched || mission.hasBeenInspected || mission.isPinnedTarget || mission.isClaimed) {
             prunedTouchedOrClaimed++
           } else {
@@ -621,10 +807,9 @@ class Veyra2TacticalViewModel(
         }
       }
 
-      // 2. Spawn de nuevas misiones al avanzar, manteniendo tope para no saturar Canvas
       var spawnedCount = 0
       val mutableMissions = surviving.toMutableList()
-      if (walkSpawnAccumulatorMeters >= Veyra2TacticalUiState.SPAWN_WALK_STEP_METERS) {
+      if (!hasSyncedMainMap && walkSpawnAccumulatorMeters >= Veyra2TacticalUiState.SPAWN_WALK_STEP_METERS) {
         val batches = (walkSpawnAccumulatorMeters / Veyra2TacticalUiState.SPAWN_WALK_STEP_METERS).toInt().coerceIn(1, 3)
         walkSpawnAccumulatorMeters %= Veyra2TacticalUiState.SPAWN_WALK_STEP_METERS
         repeat(batches) {
@@ -633,8 +818,10 @@ class Veyra2TacticalViewModel(
             spawnedCount++
           }
         }
+      } else if (hasSyncedMainMap && walkSpawnAccumulatorMeters >= Veyra2TacticalUiState.SPAWN_WALK_STEP_METERS) {
+        walkSpawnAccumulatorMeters %= Veyra2TacticalUiState.SPAWN_WALK_STEP_METERS
       }
-      // Si la memoria alcanza el tope, recicla las más lejanas primero (conservando rewardsLedger)
+
       val finalMissions = if (mutableMissions.size > Veyra2TacticalUiState.MAX_MEMORY_MISSIONS) {
         mutableMissions
           .sortedBy {
@@ -682,27 +869,21 @@ class Veyra2TacticalViewModel(
         },
       )
     }
+
+    if (hasSyncedMainMap) {
+      onSimulatedWalkGpsDelta(dxMeters, dyMeters)
+    }
     scheduleRefreshCooldown(targetIdleAfterMs = 1100L)
   }
 
-  /**
-   * TODO [GPS Real]: Conectar `LocationTracker` convirtiendo lat/lon en metros relativos.
-   */
   fun onRealGpsUpdated(xMeters: Float, yMeters: Float) {
     val cur = _uiState.value.playerPosition
     movePlayerByMeters(xMeters - cur.xMeters, yMeters - cur.yMeters)
   }
 
-  /**
-   * TODO [Sensores Reales]: Conectar brújula / giroscopio del dispositivo.
-   */
   fun onSensorHeadingUpdated(headingDeg: Float) {
     _uiState.update { it.copy(playerHeadingDeg = ((headingDeg % 360f) + 360f) % 360f) }
   }
-
-  // ===========================================================================
-  // CONTROLES DEL PANEL DE PRUEBA RÁPIDA (DEBUG EN MEMORIA)
-  // ===========================================================================
 
   fun toggleDebugPanel() {
     _uiState.update { it.copy(debugPanelExpanded = !it.debugPanelExpanded) }
@@ -741,6 +922,7 @@ class Veyra2TacticalViewModel(
       hasBeenTouched = touched || claimedImmediately,
       hasBeenInspected = touched || claimedImmediately,
       isClaimed = false,
+      isFromMainMap = false,
       spawnedAtSeq = seqCounter,
     )
 
@@ -767,10 +949,6 @@ class Veyra2TacticalViewModel(
     return id
   }
 
-  /**
-   * Ejecuta una pasada manual de reciclaje (equivalente al siguiente tick de movimiento)
-   * útil en el panel Debug tras crear una misión > 2 km.
-   */
   fun runManualDistanceRecyclePass() {
     movePlayerByMeters(dxMeters = 1f, dyMeters = 0f)
   }
@@ -781,18 +959,27 @@ class Veyra2TacticalViewModel(
     walkSpawnAccumulatorMeters = 0f
     targetCounter = 1
     routeCounter = 1
-    val freshMissions = seedInitialMissions(Veyra2Coordinate(0f, 0f))
+    locallyTouchedIds.clear()
+    locallyInspectedIds.clear()
+    locallyPinnedIds.clear()
+    knownPrunedIds.clear()
+    val freshMissions = if (hasSyncedMainMap) {
+      _uiState.value.missionsInMemory.filter { it.isFromMainMap }
+    } else {
+      seedInitialMissions(Veyra2Coordinate(0f, 0f))
+    }
+    val originPos = if (hasSyncedMainMap) _uiState.value.playerPosition else Veyra2Coordinate(0f, 0f)
     _uiState.update { cur ->
       val ledger = if (keepRewardsLedger) cur.rewardsLedger else PlayerRewardsLedger()
       val drawn = computeDrawnMissions(
         missions = freshMissions,
-        playerPos = Veyra2Coordinate(0f, 0f),
+        playerPos = originPos,
         mapMode = cur.mapMode,
         recycleThresholdMeters = cur.recycleThresholdMeters,
       )
       cur.copy(
-        playerPosition = Veyra2Coordinate(0f, 0f),
-        cameraCenter = Veyra2Coordinate(0f, 0f),
+        playerPosition = originPos,
+        cameraCenter = originPos,
         aimZoomFactor = 1.15f,
         totalWalkedMeters = 0f,
         missionsInMemory = freshMissions,
@@ -811,10 +998,6 @@ class Veyra2TacticalViewModel(
       )
     }
   }
-
-  // ===========================================================================
-  // UTILIDADES INTERNAS
-  // ===========================================================================
 
   private fun boostRefreshForTransition() {
     rotationBoostJob?.cancel()
@@ -901,7 +1084,6 @@ class Veyra2TacticalViewModel(
     mapMode: Veyra2MapMode,
     recycleThresholdMeters: Float,
   ): List<PhysicalMapMission> {
-    // Regla 2: diferir el dibujado de marcadores hasta que el usuario abra/entre al mapa.
     if (!mapMode.isMapOpen) return emptyList()
 
     val maxRangeMeters = when (mapMode) {
@@ -918,7 +1100,7 @@ class Veyra2TacticalViewModel(
         mission to d
       }
       .filter { (mission, d) ->
-        mission.isPinnedTarget || d <= maxRangeMeters
+        d < recycleThresholdMeters && (mission.isPinnedTarget || d <= maxRangeMeters)
       }
       .sortedBy { it.second }
       .take(Veyra2TacticalUiState.MAX_DRAWN_CANVAS_MISSIONS)

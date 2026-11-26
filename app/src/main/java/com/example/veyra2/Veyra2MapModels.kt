@@ -115,6 +115,9 @@ data class PhysicalMapMission(
   val hasBeenInspected: Boolean = false,
   val isPinnedTarget: Boolean = false,
   val isClaimed: Boolean = false,
+  val isFromMainMap: Boolean = false,
+  val latitude: Double = 0.0,
+  val longitude: Double = 0.0,
   val spawnedAtSeq: Long = 0L,
 )
 

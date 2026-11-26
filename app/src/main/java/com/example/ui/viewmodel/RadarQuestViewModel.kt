@@ -559,11 +559,16 @@ class RadarQuestViewModel(
     val missionsWithDist = if (cachedMissionsSortKey == sortKey) {
       cachedSortedMissions
     } else {
-      allMissions.map { mission ->
+      allMissions.mapNotNull { mission ->
         val dist = if (hasValidRef) {
           GeoUtils.distanceMeters(refLat, refLon, mission.latitude, mission.longitude)
         } else {
           180f
+        }
+        // Regla unificada de reciclaje físico: >= 2 km se elimina del mapa (tocada/reclamada o no),
+        // preservando siempre core.myCompletions y recompensas del perfil.
+        if (hasValidRef && dist >= 2000f) {
+          return@mapNotNull null
         }
         val bearing = if (hasValidRef) {
           GeoUtils.bearingDegrees(refLat, refLon, mission.latitude, mission.longitude)
@@ -584,7 +589,7 @@ class RadarQuestViewModel(
           .thenByDescending { it.isWithinProximity }
           .thenByDescending { it.mission.category in favCats }
           .thenBy { it.distanceMeters }
-      ).also {
+      ).take(16).also {
         cachedMissionsSortKey = sortKey
         cachedSortedMissions = it
       }
@@ -592,6 +597,9 @@ class RadarQuestViewModel(
 
     val activeAccepted = workflow.activeAcceptedId?.let { id ->
       missionsWithDist.firstOrNull { it.mission.id == id }
+    }
+    if (workflow.activeAcceptedId != null && activeAccepted == null && hasValidRef) {
+      _activeAcceptedMissionId.value = null
     }
     val queuedPromptMission = workflow.queuedPromptId?.let { id ->
       missionsWithDist.firstOrNull { it.mission.id == id }
@@ -1088,6 +1096,11 @@ class RadarQuestViewModel(
     }
     val previous = _currentLocation.value
     _currentLocation.value = point
+    val anchor = _missionAnchorCoords.value
+    if (anchor == null || GeoUtils.distanceMeters(anchor.first, anchor.second, point.latitude, point.longitude) >= 260f) {
+      _missionAnchorCoords.value = point.latitude to point.longitude
+      _missionSeed.value = System.currentTimeMillis()
+    }
     refreshSafePublicAnchors(
       lat = point.latitude,
       lon = point.longitude,
@@ -1110,6 +1123,40 @@ class RadarQuestViewModel(
       viewModelScope.launch {
         repository.updateLiveLocation(point.latitude, point.longitude, _isBroadcastingRadar.value)
       }
+    }
+  }
+
+  /**
+   * Permite que el panel Debug táctico simule desplazamiento en metros manteniendo sincronizado
+   * el reciclaje >= 2 km y la generación dinámica del mapa principal.
+   */
+  fun simulateWalkDeltaMeters(dxMeters: Float, dyMeters: Float) {
+    val dist = kotlin.math.hypot(dxMeters.toDouble(), dyMeters.toDouble())
+    if (dist <= 0.1) return
+    val baseLat = _currentLocation.value?.latitude
+      ?: uiState.value.myProfile?.latitude?.takeIf { it != 0.0 }
+      ?: 19.4326
+    val baseLon = _currentLocation.value?.longitude
+      ?: uiState.value.myProfile?.longitude?.takeIf { it != 0.0 }
+      ?: -99.1332
+    // dx = Este (+90°), dy = Sur (+180° / Norte = -dy)
+    val bearingDeg = ((Math.toDegrees(kotlin.math.atan2(dxMeters.toDouble(), (-dyMeters).toDouble()))) + 360.0) % 360.0
+    val (nextLat, nextLon) = GeoUtils.destinationPoint(
+      baseLat = baseLat,
+      baseLon = baseLon,
+      distanceMeters = dist,
+      bearingDegrees = bearingDeg,
+    )
+    val nextPoint = LiveLocationPoint(
+      latitude = nextLat,
+      longitude = nextLon,
+      accuracyMeters = 5f,
+    )
+    _currentLocation.value = nextPoint
+    val anchor = _missionAnchorCoords.value
+    if (anchor == null || GeoUtils.distanceMeters(anchor.first, anchor.second, nextLat, nextLon) >= 260f) {
+      _missionAnchorCoords.value = nextLat to nextLon
+      _missionSeed.value = System.currentTimeMillis()
     }
   }
 
@@ -1613,6 +1660,16 @@ class RadarQuestViewModel(
       caption = caption,
       photoThumbnailBase64 = badgeThumb,
       isPublic = isPublic,
+    )
+  }
+
+  fun completeMissionFromTactical(missionId: String) {
+    val target = uiState.value.missions.firstOrNull { it.mission.id == missionId } ?: return
+    if (target.isCompletedByMe) return
+    completeMiniGameMission(
+      mission = target.mission,
+      caption = "Completada desde Mira Táctica",
+      isPublic = false,
     )
   }
 

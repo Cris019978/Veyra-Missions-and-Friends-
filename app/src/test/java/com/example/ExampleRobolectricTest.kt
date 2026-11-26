@@ -1302,6 +1302,9 @@ class ExampleRobolectricTest {
       }
     }
 
+    composeTestRule.onNodeWithTag("radar_mission_pin_immutable_detail_m1").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("round_radar_map").performClick()
+    composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("radar_mission_pin_immutable_detail_m1").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("mission_detail_sheet").assertIsDisplayed()

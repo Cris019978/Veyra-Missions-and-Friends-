@@ -1,6 +1,9 @@
 package com.example.veyra2
 
 import androidx.lifecycle.ViewModelStore
+import com.example.data.model.Mission
+import com.example.data.model.MissionWithDistance
+import com.example.util.GeoUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -175,5 +178,105 @@ class Veyra2TacticalViewModelTest {
     advanceTimeBy(900L)
     assertEquals(AdaptiveRefreshTier.IDLE_LOW_30HZ, vm.uiState.value.refreshTier)
     assertEquals(30f, vm.uiState.value.refreshTier.targetHz, 0.01f)
+  }
+
+  @Test
+  fun `syncMainMapMissions mirrors active missions, prunes 2km items, and synchronizes claim pin and walk`() {
+    val claimedIds = mutableListOf<String>()
+    val pinnedIds = mutableListOf<String>()
+    val walkDeltas = mutableListOf<Pair<Float, Float>>()
+
+    val vm = Veyra2TacticalViewModel(
+      random = Random(123L),
+      onClaimMainMission = { claimedIds.add(it) },
+      onPinMainMission = { pinnedIds.add(it) },
+      onSimulatedWalkGpsDelta = { dx, dy -> walkDeltas.add(dx to dy) },
+    )
+    vmStore.put("sync_main_test", vm)
+
+    val playerLat = 19.4326
+    val playerLon = -99.1332
+    val (nearLat, nearLon) = GeoUtils.destinationPoint(playerLat, playerLon, 18.0, 90.0)
+    val (midLat, midLon) = GeoUtils.destinationPoint(playerLat, playerLon, 480.0, 0.0)
+    val (farLat, farLon) = GeoUtils.destinationPoint(playerLat, playerLon, 2250.0, 180.0)
+
+    val syncedInput = listOf(
+      MissionWithDistance(
+        mission = Mission(
+          id = "main_near_1",
+          title = "Misión Cercana",
+          description = "Plaza pública",
+          xpReward = 150L,
+          latitude = nearLat,
+          longitude = nearLon,
+        ),
+        distanceMeters = 18f,
+        bearingDegrees = 90f,
+        isCompletedByMe = false,
+      ),
+      MissionWithDistance(
+        mission = Mission(
+          id = "main_mid_2",
+          title = "Misión Media",
+          description = "Corredor Norte",
+          xpReward = 240L,
+          latitude = midLat,
+          longitude = midLon,
+        ),
+        distanceMeters = 480f,
+        bearingDegrees = 0f,
+        isCompletedByMe = true,
+      ),
+      MissionWithDistance(
+        mission = Mission(
+          id = "main_far_3",
+          title = "Misión Lejana >2km",
+          description = "Fuera de rango",
+          xpReward = 300L,
+          latitude = farLat,
+          longitude = farLon,
+        ),
+        distanceMeters = 2250f,
+        bearingDegrees = 180f,
+        isCompletedByMe = true,
+      ),
+    )
+
+    // Closed minimap: missions kept in memory (< 2km), zero markers drawn on Canvas
+    vm.setMapMode(Veyra2MapMode.CLOSED_MINIMAP)
+    vm.syncMainMapMissions(
+      missions = syncedInput,
+      playerLat = playerLat,
+      playerLon = playerLon,
+      activeAcceptedMissionId = "main_near_1",
+    )
+
+    val closedState = vm.uiState.value
+    assertEquals(2, closedState.missionsInMemory.size)
+    assertTrue(closedState.missionsInMemory.any { it.id == "main_near_1" && it.isPinnedTarget && it.isFromMainMap })
+    assertTrue(closedState.missionsInMemory.any { it.id == "main_mid_2" && it.isClaimed })
+    assertFalse("Main mission >= 2km must be pruned", closedState.missionsInMemory.any { it.id == "main_far_3" })
+    assertTrue("Already completed main mission >= 2km stays in claimed ledger", "main_far_3" in closedState.rewardsLedger.claimedMissionIds)
+    assertEquals(0, closedState.drawnMarkersCount)
+
+    // Opening map draws the synced missions
+    vm.enterLandscapeAimingMode()
+    val openState = vm.uiState.value
+    assertEquals(2, openState.drawnMarkersCount)
+
+    // Pan reticle right onto main_near_1 (18m East) and mark target -> pins in main map
+    vm.panCameraByMeters(18f, 0f)
+    vm.markTargetAtReticle()
+    assertEquals(listOf("main_near_1"), pinnedIds)
+
+    // Claiming main_near_1 forwards claim to main ViewModel and blocks duplicate claims
+    assertTrue(vm.claimMissionReward("main_near_1"))
+    assertFalse(vm.claimMissionReward("main_near_1"))
+    assertEquals(listOf("main_near_1"), claimedIds)
+    assertEquals(150L, vm.uiState.value.rewardsLedger.totalXp)
+
+    // Moving simulated player forwards delta to main map GPS walk handler
+    vm.movePlayerByMeters(120f, -45f)
+    assertEquals(listOf(120f to -45f), walkDeltas)
   }
 }

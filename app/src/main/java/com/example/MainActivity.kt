@@ -282,6 +282,15 @@ private fun MainAppShell(
               viewModel.claimRouletteTitle(titleReward)
             }
           },
+          onClaimMainMission = { missionId ->
+            viewModel.completeMissionFromTactical(missionId)
+          },
+          onPinMainMission = { missionId ->
+            viewModel.acceptMission(missionId)
+          },
+          onSimulatedWalkGpsDelta = { dxMeters, dyMeters ->
+            viewModel.simulateWalkDeltaMeters(dxMeters, dyMeters)
+          },
         )
       }
     },
@@ -323,6 +332,22 @@ private fun MainAppShell(
 
   LaunchedEffect(anyOverlayModalOpen) {
     viewModel.setHeavyMapUpdatesPaused(anyOverlayModalOpen)
+  }
+
+  val syncLat = uiState.currentLocation?.latitude ?: uiState.myProfile?.latitude?.takeIf { it != 0.0 } ?: 19.4326
+  val syncLon = uiState.currentLocation?.longitude ?: uiState.myProfile?.longitude?.takeIf { it != 0.0 } ?: -99.1332
+  LaunchedEffect(
+    uiState.missions,
+    syncLat,
+    syncLon,
+    uiState.activeAcceptedMissionId,
+  ) {
+    veyra2ViewModel.syncMainMapMissions(
+      missions = uiState.missions,
+      playerLat = syncLat,
+      playerLon = syncLon,
+      activeAcceptedMissionId = uiState.activeAcceptedMissionId,
+    )
   }
 
   var lastHapticCelebrationId by remember { mutableLongStateOf(uiState.celebrationEventId) }
