@@ -115,4 +115,35 @@ class MapScaleUnitTest {
     assertEquals(initialCount, resetState.missions.size)
     assertTrue(resetState.isToggleButtonVisible)
   }
+
+  @Test
+  fun `progressive mapRevealProgress grows smoothly from 50 to 75 to 100 and debug starts discreet`() {
+    val manager = MapScaleStateManager(random = Random(321L))
+    vmStore.put("map_reveal_test", manager)
+
+    // Debug starts discreet (collapsed) so main UI and map stay uncluttered
+    assertFalse(manager.uiState.value.debugPanelExpanded)
+    manager.toggleDebugPanel()
+    assertTrue(manager.uiState.value.debugPanelExpanded)
+
+    manager.forceScale(MapViewScale.SCALE_50)
+    val reveal50 = manager.uiState.value.mapRevealProgress
+    assertEquals(0.0f, reveal50, 0.001f)
+
+    manager.forceScale(MapViewScale.SCALE_75)
+    val reveal75 = manager.uiState.value.mapRevealProgress
+    assertEquals(0.50f, reveal75, 0.001f)
+
+    // Pulling down mid-way from 75 toward 100 reveals progressively
+    manager.onDragStarted()
+    manager.onDragDelta(dx = 0f, dy = 68f)
+    val midPullReveal = manager.uiState.value.mapRevealProgress
+    assertTrue("Mid pull reveal ($midPullReveal) must be strictly between 75 and 100", midPullReveal in 0.55f..0.95f)
+    assertTrue(manager.uiState.value.effectiveViewRadiusMeters > 450)
+
+    manager.onDragDelta(dx = 0f, dy = 80f)
+    manager.onDragEnded()
+    val reveal100 = manager.uiState.value.mapRevealProgress
+    assertEquals(1.0f, reveal100, 0.001f)
+  }
 }
