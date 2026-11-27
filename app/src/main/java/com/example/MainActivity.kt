@@ -48,6 +48,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -62,11 +63,17 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.ble.BleHardwareStatus
+import com.example.ble.VeyraBleManager
+import com.example.ble.VeyraBlePermissions
 import com.example.data.local.DailyStreakTracker
 import com.example.data.local.LocalAccountStore
 import com.example.data.local.LocalAuthManager
@@ -261,16 +268,20 @@ private fun MainAppShell(
   onSignOutRequested: () -> Unit,
 ) {
   val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
   val scope = rememberCoroutineScope()
   val uiState by viewModel.uiState.collectAsStateWithLifecycle()
   val snackbarHostState = remember { SnackbarHostState() }
   val locationTracker = remember(context) { LocationTracker(context) }
+  val bleManager = remember(context) { VeyraBleManager(context.applicationContext) }
+  val bleSnapshot by bleManager.snapshot.collectAsStateWithLifecycle()
   val pagerState = rememberPagerState(initialPage = 0, pageCount = { 5 })
   var showStyleInProfile by remember { mutableStateOf(false) }
   var showNotificationsSheet by remember { mutableStateOf(false) }
   var radarModalDialogOpen by remember { mutableStateOf(false) }
   var showRouletteLab by remember { mutableStateOf(false) }
   var showVeyra2Tactical by remember { mutableStateOf(false) }
+  var isMainRadarMapOpen by remember { mutableStateOf(false) }
   val veyra2ViewModel: Veyra2TacticalViewModel = viewModel(
     key = "veyra2_tactical_$currentUserId",
     factory = viewModelFactory {
@@ -444,6 +455,81 @@ private fun MainAppShell(
     }
   }
 
+  val blePermissionLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.RequestMultiplePermissions(),
+  ) {
+    bleManager.refreshAndApply(restartAdvertising = true)
+  }
+
+  val bleSettingsLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.StartActivityForResult(),
+  ) {
+    bleManager.refreshAndApply(restartAdvertising = true)
+  }
+
+  val requestBlePermissions: () -> Unit = {
+    blePermissionLauncher.launch(VeyraBlePermissions.requiredRuntimePermissions())
+  }
+
+  val openBluetoothOrLocationSettings: () -> Unit = {
+    when (bleSnapshot.hardwareStatus) {
+      BleHardwareStatus.BLUETOOTH_OFF -> {
+        val requested = runCatching {
+          bleSettingsLauncher.launch(VeyraBlePermissions.buildEnableBluetoothIntent())
+          true
+        }.getOrDefault(false)
+        if (!requested) {
+          runCatching { context.startActivity(VeyraBlePermissions.buildBluetoothSettingsIntent()) }
+        }
+      }
+      BleHardwareStatus.LOCATION_REQUIRED_LEGACY -> {
+        runCatching { context.startActivity(VeyraBlePermissions.buildLocationSettingsIntent()) }
+      }
+      BleHardwareStatus.PERMISSIONS_REQUIRED -> requestBlePermissions()
+      else -> Unit
+    }
+  }
+
+  DisposableEffect(lifecycleOwner, bleManager) {
+    val observer = LifecycleEventObserver { _, event ->
+      when (event) {
+        Lifecycle.Event.ON_START -> bleManager.setForeground(true)
+        Lifecycle.Event.ON_STOP -> bleManager.setForeground(false)
+        else -> Unit
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+      bleManager.setForeground(true)
+    }
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+      bleManager.release()
+    }
+  }
+
+  LaunchedEffect(
+    pagerState.currentPage,
+    isMainRadarMapOpen,
+    showVeyra2Tactical,
+    uiState.isBroadcastingRadar,
+    currentUserId,
+    uiState.myProfile?.level,
+    uiState.myProfile?.seekingHelp,
+    uiState.activeAcceptedMissionId,
+  ) {
+    val radarOrMapActive = (pagerState.currentPage == 0 && isMainRadarMapOpen) || showVeyra2Tactical
+    bleManager.updateRuntimeState(
+      foreground = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED),
+      radarOrMapActive = radarOrMapActive,
+      broadcastPresence = uiState.isBroadcastingRadar,
+      userId = currentUserId,
+      playerLevel = (uiState.myProfile?.level ?: 1L).toInt(),
+      seekingHelp = uiState.myProfile?.seekingHelp == true,
+      hasActiveMission = uiState.activeAcceptedMissionId != null,
+    )
+  }
+
   LaunchedEffect(uiState.hasLocationPermission) {
     if (uiState.hasLocationPermission) {
       locationTracker.observeLocationUpdates().collect { point ->
@@ -614,6 +700,18 @@ private fun MainAppShell(
                 onOpenVeyra2Aiming = {
                   veyra2ViewModel.enterLandscapeAimingMode()
                   showVeyra2Tactical = true
+                },
+                bleSnapshot = bleSnapshot,
+                onRequestBlePermissions = requestBlePermissions,
+                onOpenBluetoothSettings = openBluetoothOrLocationSettings,
+                onInjectBleDebugSignal = { zone, expired ->
+                  bleManager.injectDebugSignal(zone = zone, simulateExpired = expired)
+                },
+                onClearBleDebugSignals = {
+                  bleManager.clearDebugSignals()
+                },
+                onMainMapOpenChanged = { opened ->
+                  isMainRadarMapOpen = opened
                 },
                 useExternalConfettiHost = true,
               )

@@ -31,6 +31,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.DirectionsRun
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Bluetooth
+import androidx.compose.material.icons.rounded.BluetoothDisabled
+import androidx.compose.material.icons.rounded.BluetoothSearching
 import androidx.compose.material.icons.rounded.Brush
 import androidx.compose.material.icons.rounded.Cable
 import androidx.compose.material.icons.rounded.CameraAlt
@@ -80,6 +83,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -100,7 +104,11 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.BuildConfig
 import com.example.R
+import com.example.ble.BleHardwareStatus
+import com.example.ble.BleProximityZone
+import com.example.ble.VeyraBleUiSnapshot
 import com.example.data.model.Mission
 import com.example.data.model.MissionCategory
 import com.example.data.model.MissionWithDistance
@@ -145,6 +153,12 @@ fun RadarHomeScreen(
   onDialogVisibilityChanged: (Boolean) -> Unit = {},
   onOpenRouletteLab: (() -> Unit)? = null,
   onOpenVeyra2Aiming: (() -> Unit)? = null,
+  bleSnapshot: VeyraBleUiSnapshot = VeyraBleUiSnapshot(),
+  onRequestBlePermissions: () -> Unit = {},
+  onOpenBluetoothSettings: () -> Unit = {},
+  onInjectBleDebugSignal: (BleProximityZone, Boolean) -> Unit = { _, _ -> },
+  onClearBleDebugSignals: () -> Unit = {},
+  onMainMapOpenChanged: (Boolean) -> Unit = {},
   useExternalConfettiHost: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
@@ -172,8 +186,14 @@ fun RadarHomeScreen(
   LaunchedEffect(isModalOpen) {
     onDialogVisibilityChanged(isModalOpen)
   }
+  LaunchedEffect(isMainMapOpen, showExpandedMap) {
+    onMainMapOpenChanged(isMainMapOpen || showExpandedMap)
+  }
   DisposableEffect(Unit) {
-    onDispose { onDialogVisibilityChanged(false) }
+    onDispose {
+      onDialogVisibilityChanged(false)
+      onMainMapOpenChanged(false)
+    }
   }
 
   val favoriteCategories = remember(uiState.settings.favoriteCategories) {
@@ -371,6 +391,7 @@ fun RadarHomeScreen(
         radarScale = radarScale,
         expandedHeightDp = maxExpandedRadarHeight,
         isMapOpen = isMainMapOpen,
+        bleSnapshot = bleSnapshot,
         onOpenMapRequested = { isMainMapOpen = true },
         onCloseMapRequested = { isMainMapOpen = false },
         onRadarScaleChange = {
@@ -674,6 +695,18 @@ fun RadarHomeScreen(
               }
             }
           }
+        }
+
+        // 4b. Proximidad por BLE (offline-first, ráfagas LowPower/Balanced, estado con throttling)
+        item(key = "ble_proximity_section") {
+          BleProximitySectionCard(
+            bleSnapshot = bleSnapshot,
+            onRequestBlePermissions = onRequestBlePermissions,
+            onOpenBluetoothSettings = onOpenBluetoothSettings,
+            onInjectDebugSignal = onInjectBleDebugSignal,
+            onClearDebugSignals = onClearBleDebugSignals,
+            modifier = Modifier.padding(horizontal = 16.dp),
+          )
         }
 
         // 5. Bottom Section: Randomized 28+ Real-Life & Mini-Game Missions
@@ -1714,4 +1747,224 @@ private fun categoryColor(key: String, primary: Color, tertiary: Color): Color =
   "creative" -> Color(0xFF8E44AD)
   "puzzle" -> Color(0xFF5E35B1)
   else -> primary
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun BleProximitySectionCard(
+  bleSnapshot: VeyraBleUiSnapshot,
+  onRequestBlePermissions: () -> Unit,
+  onOpenBluetoothSettings: () -> Unit,
+  onInjectDebugSignal: (BleProximityZone, Boolean) -> Unit,
+  onClearDebugSignals: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val primaryColor = MaterialTheme.colorScheme.primary
+  val tertiaryColor = MaterialTheme.colorScheme.tertiary
+  val status = bleSnapshot.hardwareStatus
+  val needsPermission = status == BleHardwareStatus.PERMISSIONS_REQUIRED
+  val needsSettingsAction =
+    status == BleHardwareStatus.BLUETOOTH_OFF || status == BleHardwareStatus.LOCATION_REQUIRED_LEGACY
+
+  Card(
+    colors = CardDefaults.cardColors(
+      containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    ),
+    shape = MaterialTheme.shapes.large,
+    modifier = modifier
+      .fillMaxWidth()
+      .testTag("ble_proximity_card"),
+  ) {
+    Column(
+      modifier = Modifier.padding(14.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          modifier = Modifier.weight(1f),
+        ) {
+          Icon(
+            imageVector = when {
+              status == BleHardwareStatus.BLUETOOTH_OFF || status == BleHardwareStatus.UNSUPPORTED ->
+                Icons.Rounded.BluetoothDisabled
+              bleSnapshot.isBurstCurrentlyScanning -> Icons.Rounded.BluetoothSearching
+              else -> Icons.Rounded.Bluetooth
+            },
+            contentDescription = "Estado BLE",
+            tint = if (bleSnapshot.activePeersCount > 0) tertiaryColor else primaryColor,
+          )
+          Column {
+            Text(
+              text = "Radar BLE en campo (${bleSnapshot.activePeersCount})",
+              style = MaterialTheme.typography.titleSmall,
+              fontWeight = FontWeight.Bold,
+            )
+            Text(
+              text = "${bleSnapshot.scanProfile.label} • ${
+                if (bleSnapshot.isAdvertisingActive) "Anuncio activo" else status.label
+              }",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+        }
+
+        if (needsPermission) {
+          Button(
+            onClick = onRequestBlePermissions,
+            shape = CircleShape,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier
+              .minimumInteractiveComponentSize()
+              .testTag("ble_request_permission_button"),
+          ) {
+            Text("Permiso BLE", style = MaterialTheme.typography.labelSmall)
+          }
+        } else if (needsSettingsAction) {
+          FilledTonalButton(
+            onClick = onOpenBluetoothSettings,
+            shape = CircleShape,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier
+              .minimumInteractiveComponentSize()
+              .testTag("ble_open_settings_button"),
+          ) {
+            Text(
+              text = if (status == BleHardwareStatus.BLUETOOTH_OFF) "Encender BT" else "Ubicación",
+              style = MaterialTheme.typography.labelSmall,
+            )
+          }
+        }
+      }
+
+      Text(
+        text = bleSnapshot.lastStatusNote,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+
+      if (bleSnapshot.peers.isNotEmpty()) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+          bleSnapshot.peers.take(4).forEach { peer ->
+            val zoneColor = Color(peer.zone.accentHex)
+            Surface(
+              color = MaterialTheme.colorScheme.surfaceContainerHigh,
+              shape = RoundedCornerShape(14.dp),
+              border = BorderStroke(1.dp, zoneColor.copy(alpha = 0.45f)),
+              modifier = Modifier.fillMaxWidth(),
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Column(modifier = Modifier.weight(1f)) {
+                  Text(
+                    text = "${peer.displayLabel} • Nv ${peer.playerLevel}",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                  Text(
+                    text = "${peer.zone.label} (${peer.zone.estimatedRangeLabel}) • RSSI ${peer.smoothedRssi.toInt()} dBm",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = zoneColor,
+                  )
+                }
+                if (peer.seekingHelp) {
+                  Surface(
+                    color = tertiaryColor.copy(alpha = 0.20f),
+                    shape = CircleShape,
+                  ) {
+                    Text(
+                      text = "Ayuda",
+                      style = MaterialTheme.typography.labelSmall,
+                      color = tertiaryColor,
+                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    )
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Controles exclusivos de compilación DEBUG para probar zonas BLE y TTL con un solo teléfono
+      if (BuildConfig.DEBUG) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+          Text(
+            text = "Simulador BLE (Debug) • Expiradas limpiadas: ${bleSnapshot.expiredCleanedCount}",
+            style = MaterialTheme.typography.labelSmall,
+            color = primaryColor,
+            fontWeight = FontWeight.SemiBold,
+          )
+          FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            FilledTonalButton(
+              onClick = { onInjectDebugSignal(BleProximityZone.INMEDIATO, false) },
+              shape = CircleShape,
+              contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+              modifier = Modifier
+                .minimumInteractiveComponentSize()
+                .testTag("ble_sim_inmediato_btn"),
+            ) {
+              Text("Inmediato", style = MaterialTheme.typography.labelSmall)
+            }
+            FilledTonalButton(
+              onClick = { onInjectDebugSignal(BleProximityZone.CERCA, false) },
+              shape = CircleShape,
+              contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+              modifier = Modifier
+                .minimumInteractiveComponentSize()
+                .testTag("ble_sim_cerca_btn"),
+            ) {
+              Text("Cerca", style = MaterialTheme.typography.labelSmall)
+            }
+            FilledTonalButton(
+              onClick = { onInjectDebugSignal(BleProximityZone.EN_ALCANCE, false) },
+              shape = CircleShape,
+              contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+              modifier = Modifier
+                .minimumInteractiveComponentSize()
+                .testTag("ble_sim_alcance_btn"),
+            ) {
+              Text("En alcance", style = MaterialTheme.typography.labelSmall)
+            }
+            OutlinedButton(
+              onClick = { onInjectDebugSignal(BleProximityZone.CERCA, true) },
+              shape = CircleShape,
+              contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+              modifier = Modifier
+                .minimumInteractiveComponentSize()
+                .testTag("ble_sim_caducada_btn"),
+            ) {
+              Text("Caducada", style = MaterialTheme.typography.labelSmall)
+            }
+            OutlinedButton(
+              onClick = onClearDebugSignals,
+              shape = CircleShape,
+              contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+              modifier = Modifier
+                .minimumInteractiveComponentSize()
+                .testTag("ble_sim_clear_btn"),
+            ) {
+              Text("Limpiar", style = MaterialTheme.typography.labelSmall)
+            }
+          }
+        }
+      }
+    }
+  }
 }

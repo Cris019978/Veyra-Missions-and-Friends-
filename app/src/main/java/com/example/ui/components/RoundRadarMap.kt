@@ -94,6 +94,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.ble.BleProximityZone
+import com.example.ble.VeyraBleUiSnapshot
 import com.example.data.model.MissionWithDistance
 import com.example.data.model.NearbyPlayerItem
 import com.example.data.model.PlayerProfile
@@ -197,6 +199,15 @@ private data class PlottedPlayerSpec(
   val dotColor: Color,
 )
 
+@Immutable
+private data class PlottedBlePeerSpec(
+  val peerKey: String,
+  val unitX: Float,
+  val unitY: Float,
+  val accentColor: Color,
+  val seekingHelp: Boolean,
+)
+
 @Composable
 fun RoundRadarMap(
   myProfile: PlayerProfile?,
@@ -214,6 +225,7 @@ fun RoundRadarMap(
   radarScale: RadarScaleLevel = RadarScaleLevel.SCALE_75,
   expandedHeightDp: Dp = 420.dp,
   isMapOpen: Boolean = true,
+  bleSnapshot: VeyraBleUiSnapshot = VeyraBleUiSnapshot(),
   onOpenMapRequested: () -> Unit = {},
   onCloseMapRequested: (() -> Unit)? = null,
   onRadarScaleChange: (RadarScaleLevel) -> Unit = {},
@@ -403,6 +415,30 @@ fun RoundRadarMap(
         dotColor = dotColor,
       )
     }
+  }
+  // Señales BLE precalculadas fuera de DrawScope (el snapshot ya viene con throttling cada ~1.25 s)
+  val plottedBlePeers = remember(bleSnapshot.peers) {
+    bleSnapshot.peers
+      .asSequence()
+      .filter { it.zone != BleProximityZone.FUERA_DE_RANGO }
+      .take(10)
+      .map { peer ->
+        val normRadius = when (peer.zone) {
+          BleProximityZone.INMEDIATO -> 0.24f
+          BleProximityZone.CERCA -> 0.48f
+          BleProximityZone.EN_ALCANCE -> 0.74f
+          BleProximityZone.FUERA_DE_RANGO -> 0.90f
+        }
+        val rad = Math.toRadians((peer.bearingHintDegrees - 90f).toDouble())
+        PlottedBlePeerSpec(
+          peerKey = peer.peerKey,
+          unitX = (normRadius * cos(rad)).toFloat(),
+          unitY = (normRadius * sin(rad)).toFloat(),
+          accentColor = Color(peer.zone.accentHex),
+          seekingHelp = peer.seekingHelp,
+        )
+      }
+      .toList()
   }
 
   Column(
@@ -816,6 +852,25 @@ fun RoundRadarMap(
                 end = Offset(center.x + maxR - 8f, center.y),
                 strokeWidth = if (isLowTier) 2.5f else 3f,
                 cap = StrokeCap.Round,
+              )
+            }
+          }
+
+          if (plottedBlePeers.isNotEmpty()) {
+            plottedBlePeers.forEach { bleSpec ->
+              val bleCenter = Offset(
+                center.x + bleSpec.unitX * maxR,
+                center.y + bleSpec.unitY * maxR,
+              )
+              drawCircle(
+                color = bleSpec.accentColor.copy(alpha = 0.28f),
+                radius = if (bleSpec.seekingHelp) 18f else 13f,
+                center = bleCenter,
+              )
+              drawCircle(
+                color = bleSpec.accentColor,
+                radius = 6f,
+                center = bleCenter,
               )
             }
           }
@@ -1329,9 +1384,9 @@ fun RoundRadarMap(
           )
           Text(
             text = if (isBroadcasting) {
-              "${nearbyPlayers.size} en vivo"
+              "${nearbyPlayers.size} vivo • ${bleSnapshot.activePeersCount} BLE"
             } else {
-              "Oculto"
+              "Oculto • ${bleSnapshot.activePeersCount} BLE"
             },
             style = MaterialTheme.typography.labelMedium,
             color = if (isBroadcasting) {
